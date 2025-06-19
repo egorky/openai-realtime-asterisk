@@ -41,7 +41,10 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false);
 
   // Custom hook to fetch backend tools every 3 seconds
-  const backendTools = useBackendTools("http://localhost:8081/tools", 3000);
+  const websocketServerBaseUrl = process.env.NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL;
+  const toolsUrl = websocketServerBaseUrl ? `${websocketServerBaseUrl}/tools` : "";
+  const backendTools = useBackendTools(toolsUrl, 3000);
+
 
   // Track changes to determine if there are unsaved modifications
   useEffect(() => {

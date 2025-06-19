@@ -8,47 +8,69 @@ import Transcript from "@/components/transcript";
 import FunctionCallsPanel from "@/components/function-calls-panel";
 import { Item } from "@/components/types";
 import handleRealtimeEvent from "@/lib/handle-realtime-event";
-import PhoneNumberChecklist from "@/components/phone-number-checklist";
+import ServerStatusIndicator from "@/components/server-status-indicator"; // Updated import
 
 const CallInterface = () => {
-  const [selectedPhoneNumber, setSelectedPhoneNumber] = useState("");
-  const [allConfigsReady, setAllConfigsReady] = useState(false);
+  // Removed selectedPhoneNumber state
+  const [allConfigsReady, setAllConfigsReady] = useState(false); // This is now set by ChecklistAndConfig
   const [items, setItems] = useState<Item[]>([]);
-  const [callStatus, setCallStatus] = useState("disconnected");
+  const [callStatus, setCallStatus] = useState("disconnected"); // "connected" or "disconnected" to /logs WS
   const [ws, setWs] = useState<WebSocket | null>(null);
 
+  const websocketServerBaseUrl = process.env.NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL;
+
   useEffect(() => {
-    if (allConfigsReady && !ws) {
-      const newWs = new WebSocket("ws://localhost:8081/logs");
+    if (allConfigsReady && !ws && websocketServerBaseUrl) {
+      // Construct WebSocket URL for /logs
+      let wsUrl = websocketServerBaseUrl.replace(/^http/, 'ws');
+      if (!wsUrl.startsWith('ws://') && !wsUrl.startsWith('wss://')) {
+        // Default to ws if no protocol, or handle error
+        console.warn("WebSocket URL defaulting to ws:// scheme as none was provided in base URL");
+        wsUrl = 'ws://' + wsUrl.split('://').pop();
+      }
+      wsUrl = `${wsUrl}/logs`;
+
+      console.log("Attempting to connect to WebSocket at:", wsUrl);
+      const newWs = new WebSocket(wsUrl);
 
       newWs.onopen = () => {
-        console.log("Connected to logs websocket");
+        console.log("Connected to logs websocket at", wsUrl);
         setCallStatus("connected");
+      };
+
+      newWs.onerror = (error) => {
+        console.error("Logs websocket error:", error);
+        // setCallStatus("error"); // Or handle error state appropriately
       };
 
       newWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        console.log("Received logs event:", data);
+        // console.log("Received logs event:", data); // Potentially too verbose
         handleRealtimeEvent(data, setItems);
       };
 
       newWs.onclose = () => {
-        console.log("Logs websocket disconnected");
+        console.log("Logs websocket disconnected from", wsUrl);
         setWs(null);
         setCallStatus("disconnected");
+        // Optionally, you might want to set allConfigsReady to false to re-trigger checklist
+        // if the connection is critical and was previously established.
+        // setAllConfigsReady(false);
       };
 
       setWs(newWs);
+    } else if (!websocketServerBaseUrl && allConfigsReady && !ws) {
+      console.error("NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL is not set. Cannot connect to WebSocket.");
     }
-  }, [allConfigsReady, ws]);
+  }, [allConfigsReady, ws, websocketServerBaseUrl]);
 
   return (
     <div className="h-screen bg-white flex flex-col">
+      {/* ChecklistAndConfig is a modal dialog, it will show itself if !allConfigsReady */}
       <ChecklistAndConfig
         ready={allConfigsReady}
         setReady={setAllConfigsReady}
-        selectedPhoneNumber={selectedPhoneNumber}
-        setSelectedPhoneNumber={setSelectedPhoneNumber}
+        // selectedPhoneNumber and setSelectedPhoneNumber props removed
       />
       <TopBar />
       <div className="flex-grow p-4 h-full overflow-hidden flex flex-col">
@@ -56,7 +78,7 @@ const CallInterface = () => {
           {/* Left Column */}
           <div className="col-span-3 flex flex-col h-full overflow-hidden">
             <SessionConfigurationPanel
-              callStatus={callStatus}
+              callStatus={callStatus} // This reflects /logs WS connection
               onSave={(config) => {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                   const updateEvent = {
@@ -65,7 +87,7 @@ const CallInterface = () => {
                       ...config,
                     },
                   };
-                  console.log("Sending update event:", updateEvent);
+                  console.log("Sending session.update event:", updateEvent);
                   ws.send(JSON.stringify(updateEvent));
                 }
               }}
@@ -74,10 +96,9 @@ const CallInterface = () => {
 
           {/* Middle Column: Transcript */}
           <div className="col-span-6 flex flex-col gap-4 h-full overflow-hidden">
-            <PhoneNumberChecklist
-              selectedPhoneNumber={selectedPhoneNumber}
-              allConfigsReady={allConfigsReady}
-              setAllConfigsReady={setAllConfigsReady}
+            {/* Use ServerStatusIndicator and pass the actual /logs WS connection status */}
+            <ServerStatusIndicator
+              isConnectedToLogs={callStatus === "connected"}
             />
             <Transcript items={items} />
           </div>
