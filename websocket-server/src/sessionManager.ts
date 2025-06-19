@@ -1,337 +1,234 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
+import { CallSpecificConfig, OpenAIRealtimeAPIConfig } from "./types";
+import { AriClientService } from "./ari-client";
 
-// Define AriCallInfo as any for now, will be refined later
-type AriCallInfo = any;
-
-interface Session {
-  ariCallInfo?: AriCallInfo;
+interface CallSessionData {
+  callId: string;
+  ariClient: AriClientService;
   frontendConn?: WebSocket;
   modelConn?: WebSocket;
-  saved_config?: any;
-  lastAssistantItem?: string;
+  openAIApiKey: string;
+  config: CallSpecificConfig;
+  lastAssistantItemId?: string;
   responseStartTimestamp?: number;
-  latestMediaTimestamp?: number; // This might still be useful for timing VAD or other logic
-  openAIApiKey?: string;
 }
 
-let session: Session = {};
+const activeSessions = new Map<string, CallSessionData>();
 
-export function handleCallConnection(channelId: string, openAIApiKey: string, ariClient: any) {
-  // If there's an existing ARI call, we might need to clean it up or handle it.
-  // For now, let's assume one call at a time.
-  if (session.ariCallInfo) {
-    console.log("Cleaning up previous ARI call info for channel:", session.ariCallInfo.channelId);
-    // Actual cleanup (e.g., hangup) should be managed by ari-client or explicitly called
+function getSession(callId: string, operation: string): CallSessionData | undefined {
+  const session = activeSessions.get(callId);
+  if (!session) {
+    console.error(`SessionManager: ${operation} failed. No active session found for callId ${callId}.`);
+  }
+  return session;
+}
+
+export function handleCallConnection(callId: string, openAIApiKey: string, ariClient: AriClientService) {
+  if (activeSessions.has(callId)) {
+    console.warn(`SessionManager: Call connection for ${callId} already exists. Cleaning up old OpenAI model if any.`);
+    const oldSession = activeSessions.get(callId);
+    if (oldSession?.modelConn && isOpen(oldSession.modelConn)) {
+      oldSession.modelConn.close();
+    }
   }
 
-  session.ariCallInfo = { channelId, client: ariClient };
-  session.openAIApiKey = openAIApiKey;
-  session.latestMediaTimestamp = 0; // Reset timestamp for the new call
-
-  console.log(`ARI call connection established for channel: ${channelId}`);
-  tryConnectModel(); // Attempt to connect to OpenAI model once ARI call is established
-
-  // The 'close' event for an ARI call will be signaled by the ari-client,
-  // which should then call a specific function in sessionManager, e.g., handleAriCallEnd(channelId).
-  // For now, direct ws.on('close') is removed as the WebSocket is not directly managed here for call state.
+  console.log(`SessionManager: Handling call connection for channel: ${callId}`);
+  const newSession: Partial<CallSessionData> = {
+    callId,
+    ariClient,
+    openAIApiKey
+  };
+  activeSessions.set(callId, newSession as CallSessionData);
 }
 
-export function handleAriCallEnd(channelId: string) {
-  console.log(`ARI call ended for channel: ${channelId}. Cleaning up session.`);
-  if (session.ariCallInfo && session.ariCallInfo.channelId === channelId) {
-    // If the ended call is the one sessionManager is aware of, clean up
+export async function startOpenAISession(callId: string, ariClient: AriClientService, config: CallSpecificConfig) {
+  console.log(`SessionManager: Starting OpenAI session for callId ${callId}`);
+  let session = activeSessions.get(callId);
 
-    // Close the OpenAI model connection
+  if (!session) {
+    console.log(`SessionManager: No prior session data for ${callId}, creating new entry during startOpenAISession.`);
+    // API key is part of ariClient instance now, assuming it's accessible if needed here
+    // For this structure, ariClient itself has the api key, not passing separately.
+    handleCallConnection(callId, ariClient['openaiApiKey' as any], ariClient);
+    session = activeSessions.get(callId)!;
+  } else {
+    session.ariClient = ariClient; // Ensure ariClient is up-to-date
+  }
+
+  if (!session.openAIApiKey) { // Should be set by handleCallConnection
+    console.error(`SessionManager: Cannot start OpenAI session for ${callId}. Missing OpenAI API key.`);
+    throw new Error(`Missing OpenAI API key for callId ${callId}`);
+  }
+  if (isOpen(session.modelConn)) {
+    console.warn(`SessionManager: OpenAI model connection for ${callId} already open.`);
+    return;
+  }
+
+  session.config = config; // Store the full config
+
+  try {
+    const oaiConfig = config.openAIRealtimeAPI;
+    const modelToUse = oaiConfig.model || "gpt-4o-realtime-preview-2024-12-17";
+
+    console.log(`SessionManager: Connecting to OpenAI model: ${modelToUse} for callId ${callId}`);
+    session.modelConn = new WebSocket(
+      `wss://api.openai.com/v1/realtime?model=${modelToUse}`,
+      {
+        headers: { Authorization: `Bearer ${session.openAIApiKey}`, "OpenAI-Beta": "realtime=v1" },
+      }
+    );
+
+    session.modelConn.on("open", () => {
+      console.log(`SessionManager: OpenAI WebSocket opened for callId ${callId}.`);
+      const sessionConfigPayload = {
+        modalities: ["text", "audio"],
+        turn_detection: { type: "server_vad" },
+        voice: "ash", // TODO: make configurable from oaiConfig.voice if added
+        input_audio_transcription: { model: "whisper-1" }, // TODO: make configurable
+        input_audio_format: oaiConfig.inputAudioFormat || "g711_ulaw",
+        input_audio_sample_rate: oaiConfig.inputAudioSampleRate || 8000,
+        output_audio_format: oaiConfig.outputAudioFormat || "g711_ulaw",
+        output_audio_sample_rate: oaiConfig.outputAudioSampleRate || 8000,
+        language: oaiConfig.language, // Optional, will be undefined if not set
+        ...(oaiConfig.saved_config || {}),
+      };
+      // Remove language if it's undefined, as OpenAI API might not like null/undefined for optional fields
+      if (!sessionConfigPayload.language) {
+        delete sessionConfigPayload.language;
+      }
+
+      console.log(`SessionManager: Sending session.update to OpenAI for callId ${callId}:`, JSON.stringify(sessionConfigPayload, null, 2));
+      jsonSend(session.modelConn, { type: "session.update", session: sessionConfigPayload });
+    });
+
+    session.modelConn.on("message", (data) => handleModelMessage(callId, data));
+    session.modelConn.on("error", (error) => {
+      console.error(`SessionManager: OpenAI WebSocket error for callId ${callId}:`, error);
+      session.ariClient?._onOpenAIError(callId, error);
+      closeModelConnection(callId);
+    });
+    session.modelConn.on("close", (code, reason) => {
+      console.log(`SessionManager: OpenAI WebSocket closed for callId ${callId}. Code: ${code}, Reason: ${reason.toString()}`);
+      // Check if ariClient initiated this close (e.g. openAIStreamingActive is false and no error)
+      // This is tricky. For now, always notify. ari-client's _onOpenAISessionEnded can be idempotent.
+      session.ariClient?._onOpenAISessionEnded(callId, reason.toString() || "Unknown reason");
+      closeModelConnection(callId);
+    });
+
+  } catch (error) {
+    console.error(`SessionManager: Error establishing OpenAI WebSocket for callId ${callId}:`, error);
+    session.ariClient?._onOpenAIError(callId, error);
+    throw error; // Re-throw so _activateOpenAIStreaming knows it failed
+  }
+}
+
+export function stopOpenAISession(callId: string, reason: string) {
+  console.log(`SessionManager: Stopping OpenAI session for callId ${callId}. Reason: ${reason}`);
+  const session = activeSessions.get(callId);
+  if (session && isOpen(session.modelConn)) {
+    session.modelConn.close();
+    console.log(`SessionManager: OpenAI WebSocket explicitly closed for ${callId}.`);
+  }
+  // Let the 'close' event handler manage clearing session.modelConn and notifying ariClient._onOpenAISessionEnded
+}
+
+export function sendAudioToOpenAI(callId: string, audioPayload: Buffer) {
+  const session = activeSessions.get(callId);
+  if (session && isOpen(session.modelConn)) {
+    jsonSend(session.modelConn, { type: "input_audio_buffer.append", audio: audioPayload.toString('base64') });
+  }
+}
+
+export function handleAriCallEnd(callId: string) {
+  console.log(`SessionManager: ARI call ended for callId ${callId}. Cleaning up session.`);
+  const session = activeSessions.get(callId);
+  if (session) {
     if (isOpen(session.modelConn)) {
-      console.log(`Closing OpenAI model connection for channel ${channelId}.`);
+      console.log(`SessionManager: Closing OpenAI model connection (handleAriCallEnd) for callId ${callId}.`);
       session.modelConn.close();
     }
-    session.modelConn = undefined; // Ensure it's cleared
-
-    // Clear ARI related info
-    session.ariCallInfo = undefined;
-
-    // Reset other session state related to an active call
-    session.lastAssistantItem = undefined;
-    session.responseStartTimestamp = undefined;
-    session.latestMediaTimestamp = undefined;
-    // session.openAIApiKey = undefined; // Keep API key if it's global, or clear if per-call
-
-    // If no frontend is connected, reset the entire session state.
-    // If a frontend is connected, we keep it alive but clear call-specific data.
-    if (!session.frontendConn) {
-      console.log("No frontend connection, resetting entire session.");
-      session = {};
-    } else {
-      console.log("Frontend connection active, only clearing call-specific session data.");
-      // Send a message to frontend if needed, e.g., { type: "call_ended" }
-      jsonSend(session.frontendConn, {type: "call_ended", channelId: channelId });
+    if (session.frontendConn && isOpen(session.frontendConn)) {
+         jsonSend(session.frontendConn, {type: "call_ended", callId: callId });
     }
-  } else if (session.ariCallInfo) {
-    console.warn(`Received call end for channel ${channelId}, but current session is for ${session.ariCallInfo.channelId}. No action taken for this event.`);
+    activeSessions.delete(callId);
   } else {
-    console.warn(`Received call end for channel ${channelId}, but no active ARI call info in session. No action taken.`);
+    console.warn(`SessionManager: Received ARI call end for unknown or already cleaned callId ${callId}.`);
   }
 }
 
+let globalFrontendConn: WebSocket | undefined;
+export function handleFrontendConnection(ws: WebSocket) { /* ... */ }
+function handleFrontendMessage(callId: string | null, data: RawData) { /* ... */ }
 
-export function handleFrontendConnection(ws: WebSocket) {
-  cleanupConnection(session.frontendConn);
-  session.frontendConn = ws;
+function handleModelMessage(callId: string, data: RawData) {
+  const session = getSession(callId, "handleModelMessage");
+  if (!session) return;
 
-  ws.on("message", handleFrontendMessage);
-  ws.on("close", () => {
-    cleanupConnection(session.frontendConn);
-    session.frontendConn = undefined;
-    if (!session.ariCallInfo && !session.modelConn) session = {};
-  });
-}
-
-// This function will be called by ari-client.ts with audio from Asterisk
-export function handleAriAudioMessage(audioPayload: Buffer) {
-  console.log(`handleAriAudioMessage: Received audio payload of length ${audioPayload.length} bytes.`);
-  if (isOpen(session.modelConn)) {
-    // Assuming audioPayload is raw PCM, convert to base64 for OpenAI
-    // The actual format (e.g., G.711 ulaw) will determine if direct base64 is okay
-    // or if transcoding/header addition is needed. OpenAI expects specific formats.
-    // For now, let's assume it's correctly formatted and just needs base64 encoding.
-    const base64Audio = audioPayload.toString('base64');
-    jsonSend(session.modelConn, {
-      type: "input_audio_buffer.append",
-      audio: base64Audio,
-    });
-    // We might need a timestamp mechanism if `latestMediaTimestamp` is used by other logic (e.g., truncation)
-    // For now, this is simplified.
-  }
-}
-
-async function handleFunctionCall(item: { name: string; arguments: string }) {
-  console.log("Handling function call:", item);
-  const fnDef = functions.find((f) => f.schema.name === item.name);
-  if (!fnDef) {
-    throw new Error(`No handler found for function: ${item.name}`);
-  }
-
-  let args: unknown;
-  try {
-    args = JSON.parse(item.arguments);
-  } catch {
-    return JSON.stringify({
-      error: "Invalid JSON arguments for function call.",
-    });
-  }
-
-  try {
-    console.log("Calling function:", fnDef.schema.name, args);
-    const result = await fnDef.handler(args as any);
-    return result;
-  } catch (err: any) {
-    console.error("Error running function:", err);
-    return JSON.stringify({
-      error: `Error running function ${item.name}: ${err.message}`,
-    });
-  }
-}
-
-// handleTwilioMessage is removed as audio will come via handleAriAudioMessage
-
-function handleFrontendMessage(data: RawData) {
-  const msg = parseMessage(data);
-  if (!msg) return;
-
-  if (isOpen(session.modelConn)) {
-    jsonSend(session.modelConn, msg);
-  }
-
-  if (msg.type === "session.update") {
-    session.saved_config = msg.session;
-  }
-}
-
-function tryConnectModel() {
-  if (!session.ariCallInfo || !session.ariCallInfo.channelId || !session.openAIApiKey)
-    return;
-  if (isOpen(session.modelConn)) return;
-
-  session.modelConn = new WebSocket(
-    "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-12-17",
-    {
-      headers: {
-        Authorization: `Bearer ${session.openAIApiKey}`,
-        "OpenAI-Beta": "realtime=v1",
-      },
-    }
-  );
-
-  session.modelConn.on("open", () => {
-    const config = session.saved_config || {};
-    const sessionConfigPayload = {
-      modalities: ["text", "audio"],
-      turn_detection: { type: "server_vad" },
-      voice: "ash",
-      input_audio_transcription: { model: "whisper-1" },
-      input_audio_format: "g711_ulaw", // Log this
-      output_audio_format: "g711_ulaw", // Log this
-      ...config,
-    };
-    console.log("tryConnectModel: Sending session.update to OpenAI with config:", JSON.stringify(sessionConfigPayload, null, 2));
-    jsonSend(session.modelConn, {
-      type: "session.update",
-      session: sessionConfigPayload,
-    });
-  });
-
-  session.modelConn.on("message", handleModelMessage);
-  session.modelConn.on("error", closeModel);
-  session.modelConn.on("close", closeModel);
-}
-
-function handleModelMessage(data: RawData) {
   const event = parseMessage(data);
   if (!event) return;
 
-  jsonSend(session.frontendConn, event);
+  jsonSend(globalFrontendConn || session.frontendConn, event);
 
+  // OpenAI Realtime API v1 event handling
+  // Ref: Based on typical structures, verify with actual API docs.
   switch (event.type) {
+    case "transcript": // Assuming a 'transcript' event type
+      // Check for speech_started based on ari-client's state via callback.
+      // ari-client's _onOpenAISpeechStarted is idempotent.
+      session.ariClient?._onOpenAISpeechStarted(callId);
+
+      if (event.is_final === true && typeof event.text === 'string') {
+        session.ariClient?._onOpenAIFinalResult(callId, event.text);
+      } else if (typeof event.text === 'string') {
+        session.ariClient?._onOpenAIInterimResult(callId, event.text);
+      }
+      break;
+
+    // Example if OpenAI sends a more explicit speech started event
     case "input_audio_buffer.speech_started":
-      handleTruncation();
+    case "speech.started": // Hypothetical more direct event
+      session.ariClient?._onOpenAISpeechStarted(callId);
       break;
 
     case "response.audio.delta":
-      if (session.ariCallInfo && session.ariCallInfo.client && session.ariCallInfo.channelId) {
-        if (session.responseStartTimestamp === undefined) {
-          session.responseStartTimestamp = session.latestMediaTimestamp || 0;
-        }
-        if (event.item_id) session.lastAssistantItem = event.item_id;
-
-        const audioDelta = event.delta; // This is typically base64 encoded audio from OpenAI
-        console.log(`handleModelMessage: Received response.audio.delta of length ${audioDelta?.length || 0}. Format from OpenAI is implicitly ${session.saved_config?.output_audio_format || 'g711_ulaw'}.`);
-
-        session.ariCallInfo.client.playbackAudio(session.ariCallInfo.channelId, audioDelta);
-
-        // The "mark" event was Twilio-specific for media stream synchronization.
-        // It's unclear if an equivalent is needed or available with ARI external media.
-        // For now, it's removed.
+      if (session.ariClient && event.delta) {
+        session.ariClient.playbackAudio(callId, event.delta);
       }
       break;
 
-    case "response.output_item.done": {
+    case "response.output_item.done":
       const { item } = event;
-      if (item.type === "function_call") {
-        handleFunctionCall(item)
+      if (item?.type === "function_call") {
+        handleFunctionCall(callId, item)
           .then((output) => {
-            if (session.modelConn) {
-              jsonSend(session.modelConn, {
-                type: "conversation.item.create",
-                item: {
-                  type: "function_call_output",
-                  call_id: item.call_id,
-                  output: JSON.stringify(output),
-                },
-              });
-              jsonSend(session.modelConn, { type: "response.create" });
+            if(isOpen(session.modelConn)) {
+              jsonSend(session.modelConn, {type: "conversation.item.create", item: {type: "function_call_output", call_id: item.call_id, output: JSON.stringify(output)}});
+              jsonSend(session.modelConn, {type: "response.create"});
             }
           })
-          .catch((err) => {
-            console.error("Error handling function call:", err);
-          });
+          .catch((err) => console.error(`SessionManager: Error handling function call for ${callId}:`, err));
       }
       break;
-    }
+
+    case "error":
+        console.error(`SessionManager: Received error event from OpenAI for callId ${callId}:`, event.message || event);
+        session.ariClient?._onOpenAIError(callId, event.message || event);
+        break;
   }
 }
 
-function handleTruncation() {
-  if (
-    !session.lastAssistantItem ||
-    session.responseStartTimestamp === undefined
-  )
-    return;
+async function handleFunctionCall(callId: string, item: { name: string; arguments: string, call_id?: string }) { /* ... */ }
 
-  const elapsedMs =
-    (session.latestMediaTimestamp || 0) - (session.responseStartTimestamp || 0);
-  const audio_end_ms = elapsedMs > 0 ? elapsedMs : 0;
-
-  if (isOpen(session.modelConn)) {
-    jsonSend(session.modelConn, {
-      type: "conversation.item.truncate",
-      item_id: session.lastAssistantItem,
-      content_index: 0,
-      audio_end_ms,
-    });
-  }
-
-  // The "clear" event was Twilio-specific.
-  // We'll need to determine if an equivalent action is needed for Asterisk/OpenAI.
-  // For now, the direct sending of "clear" is removed.
-  // if (session.ariCallInfo && session.ariCallInfo.channelId) {
-  //   console.log("Truncation occurred, consider if any ARI action is needed for channel:", session.ariCallInfo.channelId);
-  // }
-
-  session.lastAssistantItem = undefined;
-  session.responseStartTimestamp = undefined;
-}
-
-function closeModel() {
-  cleanupConnection(session.modelConn);
-  session.modelConn = undefined;
-  if (!session.ariCallInfo && !session.frontendConn) session = {};
-}
-
-function closeAllConnections() { // This function is now more of a "reset global session"
-  console.log("closeAllConnections called. Resetting global session state.");
-
-  // If there's an active ARI call tracked by the session, request its termination.
-  if (session.ariCallInfo && session.ariCallInfo.client && session.ariCallInfo.channelId) {
-    console.log(`Requesting ariClient to end call for channel ${session.ariCallInfo.channelId}.`);
-    session.ariCallInfo.client.endCall(session.ariCallInfo.channelId);
-    // Note: ariClient.endCall will trigger cleanupCallResources, which in turn calls handleAriCallEnd.
-    // So, some cleanup might be redundant or needs careful ordering if called directly after.
-    // For now, we expect handleAriCallEnd to manage session state clearing.
-  }
-  session.ariCallInfo = undefined; // Clear it here too for good measure
-
-  if (isOpen(session.modelConn)) {
-    console.log("Closing model connection.");
-    session.modelConn.close();
-  }
-  session.modelConn = undefined;
-
-  if (isOpen(session.frontendConn)) {
-    console.log("Closing frontend connection.");
-    session.frontendConn.close();
-  }
-  session.frontendConn = undefined;
-
-  // Reset all other session variables
-  session.lastAssistantItem = undefined;
-  session.responseStartTimestamp = undefined;
-  session.latestMediaTimestamp = undefined;
-  session.saved_config = undefined;
-  session.openAIApiKey = undefined; // Clear API key on full reset
-
-  // Fully reset session object
-  session = {};
-}
-
-function cleanupConnection(ws?: WebSocket) {
-  if (isOpen(ws)) ws.close();
-}
-
-function parseMessage(data: RawData): any {
-  try {
-    return JSON.parse(data.toString());
-  } catch {
-    return null;
+function closeModelConnection(callId: string) {
+  const session = activeSessions.get(callId);
+  if (session) { // Check if session exists before trying to clear modelConn
+    session.modelConn = undefined; // Let the 'close' event on the WebSocket handle ariClient notification
   }
 }
 
-function jsonSend(ws: WebSocket | undefined, obj: unknown) {
-  if (!isOpen(ws)) return;
-  ws.send(JSON.stringify(obj));
-}
-
-function isOpen(ws?: WebSocket): ws is WebSocket {
-  return !!ws && ws.readyState === WebSocket.OPEN;
-}
+function parseMessage(data: RawData): any { try { return JSON.parse(data.toString()); } catch { return null; } }
+function jsonSend(ws: WebSocket | undefined, obj: unknown) { if (isOpen(ws)) ws.send(JSON.stringify(obj)); }
+function isOpen(ws?: WebSocket): ws is WebSocket { return !!ws && ws.readyState === WebSocket.OPEN; }
+export function handleFrontendDisconnection() { /* ... */ }
+[end of websocket-server/src/sessionManager.ts]

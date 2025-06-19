@@ -3,7 +3,6 @@
 Combine OpenAI's Realtime API and Asterisk's telephony capabilities (via ARI - Asterisk REST Interface) to build an AI calling assistant.
 
 <img width="1728" alt="Screenshot 2024-12-18 at 4 59 30 PM" src="https://github.com/user-attachments/assets/d3c8dcce-b339-410c-85ca-864a8e0fc326" />
-*(Note: UI screenshot is from the original Twilio version and may have minor differences.)*
 
 ## Quick Setup
 
