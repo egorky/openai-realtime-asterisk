@@ -1,39 +1,56 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
 
+// Define AriCallInfo as any for now, will be refined later
+type AriCallInfo = any;
+
 interface Session {
-  twilioConn?: WebSocket;
+  ariCallInfo?: AriCallInfo;
   frontendConn?: WebSocket;
   modelConn?: WebSocket;
-  streamSid?: string;
   saved_config?: any;
   lastAssistantItem?: string;
   responseStartTimestamp?: number;
-  latestMediaTimestamp?: number;
+  latestMediaTimestamp?: number; // This might still be useful for timing VAD or other logic
   openAIApiKey?: string;
 }
 
 let session: Session = {};
 
-export function handleCallConnection(ws: WebSocket, openAIApiKey: string) {
-  cleanupConnection(session.twilioConn);
-  session.twilioConn = ws;
-  session.openAIApiKey = openAIApiKey;
+export function handleCallConnection(channelId: string, openAIApiKey: string, ariClient: any) {
+  // If there's an existing ARI call, we might need to clean it up or handle it.
+  // For now, let's assume one call at a time.
+  if (session.ariCallInfo) {
+    console.log("Cleaning up previous ARI call info for channel:", session.ariCallInfo.channelId);
+    // Actual cleanup (e.g., hangup) should be managed by ari-client or explicitly called
+  }
 
-  ws.on("message", handleTwilioMessage);
-  ws.on("error", ws.close);
-  ws.on("close", () => {
+  session.ariCallInfo = { channelId, client: ariClient };
+  session.openAIApiKey = openAIApiKey;
+  session.latestMediaTimestamp = 0; // Reset timestamp for the new call
+
+  console.log(`ARI call connection established for channel: ${channelId}`);
+  tryConnectModel(); // Attempt to connect to OpenAI model once ARI call is established
+
+  // The 'close' event for an ARI call will be signaled by the ari-client,
+  // which should then call a specific function in sessionManager, e.g., handleAriCallEnd(channelId).
+  // For now, direct ws.on('close') is removed as the WebSocket is not directly managed here for call state.
+}
+
+// Placeholder for when ari-client signals call termination
+export function handleAriCallEnd(channelId: string) {
+  if (session.ariCallInfo && session.ariCallInfo.channelId === channelId) {
+    console.log(`ARI call ended for channel: ${channelId}`);
     cleanupConnection(session.modelConn);
-    cleanupConnection(session.twilioConn);
-    session.twilioConn = undefined;
     session.modelConn = undefined;
-    session.streamSid = undefined;
+    session.ariCallInfo = undefined;
     session.lastAssistantItem = undefined;
     session.responseStartTimestamp = undefined;
-    session.latestMediaTimestamp = undefined;
-    if (!session.frontendConn) session = {};
-  });
+    session.latestMediaTimestamp = undefined; // Reset timestamp
+    if (!session.frontendConn) session = {}; // Reset session if no frontend connected
+  }
 }
+
 
 export function handleFrontendConnection(ws: WebSocket) {
   cleanupConnection(session.frontendConn);
@@ -43,8 +60,26 @@ export function handleFrontendConnection(ws: WebSocket) {
   ws.on("close", () => {
     cleanupConnection(session.frontendConn);
     session.frontendConn = undefined;
-    if (!session.twilioConn && !session.modelConn) session = {};
+    if (!session.ariCallInfo && !session.modelConn) session = {};
   });
+}
+
+// This function will be called by ari-client.ts with audio from Asterisk
+export function handleAriAudioMessage(audioPayload: Buffer) {
+  // console.log(`Received audio payload of length: ${audioPayload.length}`);
+  if (isOpen(session.modelConn)) {
+    // Assuming audioPayload is raw PCM, convert to base64 for OpenAI
+    // The actual format (e.g., G.711 ulaw) will determine if direct base64 is okay
+    // or if transcoding/header addition is needed. OpenAI expects specific formats.
+    // For now, let's assume it's correctly formatted and just needs base64 encoding.
+    const base64Audio = audioPayload.toString('base64');
+    jsonSend(session.modelConn, {
+      type: "input_audio_buffer.append",
+      audio: base64Audio,
+    });
+    // We might need a timestamp mechanism if `latestMediaTimestamp` is used by other logic (e.g., truncation)
+    // For now, this is simplified.
+  }
 }
 
 async function handleFunctionCall(item: { name: string; arguments: string }) {
@@ -75,32 +110,7 @@ async function handleFunctionCall(item: { name: string; arguments: string }) {
   }
 }
 
-function handleTwilioMessage(data: RawData) {
-  const msg = parseMessage(data);
-  if (!msg) return;
-
-  switch (msg.event) {
-    case "start":
-      session.streamSid = msg.start.streamSid;
-      session.latestMediaTimestamp = 0;
-      session.lastAssistantItem = undefined;
-      session.responseStartTimestamp = undefined;
-      tryConnectModel();
-      break;
-    case "media":
-      session.latestMediaTimestamp = msg.media.timestamp;
-      if (isOpen(session.modelConn)) {
-        jsonSend(session.modelConn, {
-          type: "input_audio_buffer.append",
-          audio: msg.media.payload,
-        });
-      }
-      break;
-    case "close":
-      closeAllConnections();
-      break;
-  }
-}
+// handleTwilioMessage is removed as audio will come via handleAriAudioMessage
 
 function handleFrontendMessage(data: RawData) {
   const msg = parseMessage(data);
@@ -116,7 +126,7 @@ function handleFrontendMessage(data: RawData) {
 }
 
 function tryConnectModel() {
-  if (!session.twilioConn || !session.streamSid || !session.openAIApiKey)
+  if (!session.ariCallInfo || !session.ariCallInfo.channelId || !session.openAIApiKey)
     return;
   if (isOpen(session.modelConn)) return;
 
@@ -163,22 +173,23 @@ function handleModelMessage(data: RawData) {
       break;
 
     case "response.audio.delta":
-      if (session.twilioConn && session.streamSid) {
+      if (session.ariCallInfo && session.ariCallInfo.client && session.ariCallInfo.channelId) {
         if (session.responseStartTimestamp === undefined) {
-          session.responseStartTimestamp = session.latestMediaTimestamp || 0;
+          session.responseStartTimestamp = session.latestMediaTimestamp || 0; // Consider how latestMediaTimestamp is updated
         }
         if (event.item_id) session.lastAssistantItem = event.item_id;
 
-        jsonSend(session.twilioConn, {
-          event: "media",
-          streamSid: session.streamSid,
-          media: { payload: event.delta },
-        });
+        // console.log("Would send audio to ARI for playback:", event.delta);
+        // This assumes ariCallInfo.client has a method like playbackAudio
+        // The actual method might differ based on ari-client.ts implementation
+        // For now, this is a placeholder for sending audio to Asterisk.
+        // The event.delta is likely base64 encoded audio from OpenAI.
+        // The ari-client will need to decode it if Asterisk expects raw audio.
+        session.ariCallInfo.client.playbackAudio(session.ariCallInfo.channelId, event.delta);
 
-        jsonSend(session.twilioConn, {
-          event: "mark",
-          streamSid: session.streamSid,
-        });
+        // The "mark" event was Twilio-specific for media stream synchronization.
+        // It's unclear if an equivalent is needed or available with ARI external media.
+        // For now, it's removed.
       }
       break;
 
@@ -228,12 +239,12 @@ function handleTruncation() {
     });
   }
 
-  if (session.twilioConn && session.streamSid) {
-    jsonSend(session.twilioConn, {
-      event: "clear",
-      streamSid: session.streamSid,
-    });
-  }
+  // The "clear" event was Twilio-specific.
+  // We'll need to determine if an equivalent action is needed for Asterisk/OpenAI.
+  // For now, the direct sending of "clear" is removed.
+  // if (session.ariCallInfo && session.ariCallInfo.channelId) {
+  //   console.log("Truncation occurred, consider if any ARI action is needed for channel:", session.ariCallInfo.channelId);
+  // }
 
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp = undefined;
@@ -242,14 +253,19 @@ function handleTruncation() {
 function closeModel() {
   cleanupConnection(session.modelConn);
   session.modelConn = undefined;
-  if (!session.twilioConn && !session.frontendConn) session = {};
+  if (!session.ariCallInfo && !session.frontendConn) session = {};
 }
 
 function closeAllConnections() {
-  if (session.twilioConn) {
-    session.twilioConn.close();
-    session.twilioConn = undefined;
+  // Close ARI connection (this might involve telling ari-client to hang up)
+  if (session.ariCallInfo && session.ariCallInfo.client) {
+    console.log("Closing all connections: Requesting hangup for channel", session.ariCallInfo.channelId);
+    // session.ariCallInfo.client.hangupChannel(session.ariCallInfo.channelId); // Example method
+    // Actual hangup should be managed by ari-client or a more specific function.
+    // For now, just clearing the info.
+    session.ariCallInfo = undefined;
   }
+
   if (session.modelConn) {
     session.modelConn.close();
     session.modelConn = undefined;
@@ -258,11 +274,16 @@ function closeAllConnections() {
     session.frontendConn.close();
     session.frontendConn = undefined;
   }
-  session.streamSid = undefined;
+  // session.streamSid is removed
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp = undefined;
   session.latestMediaTimestamp = undefined;
   session.saved_config = undefined;
+  // Ensure the entire session object is cleared if no frontend is connected,
+  // or handled based on whether frontend expects to persist across calls.
+  if (!session.frontendConn) {
+    session = {};
+  }
 }
 
 function cleanupConnection(ws?: WebSocket) {

@@ -11,295 +11,114 @@ import {
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Circle, CheckCircle, Loader2 } from "lucide-react";
-import { PhoneNumber } from "@/components/types";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+// Removed PhoneNumber type and Select imports as they are no longer used.
 
 export default function ChecklistAndConfig({
   ready,
   setReady,
-  selectedPhoneNumber,
-  setSelectedPhoneNumber,
 }: {
   ready: boolean;
   setReady: (val: boolean) => void;
-  selectedPhoneNumber: string;
-  setSelectedPhoneNumber: (val: string) => void;
+  // Removed selectedPhoneNumber and setSelectedPhoneNumber props
 }) {
-  const [hasCredentials, setHasCredentials] = useState(false);
-  const [phoneNumbers, setPhoneNumbers] = useState<PhoneNumber[]>([]);
-  const [currentNumberSid, setCurrentNumberSid] = useState("");
-  const [currentVoiceUrl, setCurrentVoiceUrl] = useState("");
-
-  const [publicUrl, setPublicUrl] = useState("");
-  const [localServerUp, setLocalServerUp] = useState(false);
-  const [publicUrlAccessible, setPublicUrlAccessible] = useState(false);
-
+  const [websocketServerReachable, setWebsocketServerReachable] =
+    useState(false);
+  const [checkingServer, setCheckingServer] = useState(false);
   const [allChecksPassed, setAllChecksPassed] = useState(false);
-  const [webhookLoading, setWebhookLoading] = useState(false);
-  const [ngrokLoading, setNgrokLoading] = useState(false);
 
-  const appendedTwimlUrl = publicUrl ? `${publicUrl}/twiml` : "";
-  const isWebhookMismatch =
-    appendedTwimlUrl && currentVoiceUrl && appendedTwimlUrl !== currentVoiceUrl;
+  const websocketServerBaseUrl =
+    process.env.NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL;
+
+  const checkWebsocketServer = async () => {
+    if (!websocketServerBaseUrl) {
+      console.error(
+        "NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL is not defined in .env"
+      );
+      setWebsocketServerReachable(false);
+      return;
+    }
+    setCheckingServer(true);
+    try {
+      // Attempt to fetch tools or any simple health check endpoint
+      const response = await fetch(`${websocketServerBaseUrl}/tools`);
+      if (response.ok) {
+        setWebsocketServerReachable(true);
+      } else {
+        setWebsocketServerReachable(false);
+      }
+    } catch (error) {
+      console.error("Failed to reach websocket server:", error);
+      setWebsocketServerReachable(false);
+    } finally {
+      setCheckingServer(false);
+    }
+  };
 
   useEffect(() => {
-    let polling = true;
-
-    const pollChecks = async () => {
-      try {
-        // 1. Check credentials
-        let res = await fetch("/api/twilio");
-        if (!res.ok) throw new Error("Failed credentials check");
-        const credData = await res.json();
-        setHasCredentials(!!credData?.credentialsSet);
-
-        // 2. Fetch numbers
-        res = await fetch("/api/twilio/numbers");
-        if (!res.ok) throw new Error("Failed to fetch phone numbers");
-        const numbersData = await res.json();
-        if (Array.isArray(numbersData) && numbersData.length > 0) {
-          setPhoneNumbers(numbersData);
-          // If currentNumberSid not set or not in the list, use first
-          const selected =
-            numbersData.find((p: PhoneNumber) => p.sid === currentNumberSid) ||
-            numbersData[0];
-          setCurrentNumberSid(selected.sid);
-          setCurrentVoiceUrl(selected.voiceUrl || "");
-          setSelectedPhoneNumber(selected.friendlyName || "");
-        }
-
-        // 3. Check local server & public URL
-        let foundPublicUrl = "";
-        try {
-          const resLocal = await fetch("http://localhost:8081/public-url");
-          if (resLocal.ok) {
-            const pubData = await resLocal.json();
-            foundPublicUrl = pubData?.publicUrl || "";
-            setLocalServerUp(true);
-            setPublicUrl(foundPublicUrl);
-          } else {
-            throw new Error("Local server not responding");
-          }
-        } catch {
-          setLocalServerUp(false);
-          setPublicUrl("");
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    };
-
-    pollChecks();
-    const intervalId = setInterval(() => polling && pollChecks(), 1000);
-    return () => {
-      polling = false;
-      clearInterval(intervalId);
-    };
-  }, [currentNumberSid, setSelectedPhoneNumber]);
-
-  const updateWebhook = async () => {
-    if (!currentNumberSid || !appendedTwimlUrl) return;
-    try {
-      setWebhookLoading(true);
-      const res = await fetch("/api/twilio/numbers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          phoneNumberSid: currentNumberSid,
-          voiceUrl: appendedTwimlUrl,
-        }),
-      });
-      if (!res.ok) throw new Error("Failed to update webhook");
-      setCurrentVoiceUrl(appendedTwimlUrl);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setWebhookLoading(false);
+    // Automatically check server status when the dialog is shown (i.e., !ready)
+    if (!ready) {
+      checkWebsocketServer();
     }
-  };
-
-  const checkNgrok = async () => {
-    if (!localServerUp || !publicUrl) return;
-    setNgrokLoading(true);
-    let success = false;
-    for (let i = 0; i < 5; i++) {
-      try {
-        const resTest = await fetch(publicUrl + "/public-url");
-        if (resTest.ok) {
-          setPublicUrlAccessible(true);
-          success = true;
-          break;
-        }
-      } catch {
-        // retry
-      }
-      if (i < 4) {
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-    }
-    if (!success) {
-      setPublicUrlAccessible(false);
-    }
-    setNgrokLoading(false);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]); // Only re-run if ready changes (e.g. dialog opens)
 
   const checklist = useMemo(() => {
     return [
       {
-        label: "Set up Twilio account",
-        done: hasCredentials,
-        description: "Then update account details in webapp/.env",
+        label: "Connect to WebSocket Server",
+        done: websocketServerReachable,
+        description: `Ensures the backend server at ${websocketServerBaseUrl} is running and accessible.`,
         field: (
           <Button
+            variant="outline"
+            onClick={checkWebsocketServer}
+            disabled={checkingServer || !websocketServerBaseUrl}
             className="w-full"
-            onClick={() => window.open("https://console.twilio.com/", "_blank")}
           >
-            Open Twilio Console
+            {checkingServer ? (
+              <Loader2 className="mr-2 h-4 animate-spin" />
+            ) : (
+              "Check Server Connection"
+            )}
           </Button>
         ),
       },
       {
-        label: "Set up Twilio phone number",
-        done: phoneNumbers.length > 0,
-        description: "Costs around $1.15/month",
-        field:
-          phoneNumbers.length > 0 ? (
-            phoneNumbers.length === 1 ? (
-              <Input value={phoneNumbers[0].friendlyName || ""} disabled />
-            ) : (
-              <Select
-                onValueChange={(value) => {
-                  setCurrentNumberSid(value);
-                  const selected = phoneNumbers.find((p) => p.sid === value);
-                  if (selected) {
-                    setSelectedPhoneNumber(selected.friendlyName || "");
-                    setCurrentVoiceUrl(selected.voiceUrl || "");
-                  }
-                }}
-                value={currentNumberSid}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue placeholder="Select a phone number" />
-                </SelectTrigger>
-                <SelectContent>
-                  {phoneNumbers.map((phone) => (
-                    <SelectItem key={phone.sid} value={phone.sid}>
-                      {phone.friendlyName}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )
-          ) : (
-            <Button
-              className="w-full"
-              onClick={() =>
-                window.open(
-                  "https://console.twilio.com/us1/develop/phone-numbers/manage/incoming",
-                  "_blank"
-                )
-              }
-            >
-              Set up Twilio phone number
-            </Button>
-          ),
-      },
-      {
-        label: "Start local WebSocket server",
-        done: localServerUp,
-        description: "cd websocket-server && npm run dev",
-        field: null,
-      },
-      {
-        label: "Start ngrok",
-        done: publicUrlAccessible,
-        description: "Then set ngrok URL in websocket-server/.env",
-        field: (
-          <div className="flex items-center gap-2 w-full">
-            <div className="flex-1">
-              <Input value={publicUrl} disabled />
-            </div>
-            <div className="flex-1">
-              <Button
-                variant="outline"
-                onClick={checkNgrok}
-                disabled={ngrokLoading || !localServerUp || !publicUrl}
-                className="w-full"
-              >
-                {ngrokLoading ? (
-                  <Loader2 className="mr-2 h-4 animate-spin" />
-                ) : (
-                  "Check ngrok"
-                )}
-              </Button>
-            </div>
-          </div>
-        ),
-      },
-      {
-        label: "Update Twilio webhook URL",
-        done: !!publicUrl && !isWebhookMismatch,
-        description: "Can also be done manually in Twilio console",
-        field: (
-          <div className="flex items-center gap-2 w-full">
-            <div className="flex-1">
-              <Input value={currentVoiceUrl} disabled className="w-full" />
-            </div>
-            <div className="flex-1">
-              <Button
-                onClick={updateWebhook}
-                disabled={webhookLoading}
-                className="w-full"
-              >
-                {webhookLoading ? (
-                  <Loader2 className="mr-2 h-4 animate-spin" />
-                ) : (
-                  "Update Webhook"
-                )}
-              </Button>
-            </div>
-          </div>
-        ),
+        label: "Asterisk Configuration",
+        done: true, // This is a placeholder, webapp can't verify Asterisk directly
+        description:
+          "Ensure your Asterisk server is properly configured and connected to the WebSocket server's ARI interface.",
+        field: null, // No direct action from webapp
       },
     ];
-  }, [
-    hasCredentials,
-    phoneNumbers,
-    currentNumberSid,
-    localServerUp,
-    publicUrl,
-    publicUrlAccessible,
-    currentVoiceUrl,
-    isWebhookMismatch,
-    appendedTwimlUrl,
-    webhookLoading,
-    ngrokLoading,
-    setSelectedPhoneNumber,
-  ]);
+  }, [websocketServerReachable, checkingServer, websocketServerBaseUrl]);
 
   useEffect(() => {
     setAllChecksPassed(checklist.every((item) => item.done));
   }, [checklist]);
 
+  // If all checks pass, automatically set ready to true
+  // This simplifies the user flow as they don't need to click "Let's go!" if everything is fine.
   useEffect(() => {
-    if (!ready) {
-      checkNgrok();
-    }
-  }, [localServerUp, ready]);
-
-  useEffect(() => {
-    if (!allChecksPassed) {
-      setReady(false);
+    if (allChecksPassed) {
+      setReady(true);
     }
   }, [allChecksPassed, setReady]);
 
-  const handleDone = () => setReady(true);
+
+  const handleDone = () => {
+    if (allChecksPassed) {
+      setReady(true);
+    } else {
+      // Optionally, re-check or prompt user
+      checkWebsocketServer();
+    }
+  };
+
+  // If already ready, don't render the dialog
+  if (ready) {
+    return null;
+  }
 
   return (
     <Dialog open={!ready}>
@@ -307,7 +126,8 @@ export default function ChecklistAndConfig({
         <DialogHeader>
           <DialogTitle>Setup Checklist</DialogTitle>
           <DialogDescription>
-            This sample app requires a few steps before you get started
+            Please ensure the following steps are completed to use the
+            application.
           </DialogDescription>
         </DialogHeader>
 
@@ -341,9 +161,9 @@ export default function ChecklistAndConfig({
           <Button
             variant="outline"
             onClick={handleDone}
-            disabled={!allChecksPassed}
+            disabled={!allChecksPassed && !checkingServer}
           >
-            Let's go!
+            {allChecksPassed ? "Continue" : "Refresh Checks"}
           </Button>
         </div>
       </DialogContent>

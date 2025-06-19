@@ -1,11 +1,14 @@
-import { WebSocket } from "ws";
+// Basic interface for the ARI client, to be expanded as needed
+export interface AriClient {
+  playbackAudio: (channelId: string, audioPayload: string) => void;
+  endCall: (channelId: string) => void;
+  // Add other methods like startExternalMedia, answerCall etc. as they are implemented
+}
 
-export interface Session {
-  twilioConn?: WebSocket;
-  frontendConn?: WebSocket;
-  modelConn?: WebSocket;
-  config?: any;
-  streamSid?: string;
+// Information related to an active Asterisk call
+export interface AriCallInfo {
+  channelId: string;
+  ariClient: AriClient; // Using the AriClient interface
 }
 
 export interface FunctionCallItem {
