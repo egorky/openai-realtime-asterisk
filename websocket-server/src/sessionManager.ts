@@ -37,17 +37,41 @@ export function handleCallConnection(channelId: string, openAIApiKey: string, ar
   // For now, direct ws.on('close') is removed as the WebSocket is not directly managed here for call state.
 }
 
-// Placeholder for when ari-client signals call termination
 export function handleAriCallEnd(channelId: string) {
+  console.log(`ARI call ended for channel: ${channelId}. Cleaning up session.`);
   if (session.ariCallInfo && session.ariCallInfo.channelId === channelId) {
-    console.log(`ARI call ended for channel: ${channelId}`);
-    cleanupConnection(session.modelConn);
-    session.modelConn = undefined;
+    // If the ended call is the one sessionManager is aware of, clean up
+
+    // Close the OpenAI model connection
+    if (isOpen(session.modelConn)) {
+      console.log(`Closing OpenAI model connection for channel ${channelId}.`);
+      session.modelConn.close();
+    }
+    session.modelConn = undefined; // Ensure it's cleared
+
+    // Clear ARI related info
     session.ariCallInfo = undefined;
+
+    // Reset other session state related to an active call
     session.lastAssistantItem = undefined;
     session.responseStartTimestamp = undefined;
-    session.latestMediaTimestamp = undefined; // Reset timestamp
-    if (!session.frontendConn) session = {}; // Reset session if no frontend connected
+    session.latestMediaTimestamp = undefined;
+    // session.openAIApiKey = undefined; // Keep API key if it's global, or clear if per-call
+
+    // If no frontend is connected, reset the entire session state.
+    // If a frontend is connected, we keep it alive but clear call-specific data.
+    if (!session.frontendConn) {
+      console.log("No frontend connection, resetting entire session.");
+      session = {};
+    } else {
+      console.log("Frontend connection active, only clearing call-specific session data.");
+      // Send a message to frontend if needed, e.g., { type: "call_ended" }
+      jsonSend(session.frontendConn, {type: "call_ended", channelId: channelId });
+    }
+  } else if (session.ariCallInfo) {
+    console.warn(`Received call end for channel ${channelId}, but current session is for ${session.ariCallInfo.channelId}. No action taken for this event.`);
+  } else {
+    console.warn(`Received call end for channel ${channelId}, but no active ARI call info in session. No action taken.`);
   }
 }
 
@@ -66,7 +90,7 @@ export function handleFrontendConnection(ws: WebSocket) {
 
 // This function will be called by ari-client.ts with audio from Asterisk
 export function handleAriAudioMessage(audioPayload: Buffer) {
-  // console.log(`Received audio payload of length: ${audioPayload.length}`);
+  console.log(`handleAriAudioMessage: Received audio payload of length ${audioPayload.length} bytes.`);
   if (isOpen(session.modelConn)) {
     // Assuming audioPayload is raw PCM, convert to base64 for OpenAI
     // The actual format (e.g., G.711 ulaw) will determine if direct base64 is okay
@@ -142,17 +166,19 @@ function tryConnectModel() {
 
   session.modelConn.on("open", () => {
     const config = session.saved_config || {};
+    const sessionConfigPayload = {
+      modalities: ["text", "audio"],
+      turn_detection: { type: "server_vad" },
+      voice: "ash",
+      input_audio_transcription: { model: "whisper-1" },
+      input_audio_format: "g711_ulaw", // Log this
+      output_audio_format: "g711_ulaw", // Log this
+      ...config,
+    };
+    console.log("tryConnectModel: Sending session.update to OpenAI with config:", JSON.stringify(sessionConfigPayload, null, 2));
     jsonSend(session.modelConn, {
       type: "session.update",
-      session: {
-        modalities: ["text", "audio"],
-        turn_detection: { type: "server_vad" },
-        voice: "ash",
-        input_audio_transcription: { model: "whisper-1" },
-        input_audio_format: "g711_ulaw",
-        output_audio_format: "g711_ulaw",
-        ...config,
-      },
+      session: sessionConfigPayload,
     });
   });
 
@@ -175,17 +201,14 @@ function handleModelMessage(data: RawData) {
     case "response.audio.delta":
       if (session.ariCallInfo && session.ariCallInfo.client && session.ariCallInfo.channelId) {
         if (session.responseStartTimestamp === undefined) {
-          session.responseStartTimestamp = session.latestMediaTimestamp || 0; // Consider how latestMediaTimestamp is updated
+          session.responseStartTimestamp = session.latestMediaTimestamp || 0;
         }
         if (event.item_id) session.lastAssistantItem = event.item_id;
 
-        // console.log("Would send audio to ARI for playback:", event.delta);
-        // This assumes ariCallInfo.client has a method like playbackAudio
-        // The actual method might differ based on ari-client.ts implementation
-        // For now, this is a placeholder for sending audio to Asterisk.
-        // The event.delta is likely base64 encoded audio from OpenAI.
-        // The ari-client will need to decode it if Asterisk expects raw audio.
-        session.ariCallInfo.client.playbackAudio(session.ariCallInfo.channelId, event.delta);
+        const audioDelta = event.delta; // This is typically base64 encoded audio from OpenAI
+        console.log(`handleModelMessage: Received response.audio.delta of length ${audioDelta?.length || 0}. Format from OpenAI is implicitly ${session.saved_config?.output_audio_format || 'g711_ulaw'}.`);
+
+        session.ariCallInfo.client.playbackAudio(session.ariCallInfo.channelId, audioDelta);
 
         // The "mark" event was Twilio-specific for media stream synchronization.
         // It's unclear if an equivalent is needed or available with ARI external media.
@@ -256,34 +279,40 @@ function closeModel() {
   if (!session.ariCallInfo && !session.frontendConn) session = {};
 }
 
-function closeAllConnections() {
-  // Close ARI connection (this might involve telling ari-client to hang up)
-  if (session.ariCallInfo && session.ariCallInfo.client) {
-    console.log("Closing all connections: Requesting hangup for channel", session.ariCallInfo.channelId);
-    // session.ariCallInfo.client.hangupChannel(session.ariCallInfo.channelId); // Example method
-    // Actual hangup should be managed by ari-client or a more specific function.
-    // For now, just clearing the info.
-    session.ariCallInfo = undefined;
-  }
+function closeAllConnections() { // This function is now more of a "reset global session"
+  console.log("closeAllConnections called. Resetting global session state.");
 
-  if (session.modelConn) {
+  // If there's an active ARI call tracked by the session, request its termination.
+  if (session.ariCallInfo && session.ariCallInfo.client && session.ariCallInfo.channelId) {
+    console.log(`Requesting ariClient to end call for channel ${session.ariCallInfo.channelId}.`);
+    session.ariCallInfo.client.endCall(session.ariCallInfo.channelId);
+    // Note: ariClient.endCall will trigger cleanupCallResources, which in turn calls handleAriCallEnd.
+    // So, some cleanup might be redundant or needs careful ordering if called directly after.
+    // For now, we expect handleAriCallEnd to manage session state clearing.
+  }
+  session.ariCallInfo = undefined; // Clear it here too for good measure
+
+  if (isOpen(session.modelConn)) {
+    console.log("Closing model connection.");
     session.modelConn.close();
-    session.modelConn = undefined;
   }
-  if (session.frontendConn) {
+  session.modelConn = undefined;
+
+  if (isOpen(session.frontendConn)) {
+    console.log("Closing frontend connection.");
     session.frontendConn.close();
-    session.frontendConn = undefined;
   }
-  // session.streamSid is removed
+  session.frontendConn = undefined;
+
+  // Reset all other session variables
   session.lastAssistantItem = undefined;
   session.responseStartTimestamp = undefined;
   session.latestMediaTimestamp = undefined;
   session.saved_config = undefined;
-  // Ensure the entire session object is cleared if no frontend is connected,
-  // or handled based on whether frontend expects to persist across calls.
-  if (!session.frontendConn) {
-    session = {};
-  }
+  session.openAIApiKey = undefined; // Clear API key on full reset
+
+  // Fully reset session object
+  session = {};
 }
 
 function cleanupConnection(ws?: WebSocket) {
