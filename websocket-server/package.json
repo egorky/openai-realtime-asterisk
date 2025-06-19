@@ -1,7 +1,7 @@
 {
-  "name": "twilio-realtime",
+  "name": "ari-openai-websocket-server",
   "version": "1.0.0",
-  "description": "Twilio real-time server with TypeScript",
+  "description": "WebSocket server for Asterisk ARI and OpenAI Realtime API integration",
   "main": "dist/server.js",
   "scripts": {
     "build": "tsc",

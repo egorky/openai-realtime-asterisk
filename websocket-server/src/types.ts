@@ -90,6 +90,7 @@ export interface OpenAIRealtimeAPIConfig {
   sampleRate?: number;
   // For any other custom session parameters for OpenAI
   saved_config?: Record<string, any>;
+  apiKey?: string; // To store the OpenAI API key
 }
 
 export interface LoggingConfig {

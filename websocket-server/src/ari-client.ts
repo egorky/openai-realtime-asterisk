@@ -123,6 +123,13 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   if (!oaiConf.outputAudioFormat && oaiConf.audioFormat) oaiConf.outputAudioFormat = oaiConf.audioFormat;
   if (!oaiConf.outputAudioSampleRate && oaiConf.sampleRate) oaiConf.outputAudioSampleRate = oaiConf.sampleRate;
 
+  // Populate the API key from environment variable OPENAI_API_KEY (which is also in a global const)
+  oaiConf.apiKey = process.env.OPENAI_API_KEY || ""; // Ensure this is set
+  if (!oaiConf.apiKey) {
+    logger.error("CRITICAL: OPENAI_API_KEY is not set in environment variables. OpenAI connection will fail.");
+    // Depending on desired behavior, could throw error here or let it fail at connection attempt.
+  }
+
   return callConfig;
 }
 
@@ -777,7 +784,8 @@ export class AriClientService implements AriClientInterface {
       });
 
       // Notify SessionManager about the new call (passes ariClient instance for callbacks)
-      sessionManager.handleCallConnection(callId, this.openaiApiKey, this);
+      // API key is now passed via config object in startOpenAISession
+      sessionManager.handleCallConnection(callId, this);
       callLogger.info(`Call connection details passed to SessionManager.`);
 
       // --- Timers and Operational Mode Logic ---
