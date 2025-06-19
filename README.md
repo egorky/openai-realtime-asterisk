@@ -30,6 +30,7 @@ This repository implements a phone calling assistant using OpenAI's Realtime API
     *   Forwards audio from Asterisk to OpenAI for transcription.
     *   Plays back audio responses from OpenAI to Asterisk.
     *   Forwards events (transcripts, function calls, errors) to the `webapp` via a WebSocket connection.
+    *   Supports various operational modes for speech recognition activation (e.g., immediate, fixed delay, VAD) and DTMF handling, configured via environment variables and a JSON configuration file.
 
 **Call Flow:**
 
@@ -37,14 +38,12 @@ This repository implements a phone calling assistant using OpenAI's Realtime API
 2.  Asterisk dialplan routes the call to a `Stasis` application, which is handled by `ari-client.ts` in the `websocket-server`.
 3.  `ari-client.ts` answers the call and establishes media handling:
     *   It creates an RTP server (`rtp-server.ts`) to receive audio from Asterisk.
-    *   It instructs Asterisk (via ARI) to send call audio to this RTP server using an "external media" channel.
-4.  `sessionManager.ts` is notified of the new call and connects to OpenAI's Realtime API, configured with appropriate audio formats (e.g., G.711 µ-law).
-5.  Audio received by `rtp-server.ts` is forwarded by `ari-client.ts` to `sessionManager.ts`, which then sends it to OpenAI.
-6.  OpenAI processes the audio, sends back transcripts, function call requests, and audio responses.
-7.  `sessionManager.ts` handles these messages:
-    *   Transcripts and function call details are sent to the `webapp`.
-    *   Audio responses from OpenAI are sent to `ari-client.ts`.
-8.  `ari-client.ts` plays back the audio responses on the Asterisk channel using `channel.play()`.
+    *   It instructs Asterisk (via ARI) to send call audio to this RTP server using an "external media" channel. It also sets up Asterisk's VAD (Voice Activity Detection) feature (`TALK_DETECT`) on the channel if VAD mode is enabled.
+4.  Based on the configured `recognitionActivationMode` (e.g., immediate, fixed delay after greeting, VAD), `ari-client.ts` instructs `sessionManager.ts` to connect to OpenAI's Realtime API. This connection is configured with appropriate audio formats (e.g., G.711 µ-law).
+5.  When `ari-client.ts` determines that OpenAI streaming should be active (e.g., after VAD detects speech, or a delay timer expires), audio received by `rtp-server.ts` is forwarded by `ari-client.ts` to `sessionManager.ts`, which then sends it to OpenAI. If VAD is used, initial audio might be buffered by `ari-client.ts` and flushed once the OpenAI stream is ready.
+6.  OpenAI processes the audio, sending back events like speech started, interim and final transcripts, function call requests, and audio responses. DTMF input from the user can interrupt this process.
+7.  `sessionManager.ts` receives these events from OpenAI and forwards them to `ari-client.ts` using specific callback methods (e.g., `_onOpenAISpeechStarted`, `_onOpenAIFinalResult`). It also forwards transcripts and function call details to the `webapp`. Audio responses from OpenAI are sent directly to `ari-client.ts`.
+8.  `ari-client.ts` handles the OpenAI events to manage call state (e.g., timers for silence detection) and plays back audio responses on the Asterisk channel.
 9.  The `webapp` displays the live transcript and any function call interactions.
 
 ### Function Calling
@@ -75,14 +74,16 @@ Copy `.env.example` to `.env` in both `websocket-server` and `webapp` directorie
 
 ### `websocket-server/.env`
 
+Key environment variables for the `websocket-server` include:
+
 *   `OPENAI_API_KEY`: Your OpenAI API key.
-*   `ASTERISK_ARI_URL`: Full URL to your Asterisk ARI interface (e.g., `http://localhost:8088` or `http://asterisk_ip:8088`).
+*   `ASTERISK_ARI_URL`: Full URL to your Asterisk ARI interface.
 *   `ASTERISK_ARI_USERNAME`: Username for ARI authentication.
 *   `ASTERISK_ARI_PASSWORD`: Password for ARI authentication.
-*   `ASTERISK_ARI_APP_NAME`: The name of your Stasis application as defined in Asterisk dialplan (e.g., `openai-ari-app`).
-*   `RTP_HOST_IP` (Optional): IP address for the RTP server to bind to. Defaults to `127.0.0.1`. If Asterisk is on a different machine, set this to an IP reachable by Asterisk.
-*   `AUDIO_FORMAT_FOR_EXTERNAL_MEDIA` (Optional): Audio format for Asterisk external media. Defaults to `ulaw`.
-*   `PUBLIC_URL` (Optional): The publicly accessible URL for this `websocket-server`. Used by the `webapp` if it needs to fetch the server's URL.
+*   `ASTERISK_ARI_APP_NAME`: The name of your Stasis application.
+*   `RECOGNITION_ACTIVATION_MODE` (Optional): Defines how speech recognition starts (e.g., `VAD`, `IMMEDIATE`, `FIXED_DELAY`). Defaults to `VAD`.
+
+Many other operational parameters, such as detailed VAD settings, DTMF timeouts, and other timers, are configurable via environment variables which override defaults defined in `websocket-server/config/default.json`. Please refer to `websocket-server/.env.example` for a comprehensive list of available environment variables and the (upcoming) `websocket-server/README.md` for detailed explanations of these advanced configurations.
 
 ### `webapp/.env`
 
