@@ -5,14 +5,15 @@ import path from 'path';
 import { RtpServer } from './rtp-server';
 import * as sessionManager from './sessionManager';
 import {
-  AriClient as AriClientInterface,
+  AriClientInterface, // Corrected: Directly import AriClientInterface
   CallSpecificConfig,
   RuntimeConfig,
   AppRecognitionConfig,
-  DtmfConfig
+  DtmfConfig,
+  LoggerInstance // Assuming LoggerInstance might be needed, or remove if not used directly in this file
 } from './types';
 
-const moduleLogger = {
+const moduleLogger: LoggerInstance = { // Apply LoggerInstance type if appropriate
   info: console.log, error: console.error, warn: console.warn, debug: console.log, silly: console.log,
   isLevelEnabled: (level: string) => level !== 'silly',
   child: (bindings: object) => moduleLogger,
@@ -171,12 +172,13 @@ export class AriClientService implements AriClientInterface {
   private client: Ari.Client | null = null;
   private activeCalls = new Map<string, CallResources>();
   private appOwnedChannelIds = new Set<string>();
-  private logger = moduleLogger;
+  public logger: LoggerInstance = moduleLogger; // Ensure logger is public and matches interface
   private baseConfig: RuntimeConfig;
 
   constructor() {
+    // Ensure the logger used for baseConfig loading is also compliant or correctly passed
     this.baseConfig = getCallSpecificConfig(this.logger.child({ context: 'AriBaseConfigLoad' }));
-    this.logger = this.logger.child({ service: 'AriClientService' });
+    this.logger = this.logger.child({ service: 'AriClientService' }); // This re-assigns, ensure it's intended.
   }
 
   public async connect(): Promise<void> {
@@ -690,13 +692,13 @@ export class AriClientService implements AriClientInterface {
       }
 
       let externalMediaFormat = 'ulaw'; // Default
-      const openAIInputFormat = call.config.openAIRealtimeAPI?.inputAudioFormat?.toLowerCase();
+      const openAIInputFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat?.toLowerCase(); // Corrected: Use callConfig
       if (openAIInputFormat === 'pcm_s16le' || openAIInputFormat === 'linear16' || openAIInputFormat === 'slin16') {
         externalMediaFormat = 'slin16';
       } else if (openAIInputFormat === 'g711_ulaw' || openAIInputFormat === 'mulaw' || openAIInputFormat === 'ulaw') {
         externalMediaFormat = 'ulaw';
       } else {
-        call.callLogger.warn(`${logPrefix} Unknown openAIRealtimeAPI.inputAudioFormat '${openAIInputFormat}', defaulting externalMediaFormat to 'ulaw'.`);
+        callLogger.warn(`${logPrefix} Unknown openAIRealtimeAPI.inputAudioFormat '${openAIInputFormat}', defaulting externalMediaFormat to 'ulaw'.`); // Corrected: Use callLogger
       }
       callLogger.info(`${logPrefix} Attempting to create externalMediaChannel for call ${callId} (app: ${ASTERISK_ARI_APP_NAME}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}, format: '${externalMediaFormat}', encapsulation: 'rtp').`);
       try {
