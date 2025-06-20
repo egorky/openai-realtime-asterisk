@@ -633,10 +633,15 @@ export class AriClientService implements AriClientInterface {
         throw err;
       }
 
-      const externalMediaFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat || DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA;
-      callLogger.info(`${logPrefix} Attempting to create externalMediaChannel for call ${callId} (format: ${externalMediaFormat}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}).`);
+      // const externalMediaFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat || DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA; // No longer needed, format is hardcoded to 'ulaw'
+      callLogger.info(`${logPrefix} Attempting to create externalMediaChannel for call ${callId} (app: ${ASTERISK_ARI_APP_NAME}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}, format: 'ulaw', encapsulation: 'rtp').`);
       try {
-        callResources.externalMediaChannel = await this.client.channels.externalMedia({ app: ASTERISK_ARI_APP_NAME, external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`, format: externalMediaFormat });
+        callResources.externalMediaChannel = await this.client.channels.externalMedia({
+          app: ASTERISK_ARI_APP_NAME,
+          external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
+          format: 'ulaw',
+          encapsulation: 'rtp'
+        });
         callLogger.info(`${logPrefix} Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId}.`);
       } catch (err: any) {
         callLogger.error(`${logPrefix} FAILED to create externalMediaChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
