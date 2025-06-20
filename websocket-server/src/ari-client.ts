@@ -253,7 +253,7 @@ export class AriClientService implements AriClientInterface {
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
 
-    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    // logPrefix is already defined in this scope
     call.callLogger.info(`${logPrefix} Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
 
     if (call.ttsAudioChunks) {
