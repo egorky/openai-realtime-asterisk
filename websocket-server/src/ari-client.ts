@@ -142,6 +142,7 @@ interface CallResources {
   dtmfFinalTimer: NodeJS.Timeout | null; vadMaxWaitAfterPromptTimer: NodeJS.Timeout | null;
   vadActivationDelayTimer: NodeJS.Timeout | null; vadInitialSilenceDelayTimer: NodeJS.Timeout | null;
   playbackFailedHandler?: ((event: any, failedPlayback: Playback) => void) | null;
+  waitingPlaybackFailedHandler?: ((event: any, playback: Playback) => void) | null;
 }
 
 export class AriClientService implements AriClientInterface {
@@ -801,8 +802,6 @@ export class AriClientService implements AriClientInterface {
   private _clearCallTimers(call: CallResources): void { /* ... */ }
   private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {
     const call = this.activeCalls.get(callId);
-    // Note: logPrefix with callerIdNum might be hard here if call.channel is already gone or not set.
-    // callLogger is already bound to callId.
     if (call && call.isCleanupCalled) {
       return;
     }
@@ -814,6 +813,11 @@ export class AriClientService implements AriClientInterface {
       if (call.playbackFailedHandler && this.client) {
         this.client.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
         call.playbackFailedHandler = null;
+      }
+      // Add cleanup for waitingPlaybackFailedHandler
+      if (call.waitingPlaybackFailedHandler && this.client) {
+        this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
+        call.waitingPlaybackFailedHandler = null;
       }
 
       this._clearCallTimers(call);
@@ -884,7 +888,7 @@ export class AriClientService implements AriClientInterface {
       call.userBridge = undefined;
     }
 
-    if (hangupChannel && call?.channel && !call.channel.isStasisEndFired) {
+    if (hangupChannel && call?.channel) {
       try {
         resolvedLogger.info(`${logPrefix} Attempting to hangup main channel ${call.channel.id}.`);
         await call.channel.hangup();
@@ -928,7 +932,6 @@ export class AriClientService implements AriClientInterface {
     const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
     call.callLogger.debug(`${logPrefix} Attempting to play audio chunk of length ${audioPayloadB64.length}.`);
     try {
-      // Ensure only one "waiting" type playback at a time.
       if (call.waitingPlayback) {
         try {
           await call.waitingPlayback.stop();
@@ -939,21 +942,61 @@ export class AriClientService implements AriClientInterface {
       }
 
       call.waitingPlayback = this.client.Playback();
-      const playbackId = call.waitingPlayback.id;
+      const playbackId = call.waitingPlayback.id; // Correctly use call.waitingPlayback.id
+      const currentCallId = call.channel.id; // Capture callId for use in handlers
       call.callLogger.debug(`${logPrefix} Created playback object ${playbackId}.`);
 
-      call.waitingPlayback.once('PlaybackFinished', () => {
-        call.callLogger.debug(`${logPrefix} Playback ${playbackId} finished.`);
-        if(call.waitingPlayback && call.waitingPlayback.id === playbackId) call.waitingPlayback = undefined;
-      });
-      call.waitingPlayback.once('PlaybackFailed', (errEvent, instance) => {
-        call.callLogger.error(`${logPrefix} Playback ${playbackId} failed: ${instance?.state}, ${errEvent?.message}`);
-        if(call.waitingPlayback && call.waitingPlayback.id === playbackId) call.waitingPlayback = undefined;
-      });
+      // Define PlaybackFinished handler
+      const waitingPlaybackFinishedCb = () => {
+        const currentCall = this.activeCalls.get(currentCallId);
+        if (!currentCall) return;
+        const cbLogPrefix = `[${currentCall.channel.id}][Caller: ${currentCall.channel.caller?.number || 'N/A'}]`;
+        currentCall.callLogger.debug(`${cbLogPrefix} Playback ${playbackId} finished.`);
+        if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
+          currentCall.waitingPlayback = undefined;
+        }
+        // Attempt to remove the corresponding PlaybackFailed handler
+        if (this.client && currentCall.waitingPlaybackFailedHandler) {
+          this.client.removeListener('PlaybackFailed' as any, currentCall.waitingPlaybackFailedHandler);
+          currentCall.waitingPlaybackFailedHandler = null;
+        }
+      };
+      if (call.waitingPlayback) { // Ensure 'call.waitingPlayback' is not undefined before calling 'once'
+          call.waitingPlayback.once('PlaybackFinished', waitingPlaybackFinishedCb);
+      }
+
+      // Define PlaybackFailed handler
+      const waitingPlaybackFailedCb = (event: any, failedPlayback: Playback) => {
+        if (this.client && failedPlayback.id === playbackId) {
+          const currentCall = this.activeCalls.get(currentCallId);
+          if (!currentCall) return;
+          const cbLogPrefix = `[${currentCall.channel.id}][Caller: ${currentCall.channel.caller?.number || 'N/A'}]`;
+          currentCall.callLogger.error(`${cbLogPrefix} Playback ${playbackId} failed: ${failedPlayback?.state}, ${event?.message || (event?.playback?.reason || 'Unknown')}`);
+          if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
+            currentCall.waitingPlayback = undefined;
+          }
+          // Remove this failed handler itself
+          this.client.removeListener('PlaybackFailed' as any, waitingPlaybackFailedCb);
+          if (currentCall.waitingPlaybackFailedHandler === waitingPlaybackFailedCb) { // ensure it's the one we stored
+              currentCall.waitingPlaybackFailedHandler = null;
+          }
+        }
+      };
+      call.waitingPlaybackFailedHandler = waitingPlaybackFailedCb;
+      this.client.on('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
+
       await call.channel.play({ media: `sound:base64:${audioPayloadB64}` }, call.waitingPlayback);
       call.callLogger.debug(`${logPrefix} Playback ${playbackId} started.`);
     } catch (err: any) {
       call.callLogger.error(`${logPrefix} Error playing audio: ${err.message || JSON.stringify(err)}`);
+      // Ensure waitingPlayback is cleared on error during play start
+      if (call.waitingPlayback) {
+        if (call.waitingPlaybackFailedHandler && this.client) {
+            this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
+            call.waitingPlaybackFailedHandler = null;
+        }
+        call.waitingPlayback = undefined;
+      }
     }
   }
   public async endCall(channelId: string): Promise<void> {
