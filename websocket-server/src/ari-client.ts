@@ -638,20 +638,20 @@ export class AriClientService implements AriClientInterface {
               }
               // Clean up this specific listener
               if (call && call.playbackFailedHandler) { // Check if handler exists before removing
-                this.client?.removeListener('PlaybackFailed', call.playbackFailedHandler);
+                this.client?.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
                 call.playbackFailedHandler = null; // Clear from resources
               }
             }
           };
 
           callResources.playbackFailedHandler = playbackFailedHandler;
-          this.client.on('PlaybackFailed', callResources.playbackFailedHandler);
+          this.client.on('PlaybackFailed' as any, callResources.playbackFailedHandler);
 
           callResources.mainPlayback.once('PlaybackFinished', (evt: any, instance: Playback) => {
             const currentCall = this.activeCalls.get(callId);
             // Ensure playbackFailedHandler is removed if playback finishes successfully
             if (currentCall && currentCall.playbackFailedHandler && this.client && instance.id === currentCall.mainPlayback?.id) {
-              this.client.removeListener('PlaybackFailed', currentCall.playbackFailedHandler);
+              this.client.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
               currentCall.playbackFailedHandler = null;
             }
             if (currentCall && instance.id === currentCall.mainPlayback?.id) {
@@ -703,7 +703,7 @@ export class AriClientService implements AriClientInterface {
 
       // Remove the specific PlaybackFailed listener if it exists and client is available
       if (call.playbackFailedHandler && this.client) {
-        this.client.removeListener('PlaybackFailed', call.playbackFailedHandler);
+        this.client.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
         call.playbackFailedHandler = null;
       }
 
