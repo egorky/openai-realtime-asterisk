@@ -5,9 +5,11 @@
       "noSpeechBeginTimeoutSeconds": 3,
       "speechCompleteTimeoutSeconds": 5,
       "vadConfig": {
-        "vadSilenceThresholdMs": 200,
-        "vadRecognitionActivationMs": 20
-      }
+        "vadSilenceThresholdMs": 250,
+        "vadRecognitionActivationMs": 40
+      },
+      "initialOpenAIStreamIdleTimeoutSeconds": 10,
+      "bargeInDelaySeconds": 0.5
     },
     "dtmfConfig": {
       "dtmfEnabled": true,
@@ -16,9 +18,7 @@
       "dtmfTerminatorDigit": "#"
     },
     "bargeInConfig": {
-      "bargeInModeEnabled": true,
-      "bargeInDelaySeconds": 0.5,
-      "noSpeechBargeInTimeoutSeconds": 5
+      "bargeInModeEnabled": true
     }
   },
   "openAIRealtimeAPI": {

@@ -30,7 +30,7 @@ This repository implements a phone calling assistant using OpenAI's Realtime API
     *   Forwards audio from Asterisk to OpenAI for transcription.
     *   Plays back audio responses from OpenAI to Asterisk.
     *   Forwards events (transcripts, function calls, errors) to the `webapp` via a WebSocket connection.
-    *   Supports various operational modes for speech recognition activation (e.g., immediate, fixed delay, VAD) and DTMF handling, configured via environment variables and a JSON configuration file.
+    *   Supports detailed operational modes (e.g., Immediate, FixedDelay, VAD with sub-modes 'vadMode'/'afterPrompt', and DTMF handling) to control speech recognition activation and interaction. Refer to `websocket-server/README.md` for specifics on these modes and their associated timer logic.
 
 **Call Flow:**
 
@@ -82,8 +82,9 @@ Key environment variables for the `websocket-server` include:
 *   `ASTERISK_ARI_PASSWORD`: Password for ARI authentication.
 *   `ASTERISK_ARI_APP_NAME`: The name of your Stasis application.
 *   `RECOGNITION_ACTIVATION_MODE` (Optional): Defines how speech recognition starts (e.g., `VAD`, `IMMEDIATE`, `FIXED_DELAY`). Defaults to `VAD`.
+*   `INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS` (Optional): Timeout in seconds for the initial OpenAI stream to become responsive (e.g., receive the first transcript or speech start event). Default: 10s.
 
-Many other operational parameters, such as detailed VAD settings, DTMF timeouts, and other timers, are configurable via environment variables which override defaults defined in `websocket-server/config/default.json`. Please refer to `websocket-server/.env.example` for a comprehensive list of available environment variables and the (upcoming) `websocket-server/README.md` for detailed explanations of these advanced configurations.
+Many other operational parameters, such as detailed VAD settings, DTMF timeouts, and other timers, are configurable via environment variables which override defaults defined in `websocket-server/config/default.json`. Please refer to `websocket-server/.env.example` for a comprehensive list of available environment variables and `websocket-server/README.md` for detailed explanations of these advanced configurations.
 
 ### `webapp/.env`
 

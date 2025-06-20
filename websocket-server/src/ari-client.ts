@@ -90,6 +90,7 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   arc.vadConfig = arc.vadConfig || { vadSilenceThresholdMs: 250, vadRecognitionActivationMs: 40 };
   arc.vadConfig.vadSilenceThresholdMs = getVarAsInt(logger, channel, 'VAD_SILENCE_THRESHOLD_MS', arc.vadConfig.vadSilenceThresholdMs) ?? 250;
   arc.vadConfig.vadRecognitionActivationMs = getVarAsInt(logger, channel, 'VAD_TALK_THRESHOLD_MS', arc.vadConfig.vadRecognitionActivationMs) ?? 40;
+  arc.initialOpenAIStreamIdleTimeoutSeconds = getVarAsInt(logger, channel, 'INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS', arc.initialOpenAIStreamIdleTimeoutSeconds) ?? 10;
   const dtmfConf = callConfig.appConfig.dtmfConfig = callConfig.appConfig.dtmfConfig || {} as DtmfConfig;
   dtmfConf.dtmfEnabled = getVarAsBoolean(logger, channel, 'DTMF_ENABLED', dtmfConf.dtmfEnabled) ?? true;
   dtmfConf.dtmfInterdigitTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_INTERDIGIT_TIMEOUT_SECONDS', dtmfConf.dtmfInterdigitTimeoutSeconds) ?? 2;
@@ -290,6 +291,12 @@ export class AriClientService implements AriClientInterface {
     if(call.vadActivationDelayTimer) { clearTimeout(call.vadActivationDelayTimer); call.vadActivationDelayTimer = null; }
     if(call.vadInitialSilenceDelayTimer) { clearTimeout(call.vadInitialSilenceDelayTimer); call.vadInitialSilenceDelayTimer = null; }
 
+    if (call.maxRecognitionDurationTimer) {
+      clearTimeout(call.maxRecognitionDurationTimer);
+      call.maxRecognitionDurationTimer = null;
+      call.callLogger.info('DTMF mode: Cleared maxRecognitionDurationTimer.');
+    }
+
     call.collectedDtmfDigits += event.digit;
     call.callLogger.info(`Collected DTMF: ${call.collectedDtmfDigits}`);
 
@@ -353,7 +360,7 @@ export class AriClientService implements AriClientInterface {
         }, noSpeechTimeout * 1000);
         call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
       }
-      const streamIdleTimeout = 10;
+      const streamIdleTimeout = call.config.appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds ?? 10;
       call.initialOpenAIStreamIdleTimer = setTimeout(() => {
          if (call.isCleanupCalled || call.speechHasBegun) return;
          call.callLogger.warn(`OpenAI stream idle for ${streamIdleTimeout}s. Stopping session & call.`);
