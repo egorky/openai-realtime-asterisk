@@ -1,14 +1,15 @@
 // Basic interface for the ARI client, to be expanded as needed
-export interface AriClient {
-  playbackAudio: (channelId: string, audioPayload: string) => void;
-  endCall: (channelId: string) => void;
-  // Add other methods like startExternalMedia, answerCall etc. as they are implemented
-}
+// This will be replaced by the more detailed AriClientInterface below.
+// export interface AriClient {
+//   playbackAudio: (channelId: string, audioPayload: string) => void;
+//   endCall: (channelId: string) => void;
+//   // Add other methods like startExternalMedia, answerCall etc. as they are implemented
+// }
 
 // Information related to an active Asterisk call
 export interface AriCallInfo {
   channelId: string;
-  ariClient: AriClient; // Using the AriClient interface
+  ariClient: AriClientInterface; // Using the new AriClientInterface
 }
 
 export interface FunctionCallItem {
@@ -38,7 +39,6 @@ export interface FunctionHandler {
 export interface VadConfig {
   vadSilenceThresholdMs: number; // For TALK_DETECT silence duration
   vadRecognitionActivationMs: number; // For TALK_DETECT talk duration (previously vadTalkThresholdMs)
-  // vadMode: 'vadMode' | 'afterPrompt'; // Specific VAD activation mode - This seems to be 'vadRecogActivation' in JS example
 }
 
 export interface AppRecognitionConfig {
@@ -51,7 +51,6 @@ export interface AppRecognitionConfig {
   greetingAudioPath?: string;
   bargeInDelaySeconds?: number; // For FIXED_DELAY mode, moved here for consistency from direct usage
 
-  // VAD specific configurations
   vadRecogActivation?: 'vadMode' | 'afterPrompt'; // How VAD initiates recognition stream
   vadInitialSilenceDelaySeconds?: number; // Delay before VAD becomes active (for vadMode)
   vadActivationDelaySeconds?: number; // Additional delay after prompt before VAD becomes active (for vadMode)
@@ -79,35 +78,64 @@ export interface AppConfig {
 }
 
 export interface OpenAIRealtimeAPIConfig {
-  model?: string; // e.g., "gpt-4o-realtime-preview-2024-12-17"
-  language?: string; // e.g., "en-US"
-  inputAudioFormat?: string; // e.g., "g711_ulaw", "pcm_s16le"
+  model?: string;
+  sttModel?: string; // e.g., "whisper-1"
+  ttsModel?: string; // e.g., "tts-1"
+  language?: string; // e.g., "en" or "en-US"
+  inputAudioFormat?: string; // e.g., "pcm_s16le", "g711_ulaw"
   inputAudioSampleRate?: number; // e.g., 8000, 16000
-  outputAudioFormat?: string; // e.g., "g711_ulaw", "pcm_s16le"
-  outputAudioSampleRate?: number; // e.g., 8000, 16000
+  outputAudioFormat?: string; // e.g., "mp3", "pcm_s16le"
+  outputAudioSampleRate?: number; // e.g., 24000, 16000
+  ttsVoice?: string; // e.g., "alloy"
+  transcriptionIntentOnly?: boolean; // Custom flag if STT is only for intent not full conversation
+
   // Deprecated fields, kept for potential reference or if used by older configs:
   audioFormat?: string;
   encoding?: string;
   sampleRate?: number;
   // For any other custom session parameters for OpenAI
   saved_config?: Record<string, any>;
-  apiKey?: string; // To store the OpenAI API key
+  apiKey?: string; // This was present before, sessionManager now sources from env.
 }
 
 export interface LoggingConfig {
   level: "debug" | "info" | "warn" | "error"; // Common log levels
 }
 
-// This will be the structure of the config loaded from default.json and environment variables
 export interface RuntimeConfig {
   appConfig: AppConfig;
   openAIRealtimeAPI: OpenAIRealtimeAPIConfig;
   logging: LoggingConfig;
-  // Future: Add other top-level config sections here
 }
 
-// For call-specific config, which might have overrides from channel variables
 export interface CallSpecificConfig extends RuntimeConfig {
-  // Potentially add call-specific overrides or additional fields if needed in the future
-  // For now, it's structurally the same as RuntimeConfig but represents the config *for a call*.
 }
+
+// Definition for a generic logger instance
+export interface LoggerInstance {
+  info: (message: string, ...args: any[]) => void;
+  error: (message: string, ...args: any[]) => void;
+  warn: (message: string, ...args: any[]) => void;
+  debug: (message: string, ...args: any[]) => void;
+  child: (bindings: object) => LoggerInstance; // For creating contextual loggers
+}
+
+// Interface for the AriClientService that sessionManager will interact with
+export interface AriClientInterface {
+  logger: LoggerInstance; // Expose logger for sessionManager if needed
+  _onOpenAISpeechStarted: (callId: string) => void;
+  _onOpenAIInterimResult: (callId: string, transcript: string) => void;
+  _onOpenAIFinalResult: (callId: string, transcript: string) => void;
+  _onOpenAIError: (callId: string, error: any) => void;
+  _onOpenAISessionEnded: (callId: string, reason: string) => void;
+  playbackAudio: (channelId: string, audioPayloadB64: string) => Promise<void>; // Added based on _playTTSToCaller usage
+  // Potentially other methods like endCall, if sessionManager needs to trigger them directly
+}
+
+// Renaming the old AriClient to avoid conflict if it's still used elsewhere,
+// though it's better to fully transition to AriClientInterface.
+export { AriClient as DeprecatedAriClient } from './types'; // This line might cause issues if types.ts is this file.
+                                                          // Assuming the original `export interface AriClient` is being replaced.
+                                                          // If `AriClient as AriClientInterface` was in ari-client.ts, that was an alias.
+                                                          // The goal here is to DEFINE AriClientInterface.
+                                                          // The old AriClient interface is now commented out at the top.

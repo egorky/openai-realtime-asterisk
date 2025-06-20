@@ -143,14 +143,27 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     }
   });
 
-  ws.on('message', (data: WebSocket.Data) => {
+  ws.on('message', (data: RawData) => { // Changed WebSocket.Data to RawData
+    let messageContent: string;
+    if (Buffer.isBuffer(data)) {
+      messageContent = data.toString('utf8');
+    } else if (Array.isArray(data)) { // For Buffer[]
+      messageContent = Buffer.concat(data).toString('utf8');
+    } else if (data instanceof ArrayBuffer) {
+        messageContent = Buffer.from(data).toString('utf8');
+    } else {
+      // Should not happen with standard ws usage if messages are text/JSON
+      // but as a fallback if it's already a string (e.g. from a specific ws config)
+      messageContent = data.toString();
+    }
+
     try {
-      const messageString = data.toString();
+      // const messageString = data.toString(); // Original line, now handled by messageContent
       // Assuming OpenAI STT sends JSON messages. This needs verification.
       // The exact structure of OpenAI's realtime STT messages needs to be handled here.
       // For now, let's assume a hypothetical structure and log it.
-      console.debug(`[${callId}] Raw message from OpenAI STT: ${messageString}`);
-      const response = JSON.parse(messageString); // This is a guess
+      console.debug(`[${callId}] Raw message from OpenAI STT: ${messageContent}`);
+      const response = JSON.parse(messageContent); // Use messageContent
 
       // Hypothetical: Adapt OpenAI response to the structure ari-client expects
       // This will need to be adjusted based on actual OpenAI STT API
