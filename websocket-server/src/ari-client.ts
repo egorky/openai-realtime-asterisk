@@ -530,6 +530,7 @@ export class AriClientService implements AriClientInterface {
     const callId = incomingChannel.id;
     const callLogger = this.logger.child({ callId, channelName: incomingChannel.name });
     callLogger.info(`StasisStart: New call entering application '${ASTERISK_ARI_APP_NAME}'.`);
+    callLogger.info(`New call onStasisStart. Channel ID: ${incomingChannel.id}, Name: ${incomingChannel.name}, Caller: ${JSON.stringify(incomingChannel.caller)}, Dialplan: ${JSON.stringify(incomingChannel.dialplan)}`);
 
     if (this.appOwnedChannelIds.has(callId)) {
       callLogger.info(`Channel ${callId} is app-owned. Ignoring StasisStart.`); return;
@@ -564,15 +565,20 @@ export class AriClientService implements AriClientInterface {
       if (!this.client) { throw new Error("ARI client not connected."); }
 
       callResources.userBridge = await this.client.bridges.create({ type: 'mixing', name: `user_b_${callId}` });
+      callLogger.info(`User bridge ${callResources.userBridge.id} created.`);
       await callResources.userBridge.addChannel({ channel: callId });
       callResources.snoopBridge = await this.client.bridges.create({ type: 'mixing', name: `snoop_b_${callId}` });
+      callLogger.info(`Snoop bridge ${callResources.snoopBridge.id} created.`);
       callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'}));
       const rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
+      callLogger.info(`RTP Server started, listening on ${rtpServerAddress.host}:${rtpServerAddress.port}`);
       const externalMediaFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat || DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA;
       callResources.externalMediaChannel = await this.client.channels.externalMedia({ app: ASTERISK_ARI_APP_NAME, external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`, format: externalMediaFormat });
+      callLogger.info(`External Media Channel ${callResources.externalMediaChannel.id} created for ${rtpServerAddress.host}:${rtpServerAddress.port}, format: ${externalMediaFormat}`);
       this.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
       const snoopDirection = (callConfig.appConfig.appRecognitionConfig.recognitionActivationMode === 'VAD' ? 'in' : 'both') as ('in' | 'out' | 'both');
       callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
+      callLogger.info(`Snoop Channel ${callResources.snoopChannel.id} created on channel ${callId} with direction '${snoopDirection}'.`);
       this.appOwnedChannelIds.add(callResources.snoopChannel.id);
       await callResources.snoopBridge.addChannel({ channel: callResources.externalMediaChannel.id });
       await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });

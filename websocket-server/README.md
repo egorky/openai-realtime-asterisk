@@ -101,6 +101,7 @@ Refer to `websocket-server/.env.example` for a comprehensive list. Environment v
 
 **General & Server:**
 *   `PORT`: Port for the WebSocket server. Default: `8081`.
+*   `WEBSOCKET_SERVER_HOST_IP`: The IP address the WebSocket server listens on. Path: N/A (direct use in `server.ts`). Default: `0.0.0.0`. (Purpose: `0.0.0.0` allows access from any network interface).
 *   `PUBLIC_URL`: Publicly accessible URL for this server.
 *   `LOG_LEVEL`: Logging level. Path: `logging.level`. Default: `info`.
 *   `CONFIG_FILE_PATH`: Path to the JSON configuration file. Default: `config/default.json`.
@@ -148,6 +149,8 @@ Refer to `websocket-server/.env.example` for a comprehensive list. Environment v
 *   `DTMF_TERMINATOR_DIGIT`: DTMF terminator. Path: `appConfig.dtmfConfig.dtmfTerminatorDigit`. Default: `#`.
 *   `DTMF_FINAL_TIMEOUT_SECONDS`: Final timeout for DTMF input. Path: `appConfig.dtmfConfig.dtmfFinalTimeoutSeconds`. Default: `3`.
 
+## Troubleshooting Notes
+**Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `info` as needed and inspect the console output of the `websocket-server`.
 
 ## Operational Modes
 
