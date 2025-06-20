@@ -117,7 +117,9 @@ export interface LoggerInstance {
   error: (message: string, ...args: any[]) => void;
   warn: (message: string, ...args: any[]) => void;
   debug: (message: string, ...args: any[]) => void;
-  child: (bindings: object) => LoggerInstance; // For creating contextual loggers
+  child: (bindings: object) => LoggerInstance;
+  silly?: (message: string, ...args: any[]) => void; // Added
+  isLevelEnabled?: (level: string) => boolean;    // Added
 }
 
 // Interface for the AriClientService that sessionManager will interact with
@@ -134,8 +136,5 @@ export interface AriClientInterface {
 
 // Renaming the old AriClient to avoid conflict if it's still used elsewhere,
 // though it's better to fully transition to AriClientInterface.
-export { AriClient as DeprecatedAriClient } from './types'; // This line might cause issues if types.ts is this file.
-                                                          // Assuming the original `export interface AriClient` is being replaced.
-                                                          // If `AriClient as AriClientInterface` was in ari-client.ts, that was an alias.
-                                                          // The goal here is to DEFINE AriClientInterface.
-                                                          // The old AriClient interface is now commented out at the top.
+// Removing problematic self-referential export:
+// export { AriClient as DeprecatedAriClient } from './types';
