@@ -45,6 +45,7 @@ export interface AppRecognitionConfig {
   recognitionActivationMode: "VAD" | "MANUAL" | "IMMEDIATE" | "FIXED_DELAY"; // Expanded modes
   noSpeechBeginTimeoutSeconds: number;
   speechCompleteTimeoutSeconds: number;
+  initialOpenAIStreamIdleTimeoutSeconds?: number;
   vadConfig: VadConfig;
   maxRecognitionDurationSeconds?: number;
   greetingAudioPath?: string;

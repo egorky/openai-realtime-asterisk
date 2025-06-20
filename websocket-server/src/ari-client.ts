@@ -141,6 +141,8 @@ interface CallResources {
   maxRecognitionDurationTimer: NodeJS.Timeout | null; dtmfInterDigitTimer: NodeJS.Timeout | null;
   dtmfFinalTimer: NodeJS.Timeout | null; vadMaxWaitAfterPromptTimer: NodeJS.Timeout | null;
   vadActivationDelayTimer: NodeJS.Timeout | null; vadInitialSilenceDelayTimer: NodeJS.Timeout | null;
+  playbackFailedHandler?: ((event: any, failedPlayback: Playback) => void) | null;
+  waitingPlaybackFailedHandler?: ((event: any, playback: Playback) => void) | null;
 }
 
 export class AriClientService implements AriClientInterface {
@@ -184,7 +186,8 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAISpeechStarted(callId: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.info('OpenAI speech recognition started (or first transcript received).');
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} OpenAI speech recognition started (or first transcript received).`);
     if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
     if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
     call.speechHasBegun = true;
@@ -193,23 +196,24 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAIInterimResult(callId: string, transcript: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.debug(`OpenAI interim transcript: "${transcript}"`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.debug(`${logPrefix} OpenAI interim transcript: "${transcript}"`);
     if (!call.speechHasBegun) {
         if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
         if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
         call.speechHasBegun = true;
-        call.callLogger.info('Speech implicitly started with first interim transcript.');
+        call.callLogger.info(`${logPrefix} Speech implicitly started with first interim transcript.`);
     }
     if (call.mainPlayback && !call.promptPlaybackStoppedForInterim && call.config.appConfig.bargeInConfig.bargeInModeEnabled) {
-      call.callLogger.info('Stopping main prompt due to interim transcript (barge-in).');
-      this._stopAllPlaybacks(call).catch(e => call.callLogger.error("Error stopping playback on interim: " + (e instanceof Error ? e.message : String(e))));
+      call.callLogger.info(`${logPrefix} Stopping main prompt due to interim transcript (barge-in).`);
+      this._stopAllPlaybacks(call).catch(e => call.callLogger.error(`${logPrefix} Error stopping playback on interim: ` + (e instanceof Error ? e.message : String(e))));
       call.promptPlaybackStoppedForInterim = true;
     }
     if (call.speechEndSilenceTimer) clearTimeout(call.speechEndSilenceTimer);
     const silenceTimeout = (call.config.appConfig.appRecognitionConfig.speechCompleteTimeoutSeconds ?? 5) * 1000;
     call.speechEndSilenceTimer = setTimeout(() => {
       if (call.isCleanupCalled || !call.openAIStreamingActive) return;
-      call.callLogger.warn(`Silence detected for ${silenceTimeout}ms after interim transcript. Stopping OpenAI session for this turn.`);
+      call.callLogger.warn(`${logPrefix} Silence detected for ${silenceTimeout}ms after interim transcript. Stopping OpenAI session for this turn.`);
       sessionManager.stopOpenAISession(callId, 'interim_result_silence_timeout');
     }, silenceTimeout);
   }
@@ -217,7 +221,8 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAIFinalResult(callId: string, transcript: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.info(`OpenAI final transcript received: "${transcript}"`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} OpenAI final transcript received: "${transcript}"`);
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
     this._fullCleanup(callId, false, "FINAL_TRANSCRIPT_RECEIVED");
@@ -226,7 +231,8 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAIError(callId: string, error: any): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.error('OpenAI stream error reported by sessionManager:', error);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.error(`${logPrefix} OpenAI stream error reported by sessionManager:`, error);
     call.openAIStreamError = error;
     this._fullCleanup(callId, true, "OPENAI_STREAM_ERROR");
   }
@@ -234,23 +240,25 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAISessionEnded(callId: string, reason: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.info(`OpenAI session ended event from sessionManager. Reason: ${reason}`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} OpenAI session ended event from sessionManager. Reason: ${reason}`);
     call.openAIStreamingActive = false;
     if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive) {
-        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout.`);
+        call.callLogger.warn(`${logPrefix} OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout.`);
     } else {
-        call.callLogger.info(`OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result, DTMF, error, or explicit stop).`);
+        call.callLogger.info(`${logPrefix} OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result, DTMF, error, or explicit stop).`);
     }
   }
 
   private async _stopAllPlaybacks(call: CallResources): Promise<void> {
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
     const playbacksToStop = [call.mainPlayback, call.waitingPlayback, call.postRecognitionWaitingPlayback];
     for (const playback of playbacksToStop) {
       if (playback) {
         try {
-          call.callLogger.debug(`Stopping playback ${playback.id}.`);
+          call.callLogger.debug(`${logPrefix} Stopping playback ${playback.id}.`);
           await playback.stop();
-        } catch (e:any) { call.callLogger.warn(`Error stopping playback ${playback.id}: ${(e instanceof Error ? e.message : String(e))}`); }
+        } catch (e:any) { call.callLogger.warn(`${logPrefix} Error stopping playback ${playback.id}: ${(e instanceof Error ? e.message : String(e))}`); }
       }
     }
     call.mainPlayback = undefined;
@@ -262,22 +270,23 @@ export class AriClientService implements AriClientInterface {
     const call = this.activeCalls.get(channel.id);
     if (!call || call.isCleanupCalled) { return; }
     if (call.channel.id !== channel.id) { return; }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
 
-    call.callLogger.info(`DTMF digit '${event.digit}' received.`);
+    call.callLogger.info(`${logPrefix} DTMF digit '${event.digit}' received.`);
     if (!call.config.appConfig.dtmfConfig.dtmfEnabled) {
-      call.callLogger.info('DTMF disabled by config. Ignoring.');
+      call.callLogger.info(`${logPrefix} DTMF disabled by config. Ignoring.`);
       return;
     }
-    call.callLogger.info('Entering DTMF mode: interrupting speech/VAD activities.');
+    call.callLogger.info(`${logPrefix} Entering DTMF mode: interrupting speech/VAD activities.`);
     call.dtmfModeActive = true;
     call.speechRecognitionDisabledDueToDtmf = true;
     call.isVADBufferingActive = false;
     call.vadAudioBuffer = [];
     call.pendingVADBufferFlush = false;
-    await this._stopAllPlaybacks(call);
+    await this._stopAllPlaybacks(call); // _stopAllPlaybacks will use its own logPrefix
 
     if (call.openAIStreamingActive) {
-      call.callLogger.info('DTMF interrupting active OpenAI stream.');
+      call.callLogger.info(`${logPrefix} DTMF interrupting active OpenAI stream.`);
       call.dtmfInterruptedSpeech = true;
       sessionManager.stopOpenAISession(call.channel.id, 'dtmf_interrupt');
       call.openAIStreamingActive = false;
@@ -291,36 +300,36 @@ export class AriClientService implements AriClientInterface {
     if(call.vadInitialSilenceDelayTimer) { clearTimeout(call.vadInitialSilenceDelayTimer); call.vadInitialSilenceDelayTimer = null; }
 
     call.collectedDtmfDigits += event.digit;
-    call.callLogger.info(`Collected DTMF: ${call.collectedDtmfDigits}`);
+    call.callLogger.info(`${logPrefix} Collected DTMF: ${call.collectedDtmfDigits}`);
 
     if (call.dtmfInterDigitTimer) clearTimeout(call.dtmfInterDigitTimer);
     const interDigitTimeout = (call.config.appConfig.dtmfConfig.dtmfInterdigitTimeoutSeconds ?? 2) * 1000;
-    call.dtmfInterDigitTimer = setTimeout(() => { call.callLogger.info('DTMF inter-digit timer expired.'); }, interDigitTimeout);
+    call.dtmfInterDigitTimer = setTimeout(() => { call.callLogger.info(`${logPrefix} DTMF inter-digit timer expired.`); }, interDigitTimeout);
 
     if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
     const finalTimeout = (call.config.appConfig.dtmfConfig.dtmfFinalTimeoutSeconds ?? 3) * 1000;
     call.dtmfFinalTimer = setTimeout(async () => {
       if (call.isCleanupCalled) return;
-      call.callLogger.info(`DTMF final timeout. Digits: ${call.collectedDtmfDigits}`);
+      call.callLogger.info(`${logPrefix} DTMF final timeout. Digits: ${call.collectedDtmfDigits}`);
       if (call.dtmfModeActive && call.collectedDtmfDigits.length > 0) {
         try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
-        catch (e: any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
+        catch (e: any) { call.callLogger.error(`${logPrefix} Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
         this._fullCleanup(call.channel.id, false, "DTMF_FINAL_TIMEOUT");
       } else { this._fullCleanup(call.channel.id, false, "DTMF_FINAL_TIMEOUT_NO_DIGITS"); }
     }, finalTimeout);
 
     const dtmfConfig = call.config.appConfig.dtmfConfig;
     if (event.digit === dtmfConfig.dtmfTerminatorDigit) {
-      call.callLogger.info('DTMF terminator digit received.');
+      call.callLogger.info(`${logPrefix} DTMF terminator digit received.`);
       if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
       try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
-      catch (e:any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
+      catch (e:any) { call.callLogger.error(`${logPrefix} Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
       this._fullCleanup(call.channel.id, false, "DTMF_TERMINATOR_RECEIVED");
     } else if (call.collectedDtmfDigits.length >= (dtmfConfig.dtmfMaxDigits ?? 16)) {
-      call.callLogger.info('Max DTMF digits reached.');
+      call.callLogger.info(`${logPrefix} Max DTMF digits reached.`);
       if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
       try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
-      catch (e:any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
+      catch (e:any) { call.callLogger.error(`${logPrefix} Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
       this._fullCleanup(call.channel.id, false, "DTMF_MAX_DIGITS_REACHED");
     }
   }
@@ -328,17 +337,21 @@ export class AriClientService implements AriClientInterface {
   private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled || call.openAIStreamingActive) {
-      if(call?.openAIStreamingActive) call.callLogger.debug(`Activate called but stream already active. Reason: ${reason}`);
+      if(call?.openAIStreamingActive) {
+        const logPrefixExisting = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+        call.callLogger.debug(`${logPrefixExisting} Activate called but stream already active. Reason: ${reason}`);
+      }
       return;
     }
-    call.callLogger.info(`Activating OpenAI streaming. Reason: ${reason}`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} Activating OpenAI streaming. Reason: ${reason}`);
     call.openAIStreamingActive = true;
 
     try {
       await sessionManager.startOpenAISession(callId, this, call.config);
-      call.callLogger.info(`Session manager initiated OpenAI session for ${callId}.`);
+      call.callLogger.info(`${logPrefix} Session manager initiated OpenAI session for ${callId}.`);
       if (call.pendingVADBufferFlush && call.vadAudioBuffer.length > 0) {
-        call.callLogger.info(`Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
+        call.callLogger.info(`${logPrefix} Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
         call.isVADBufferingActive = false;
         for (const audioPayload of call.vadAudioBuffer) { sessionManager.sendAudioToOpenAI(callId, audioPayload); }
         call.vadAudioBuffer = []; call.pendingVADBufferFlush = false;
@@ -347,24 +360,24 @@ export class AriClientService implements AriClientInterface {
       if (noSpeechTimeout > 0 && !call.speechHasBegun) {
         call.noSpeechBeginTimer = setTimeout(() => {
           if (call.isCleanupCalled || call.speechHasBegun) return;
-          call.callLogger.warn(`No speech from OpenAI in ${noSpeechTimeout}s. Stopping session & call.`);
+          call.callLogger.warn(`${logPrefix} No speech from OpenAI in ${noSpeechTimeout}s. Stopping session & call.`);
           sessionManager.stopOpenAISession(callId, "no_speech_timeout_in_ari");
           this._fullCleanup(callId, true, "NO_SPEECH_BEGIN_TIMEOUT");
         }, noSpeechTimeout * 1000);
-        call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
+        call.callLogger.info(`${logPrefix} NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
       }
-      const streamIdleTimeout = 10;
+      const streamIdleTimeout = call.config.appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds ?? 10; // Added in previous step
       call.initialOpenAIStreamIdleTimer = setTimeout(() => {
          if (call.isCleanupCalled || call.speechHasBegun) return;
-         call.callLogger.warn(`OpenAI stream idle for ${streamIdleTimeout}s. Stopping session & call.`);
+         call.callLogger.warn(`${logPrefix} OpenAI stream idle for ${streamIdleTimeout}s. Stopping session & call.`);
          sessionManager.stopOpenAISession(callId, "initial_stream_idle_timeout_in_ari");
          this._fullCleanup(callId, true, "OPENAI_STREAM_IDLE_TIMEOUT");
       }, streamIdleTimeout * 1000);
-      call.callLogger.info(`InitialOpenAIStreamIdleTimer started (${streamIdleTimeout}s).`);
+      call.callLogger.info(`${logPrefix} InitialOpenAIStreamIdleTimer started (${streamIdleTimeout}s).`);
     } catch (error: any) {
-        call.callLogger.error(`Error during _activateOpenAIStreaming for ${callId}: ${(error instanceof Error ? error.message : String(error))}`);
+        call.callLogger.error(`${logPrefix} Error during _activateOpenAIStreaming for ${callId}: ${(error instanceof Error ? error.message : String(error))}`);
         call.openAIStreamingActive = false;
-        this._onOpenAIError(callId, error);
+        this._onOpenAIError(callId, error); // _onOpenAIError will use its own logPrefix
     }
   }
 
@@ -373,23 +386,24 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD' || call.config.appConfig.appRecognitionConfig.vadRecogActivation !== 'vadMode') {
       return;
     }
-    call.callLogger.debug(`VAD delays completed. InitialSilence: ${call.vadInitialSilenceDelayCompleted}, ActivationDelay: ${call.vadActivationDelayCompleted}`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.debug(`${logPrefix} VAD delays completed. InitialSilence: ${call.vadInitialSilenceDelayCompleted}, ActivationDelay: ${call.vadActivationDelayCompleted}`);
 
     if (call.vadInitialSilenceDelayCompleted && call.vadActivationDelayCompleted) {
-      call.callLogger.info(`VAD vadMode: All initial delays completed.`);
+      call.callLogger.info(`${logPrefix} VAD vadMode: All initial delays completed.`);
       if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
 
       if (call.vadSpeechActiveDuringDelay) {
-        call.callLogger.info('VAD vadMode: Speech detected during delays. Activating OpenAI stream.');
-        this._activateOpenAIStreaming(callId, "vad_speech_during_delay_window");
+        call.callLogger.info(`${logPrefix} VAD vadMode: Speech detected during delays. Activating OpenAI stream.`);
+        this._activateOpenAIStreaming(callId, "vad_speech_during_delay_window"); // _activateOpenAIStreaming will use its own logPrefix
         call.pendingVADBufferFlush = true;
         if(call.channel) {
             call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
-                .catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`));
+                .catch(e => call.callLogger.warn(`${logPrefix} VAD: Error removing TALK_DETECT: ${e.message}`));
         }
       } else {
-        call.callLogger.info('VAD vadMode: Delays completed, no prior speech. Listening via TALK_DETECT.');
-        this._handlePostPromptVADLogic(callId);
+        call.callLogger.info(`${logPrefix} VAD vadMode: Delays completed, no prior speech. Listening via TALK_DETECT.`);
+        this._handlePostPromptVADLogic(callId); // _handlePostPromptVADLogic will use its own logPrefix
       }
     }
   }
@@ -399,39 +413,40 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
       return;
     }
-    call.callLogger.info(`VAD: Handling post-prompt/no-prompt logic for mode '${call.config.appConfig.appRecognitionConfig.vadRecogActivation}'.`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} VAD: Handling post-prompt/no-prompt logic for mode '${call.config.appConfig.appRecognitionConfig.vadRecogActivation}'.`);
 
     const vadRecogActivation = call.config.appConfig.appRecognitionConfig.vadRecogActivation;
 
     if (vadRecogActivation === 'afterPrompt') {
       if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
       if (call.vadSpeechDetected) {
-        call.callLogger.info('VAD (afterPrompt): Speech previously detected. Activating OpenAI stream.');
-        this._activateOpenAIStreaming(callId, "vad_afterPrompt_speech_during_prompt");
+        call.callLogger.info(`${logPrefix} VAD (afterPrompt): Speech previously detected. Activating OpenAI stream.`);
+        this._activateOpenAIStreaming(callId, "vad_afterPrompt_speech_during_prompt"); // _activateOpenAIStreaming will use its own logPrefix
         call.pendingVADBufferFlush = true;
         if(call.channel) {
             call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
-                .catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`));
+                .catch(e => call.callLogger.warn(`${logPrefix} VAD: Error removing TALK_DETECT: ${e.message}`));
         }
       } else {
-        call.callLogger.info('VAD (afterPrompt): No speech during prompt. Starting max wait timer.');
+        call.callLogger.info(`${logPrefix} VAD (afterPrompt): No speech during prompt. Starting max wait timer.`);
         const maxWait = call.config.appConfig.appRecognitionConfig.vadMaxWaitAfterPromptSeconds ?? 5;
         if (maxWait > 0) {
           if(call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
           call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
             if (call.isCleanupCalled || call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) return;
-            call.callLogger.warn(`VAD (afterPrompt): Max wait ${maxWait}s reached. Ending call.`);
-            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`)); }
+            call.callLogger.warn(`${logPrefix} VAD (afterPrompt): Max wait ${maxWait}s reached. Ending call.`);
+            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`${logPrefix} VAD: Error removing TALK_DETECT: ${e.message}`)); }
             this._fullCleanup(callId, true, "VAD_MAX_WAIT_TIMEOUT");
           }, maxWait * 1000);
         } else {
-            call.callLogger.info('VAD (afterPrompt): Max wait is 0 and no speech during prompt. Ending call.');
-            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`)); }
+            call.callLogger.info(`${logPrefix} VAD (afterPrompt): Max wait is 0 and no speech during prompt. Ending call.`);
+            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`${logPrefix} VAD: Error removing TALK_DETECT: ${e.message}`)); }
             this._fullCleanup(callId, true, "VAD_MAX_WAIT_0_NO_SPEECH");
         }
       }
     } else if (vadRecogActivation === 'vadMode') {
-      call.callLogger.info("VAD vadMode: Delays completed, no speech during delay. Actively listening via TALK_DETECT.");
+      call.callLogger.info(`${logPrefix} VAD vadMode: Delays completed, no speech during delay. Actively listening via TALK_DETECT.`);
     }
   }
 
@@ -440,48 +455,49 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.channel.id !== channel.id || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
       return;
     }
-    call.callLogger.info(`TALK_DETECT: Speech started on channel ${channel.id}.`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} TALK_DETECT: Speech started on channel ${channel.id}.`);
 
     if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
 
     const vadRecogActivation = call.config.appConfig.appRecognitionConfig.vadRecogActivation;
     if (vadRecogActivation === 'vadMode') {
       if (!call.vadInitialSilenceDelayCompleted || !call.vadActivationDelayCompleted) {
-        call.callLogger.debug('VAD (vadMode): Speech detected during initial VAD delays.');
+        call.callLogger.debug(`${logPrefix} VAD (vadMode): Speech detected during initial VAD delays.`);
         call.vadSpeechActiveDuringDelay = true;
         call.vadSpeechDetected = true;
         return;
       }
     } else if (vadRecogActivation === 'afterPrompt') {
       if (call.mainPlayback) {
-        call.callLogger.debug('VAD (afterPrompt): Speech detected during main prompt.');
+        call.callLogger.debug(`${logPrefix} VAD (afterPrompt): Speech detected during main prompt.`);
         call.vadSpeechDetected = true;
         return;
       }
     }
 
-    call.callLogger.info('VAD: Speech detected, proceeding to activate stream.');
+    call.callLogger.info(`${logPrefix} VAD: Speech detected, proceeding to activate stream.`);
     call.vadSpeechDetected = true;
     call.vadRecognitionTriggeredAfterInitialDelay = true;
 
     if (call.mainPlayback && !call.promptPlaybackStoppedForInterim) {
       try {
-        call.callLogger.info('VAD: Stopping main prompt due to speech.');
+        call.callLogger.info(`${logPrefix} VAD: Stopping main prompt due to speech.`);
         await call.mainPlayback.stop();
         call.promptPlaybackStoppedForInterim = true;
-      } catch (e: any) { call.callLogger.warn(`VAD: Error stopping main playback: ${e.message}`); }
+      } catch (e: any) { call.callLogger.warn(`${logPrefix} VAD: Error stopping main playback: ${e.message}`); }
     }
 
     if(call.bargeInActivationTimer) { clearTimeout(call.bargeInActivationTimer); call.bargeInActivationTimer = null; }
     if(call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
 
-    this._activateOpenAIStreaming(call.channel.id, "vad_speech_detected_direct");
+    this._activateOpenAIStreaming(call.channel.id, "vad_speech_detected_direct"); // _activateOpenAIStreaming will use its own logPrefix
     call.pendingVADBufferFlush = true;
 
     try {
-      call.callLogger.info('VAD: Removing TALK_DETECT from channel after confirmed speech.');
+      call.callLogger.info(`${logPrefix} VAD: Removing TALK_DETECT from channel after confirmed speech.`);
       await channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' });
-    } catch (e: any) { call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`); }
+    } catch (e: any) { call.callLogger.warn(`${logPrefix} VAD: Error removing TALK_DETECT: ${e.message}`); }
   }
 
   private async _onChannelTalkingFinished(event: ChannelTalkingFinished, channel: Channel): Promise<void> {
@@ -489,7 +505,8 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.channel.id !== channel.id || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
       return;
     }
-    call.callLogger.info(`TALK_DETECT: Speech finished. Duration: ${event.duration}ms`);
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} TALK_DETECT: Speech finished. Duration: ${event.duration}ms`);
     call.vadSpeechDetected = false;
     if (!call.vadInitialSilenceDelayCompleted || !call.vadActivationDelayCompleted) {
         call.vadSpeechActiveDuringDelay = false;
@@ -501,25 +518,26 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled) {
       return;
     }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
 
     if (reason.startsWith('main_greeting_')) {
-      call.callLogger.info(`Handling post-greeting logic for call ${callId}. Reason: ${reason}`);
+      call.callLogger.info(`${logPrefix} Handling post-greeting logic for call ${callId}. Reason: ${reason}`);
       call.mainPlayback = undefined;
 
       const activationMode = call.config.appConfig.appRecognitionConfig.recognitionActivationMode;
       if (activationMode === 'VAD') {
-        this._handlePostPromptVADLogic(callId);
+        this._handlePostPromptVADLogic(callId); // This will use its own prefix
       } else if (activationMode === 'FIXED_DELAY') {
         const delaySeconds = call.config.appConfig.appRecognitionConfig.bargeInDelaySeconds ?? 0.5;
-        call.callLogger.info(`FixedDelay mode: Greeting finished/failed. Barge-in delay: ${delaySeconds}s.`);
+        call.callLogger.info(`${logPrefix} FixedDelay mode: Greeting finished/failed. Barge-in delay: ${delaySeconds}s.`);
         if (delaySeconds > 0) {
           if (call.bargeInActivationTimer) clearTimeout(call.bargeInActivationTimer);
           call.bargeInActivationTimer = setTimeout(() => {
             if (call.isCleanupCalled) return;
-            this._activateOpenAIStreaming(callId, "fixedDelay_barge_in_timer_expired_post_greeting");
+            this._activateOpenAIStreaming(callId, "fixedDelay_barge_in_timer_expired_post_greeting"); // This will use its own prefix
           }, delaySeconds * 1000);
         } else {
-          this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation_post_greeting");
+          this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation_post_greeting"); // This will use its own prefix
         }
       }
     }
@@ -527,11 +545,33 @@ export class AriClientService implements AriClientInterface {
 
   private async onStasisStart(event: any, incomingChannel: Channel): Promise<void> {
     const callId = incomingChannel.id;
-    const callLogger = this.logger.child({ callId, channelName: incomingChannel.name });
-    callLogger.info(`StasisStart: New call entering application '${ASTERISK_ARI_APP_NAME}'.`);
+    const callLogger = this.logger.child({ callId, channelName: incomingChannel.name }); // callLogger is already bound with callId
+    const channelId = incomingChannel.id; // Redundant with callId but used for consistency in prefix
+    const callerIdNum = incomingChannel.caller?.number || 'N/A';
+    const logPrefix = `[${channelId}][Caller: ${callerIdNum}]`;
+
+    if (incomingChannel.name.startsWith('UnicastRTP/') || incomingChannel.name.startsWith('Snoop/')) {
+      callLogger.info(`${logPrefix} StasisStart for utility channel ${incomingChannel.name} (${incomingChannel.id}). Answering if needed and ignoring further setup.`);
+      try {
+        // It's important to answer these channels so Asterisk knows the app is aware of them,
+        // otherwise, they might timeout or be handled by other parts of the dialplan.
+        if (incomingChannel.state === 'RINGING' || incomingChannel.state === 'RING') {
+          await incomingChannel.answer();
+          callLogger.info(`${logPrefix} Answered utility channel ${incomingChannel.name}.`);
+        }
+      } catch (err: any) {
+        callLogger.warn(`${logPrefix} Error answering utility channel ${incomingChannel.name} (may already be up or hungup): ${err.message}`);
+      }
+      // These channels should be added to appOwnedChannelIds by the logic that *creates* them.
+      // This early exit simply prevents them from being processed as new, independent calls.
+      return; // Exit early from onStasisStart
+    }
+
+    callLogger.info(`${logPrefix} StasisStart: New call entering application '${ASTERISK_ARI_APP_NAME}'.`); // Already good due to callLogger binding
+    callLogger.info(`${logPrefix} New call onStasisStart. Channel ID: ${incomingChannel.id}, Name: ${incomingChannel.name}, Caller: ${JSON.stringify(incomingChannel.caller)}, Dialplan: ${JSON.stringify(incomingChannel.dialplan)}`);
 
     if (this.appOwnedChannelIds.has(callId)) {
-      callLogger.info(`Channel ${callId} is app-owned. Ignoring StasisStart.`); return;
+      callLogger.info(`${logPrefix} Channel ${callId} is app-owned. Ignoring StasisStart.`); return;
     }
     const callConfig = getCallSpecificConfig(callLogger, incomingChannel);
 
@@ -550,45 +590,132 @@ export class AriClientService implements AriClientInterface {
       vadMaxWaitAfterPromptTimer: null, vadActivationDelayTimer: null, vadInitialSilenceDelayTimer: null,
     };
     this.activeCalls.set(callId, callResources);
-    callLogger.info(`Call resources initialized. Mode: ${callConfig.appConfig.appRecognitionConfig.recognitionActivationMode}`);
+    callLogger.info(`${logPrefix} Call resources initialized. Mode: ${callConfig.appConfig.appRecognitionConfig.recognitionActivationMode}`);
 
     try {
-      await incomingChannel.answer();
-      callLogger.info(`Call answered.`);
+      callLogger.info(`${logPrefix} Attempting to answer incoming channel ${callId}.`);
+      try {
+        await incomingChannel.answer();
+        callLogger.info(`${logPrefix} Successfully answered incoming channel ${callId}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to answer incoming channel ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for answer failure:`, err);
+        throw err;
+      }
       incomingChannel.once('StasisEnd', () => {
-        callLogger.info(`Primary channel ${callId} StasisEnd. Cleanup.`);
+        callLogger.info(`${logPrefix} Primary channel ${callId} StasisEnd. Cleanup.`); // callLogger already has callId
         this._fullCleanup(callId, false, "PRIMARY_CHANNEL_STASIS_ENDED");
       });
 
       if (!this.client) { throw new Error("ARI client not connected."); }
 
-      callResources.userBridge = await this.client.bridges.create({ type: 'mixing', name: `user_b_${callId}` });
-      await callResources.userBridge.addChannel({ channel: callId });
-      callResources.snoopBridge = await this.client.bridges.create({ type: 'mixing', name: `snoop_b_${callId}` });
-      callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'}));
-      const rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
-      const externalMediaFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat || DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA;
-      callResources.externalMediaChannel = await this.client.channels.externalMedia({ app: ASTERISK_ARI_APP_NAME, external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`, format: externalMediaFormat });
+      callLogger.info(`${logPrefix} Attempting to create userBridge for call ${callId}.`);
+      try {
+        callResources.userBridge = await this.client.bridges.create({ type: 'mixing', name: `user_b_${callId}` });
+        callLogger.info(`${logPrefix} Successfully created userBridge ${callResources.userBridge.id} for call ${callId}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to create userBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for userBridge creation failure:`, err);
+        throw err;
+      }
+
+      callLogger.info(`${logPrefix} Attempting to add channel ${callId} to userBridge ${callResources.userBridge.id}.`);
+      try {
+        await callResources.userBridge.addChannel({ channel: callId });
+        callLogger.info(`${logPrefix} Successfully added channel ${callId} to userBridge ${callResources.userBridge.id}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to add channel ${callId} to userBridge ${callResources.userBridge.id}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for addChannel to userBridge failure:`, err);
+        throw err;
+      }
+
+      callLogger.info(`${logPrefix} Attempting to create snoopBridge for call ${callId}.`);
+      try {
+        callResources.snoopBridge = await this.client.bridges.create({ type: 'mixing', name: `snoop_b_${callId}` });
+        callLogger.info(`${logPrefix} Successfully created snoopBridge ${callResources.snoopBridge.id} for call ${callId}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to create snoopBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for snoopBridge creation failure:`, err);
+        throw err;
+      }
+      callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'})); // callLogger already bound
+      callLogger.info(`${logPrefix} Attempting to start RTP server for call ${callId}.`);
+      let rtpServerAddress: { host: string, port: number };
+      try {
+        rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
+        callLogger.info(`${logPrefix} RTP Server started for call ${callId}, listening on ${rtpServerAddress.host}:${rtpServerAddress.port}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to start RTP server for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for RTP server start failure:`, err);
+        throw err;
+      }
+
+      // const externalMediaFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat || DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA; // No longer needed, format is hardcoded to 'ulaw'
+      callLogger.info(`${logPrefix} Attempting to create externalMediaChannel for call ${callId} (app: ${ASTERISK_ARI_APP_NAME}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}, format: 'ulaw', encapsulation: 'rtp').`);
+      try {
+        callResources.externalMediaChannel = await this.client.channels.externalMedia({
+          app: ASTERISK_ARI_APP_NAME,
+          external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
+          format: 'ulaw',
+          encapsulation: 'rtp'
+        });
+        callLogger.info(`${logPrefix} Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to create externalMediaChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for externalMediaChannel creation failure:`, err);
+        throw err;
+      }
       this.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
+
       const snoopDirection = (callConfig.appConfig.appRecognitionConfig.recognitionActivationMode === 'VAD' ? 'in' : 'both') as ('in' | 'out' | 'both');
-      callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
+      callLogger.info(`${logPrefix} Attempting to create snoopChannel on ${callId} (snoopId: snoop_${callId}, direction: ${snoopDirection}).`);
+      try {
+        callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
+        callLogger.info(`${logPrefix} Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to create snoopChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for snoopChannel creation failure:`, err);
+        throw err;
+      }
       this.appOwnedChannelIds.add(callResources.snoopChannel.id);
-      await callResources.snoopBridge.addChannel({ channel: callResources.externalMediaChannel.id });
-      await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });
+
+      callLogger.info(`${logPrefix} Attempting to add externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+      try {
+        await callResources.snoopBridge.addChannel({ channel: callResources.externalMediaChannel.id });
+        callLogger.info(`${logPrefix} Successfully added externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to add externalMediaChannel to snoopBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for addChannel (externalMediaChannel) to snoopBridge failure:`, err);
+        throw err;
+      }
+
+      callLogger.info(`${logPrefix} Attempting to add snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+      try {
+        await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });
+        callLogger.info(`${logPrefix} Successfully added snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+      } catch (err: any) {
+        callLogger.error(`${logPrefix} FAILED to add snoopChannel to snoopBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+        callLogger.error(`${logPrefix} Full error object for addChannel (snoopChannel) to snoopBridge failure:`, err);
+        throw err;
+      }
 
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = this.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
           if (call.isVADBufferingActive) {
             if (call.vadAudioBuffer.length < MAX_VAD_BUFFER_PACKETS) { call.vadAudioBuffer.push(audioPayload); }
-            else { call.callLogger.warn('VAD buffer limit. Shift.'); call.vadAudioBuffer.shift(); call.vadAudioBuffer.push(audioPayload); }
+            else {
+              const currentLogPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+              call.callLogger.warn(`${currentLogPrefix} VAD buffer limit. Shift.`);
+              call.vadAudioBuffer.shift(); call.vadAudioBuffer.push(audioPayload);
+            }
           }
           if (call.openAIStreamingActive && !call.pendingVADBufferFlush) { sessionManager.sendAudioToOpenAI(callId, audioPayload); }
         }
       });
 
       sessionManager.handleCallConnection(callId, this);
-      callLogger.info(`Call connection details passed to SessionManager.`);
+      callLogger.info(`${logPrefix} Call connection details passed to SessionManager.`);
 
       const appRecogConf = callConfig.appConfig.appRecognitionConfig;
       if (appRecogConf.maxRecognitionDurationSeconds && appRecogConf.maxRecognitionDurationSeconds > 0) {
@@ -601,9 +728,15 @@ export class AriClientService implements AriClientInterface {
         callResources.isVADBufferingActive = true;
         const vadConfig = appRecogConf.vadConfig;
         const talkDetectValue = `${vadConfig.vadRecognitionActivationMs},${vadConfig.vadSilenceThresholdMs}`;
-        callLogger.info(`VAD mode: Setting TALK_DETECT on channel ${callId} with value: ${talkDetectValue}`);
-        try { await incomingChannel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue }); }
-        catch (e:any) { callLogger.error(`FATAL: Failed to set TALK_DETECT: ${e.message}. Cleaning up.`); await this._fullCleanup(callId, true, "TALK_DETECT_SETUP_FAILED"); return; }
+        callLogger.info(`${logPrefix} Attempting to set TALK_DETECT on channel ${callId} with value: ${talkDetectValue}.`);
+        try {
+          await incomingChannel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+          callLogger.info(`${logPrefix} Successfully set TALK_DETECT on channel ${callId}.`);
+        } catch (err:any) {
+          callLogger.error(`${logPrefix} FAILED to set TALK_DETECT for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
+          callLogger.error(`${logPrefix} Full error object for TALK_DETECT set failure:`, err);
+          throw err;
+        }
         if (appRecogConf.vadRecogActivation === 'vadMode') {
           callResources.vadInitialSilenceDelayCompleted = (appRecogConf.vadInitialSilenceDelaySeconds ?? 0) <= 0;
           callResources.vadActivationDelayCompleted = (appRecogConf.vadActivationDelaySeconds ?? 0) <= 0;
@@ -618,40 +751,59 @@ export class AriClientService implements AriClientInterface {
       }
 
       const greetingAudio = appRecogConf.greetingAudioPath;
-      const call = callResources; // For use in event handlers if needed before full 'call' object is established
+      const call = callResources;
       if (greetingAudio && this.client) {
-        callLogger.info(`Playing greeting audio: ${greetingAudio}`);
+        callLogger.info(`${logPrefix} Playing greeting audio: ${greetingAudio}`);
         callResources.mainPlayback = this.client.Playback();
 
         if (callResources.mainPlayback) {
-          callResources.mainPlayback.once('PlaybackFailed', (evt: any, instance: Playback) => {
-            const currentCall = this.activeCalls.get(callId);
-            if (currentCall && instance.id === currentCall.mainPlayback?.id) {
-              currentCall.callLogger.warn(`Main greeting playback ${instance.id} FAILED for call ${callId}. Reason: ${evt.message || 'Unknown'}`);
-              this._handlePlaybackFinished(callId, 'main_greeting_failed');
+          const mainPlaybackId = callResources.mainPlayback.id;
+
+          const playbackFailedHandler = (event: any, failedPlayback: Playback) => {
+            if (this.client && failedPlayback.id === mainPlaybackId) {
+              const currentCall = this.activeCalls.get(callId);
+              if (currentCall && currentCall.mainPlayback && currentCall.mainPlayback.id === mainPlaybackId) {
+                const currentLogPrefix = `[${currentCall.channel.id}][Caller: ${currentCall.channel.caller?.number || 'N/A'}]`;
+                currentCall.callLogger.warn(`${currentLogPrefix} Main greeting playback ${failedPlayback.id} FAILED (client event). Reason: ${event.playback && event.playback.state === 'failed' ? (event.playback.reason || 'Unknown') : (event.reason || 'Unknown')}`);
+                this._handlePlaybackFinished(callId, 'main_greeting_failed');
+              }
+              if (currentCall && currentCall.playbackFailedHandler) {
+                this.client?.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
+                currentCall.playbackFailedHandler = null;
+              }
             }
-          });
+          };
+
+          callResources.playbackFailedHandler = playbackFailedHandler;
+          this.client.on('PlaybackFailed' as any, callResources.playbackFailedHandler);
+
           callResources.mainPlayback.once('PlaybackFinished', (evt: any, instance: Playback) => {
             const currentCall = this.activeCalls.get(callId);
+            const currentLogPrefix = currentCall ? `[${currentCall.channel.id}][Caller: ${currentCall.channel.caller?.number || 'N/A'}]` : `[${callId}]`;
+            if (currentCall && currentCall.playbackFailedHandler && this.client && instance.id === currentCall.mainPlayback?.id) {
+              this.client.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
+              currentCall.playbackFailedHandler = null;
+            }
             if (currentCall && instance.id === currentCall.mainPlayback?.id) {
-              currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED for call ${callId}.`);
+              currentCall.callLogger.info(`${currentLogPrefix} Main greeting playback ${instance.id} FINISHED for call ${callId}.`);
               this._handlePlaybackFinished(callId, 'main_greeting_finished');
             }
           });
           try {
-            // Corrected channel.play call
+            callLogger.info(`${logPrefix} Attempting to play greeting audio '${greetingAudio}' on channel ${callId} using playback ID ${callResources.mainPlayback.id}.`);
             await callResources.channel.play({ media: greetingAudio }, callResources.mainPlayback);
-            callLogger.info(`Started main greeting playback ${callResources.mainPlayback.id} on channel ${callId}`);
+            callLogger.info(`${logPrefix} Successfully started main greeting playback ${callResources.mainPlayback.id} on channel ${callId}.`);
           } catch (playError: any) {
-            callLogger.error(`Error STARTING main greeting playback for call ${callId}: ${(playError instanceof Error ? playError.message : String(playError))}`);
+            callLogger.error(`${logPrefix} FAILED to start main greeting playback for call ${callId}. Error: ${(playError instanceof Error ? playError.message : String(playError))}`);
+            callLogger.error(`${logPrefix} Full error object for greeting playback failure:`, playError);
             this._handlePlaybackFinished(callId, 'main_greeting_playback_start_error');
           }
         } else {
-           callLogger.error("Failed to create mainPlayback object.");
+           callLogger.error(`${logPrefix} Failed to create mainPlayback object.`);
            this._handlePlaybackFinished(callId, 'main_greeting_creation_failed');
         }
       } else {
-        callLogger.info(greetingAudio ? 'Client not available for greeting playback.' : 'No greeting audio specified.');
+        callLogger.info(greetingAudio ? `${logPrefix} Client not available for greeting playback.` : `${logPrefix} No greeting audio specified.`);
         if (activationMode === 'FIXED_DELAY') {
             const delaySeconds = appRecogConf.bargeInDelaySeconds ?? 0.5;
             if(delaySeconds > 0) { callResources.bargeInActivationTimer = setTimeout(() => { if(!callResources.isCleanupCalled) this._activateOpenAIStreaming(callId, "fixedDelay_no_greeting_timer"); }, delaySeconds * 1000); }
@@ -660,9 +812,9 @@ export class AriClientService implements AriClientInterface {
             this._handlePostPromptVADLogic(callId);
         }
       }
-      callLogger.info(`StasisStart setup complete for call ${callId}.`);
+      callLogger.info(`${logPrefix} StasisStart setup complete for call ${callId}.`);
     } catch (err: any) {
-      callLogger.error(`Error in StasisStart for ${callId}: ${(err instanceof Error ? err.message : String(err))}`);
+      callLogger.error(`${logPrefix} Error in StasisStart for ${callId}: ${(err instanceof Error ? err.message : String(err))}`); // Added prefix
       await this._fullCleanup(callId, true, "STASIS_START_ERROR");
     }
   }
@@ -670,14 +822,215 @@ export class AriClientService implements AriClientInterface {
   private onAppOwnedChannelStasisEnd(event: any, channel: Channel): void { /* ... */ }
   private async onStasisEnd(event: any, channel: Channel): Promise<void> { /* ... */ }
   private _clearCallTimers(call: CallResources): void { /* ... */ }
-  private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {  /* ... */  }
-  private async cleanupCallResources(channelId: string, hangupChannel: boolean = false, isAriClosing: boolean = false, loggerInstance?: any ): Promise<void> { /* ... */ }
-  private onAriError(err: any): void { // Changed to any for aggressive fix
+  private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {
+    const call = this.activeCalls.get(callId);
+    if (call && call.isCleanupCalled) {
+      return;
+    }
+    if (call) {
+      const logPrefix = `[${call.channel?.id || callId}][Caller: ${call.channel?.caller?.number || 'N/A'}]`;
+      call.isCleanupCalled = true;
+      call.callLogger.info(`${logPrefix} Full cleanup initiated. Reason: ${reason}. Hangup main: ${hangupMainChannel}`);
+
+      if (call.playbackFailedHandler && this.client) {
+        this.client.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
+        call.playbackFailedHandler = null;
+      }
+      // Add cleanup for waitingPlaybackFailedHandler
+      if (call.waitingPlaybackFailedHandler && this.client) {
+        this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
+        call.waitingPlaybackFailedHandler = null;
+      }
+
+      this._clearCallTimers(call);
+
+      if (call.openAIStreamingActive || call.isOpenAIStreamEnding) {
+        call.callLogger.info(`${logPrefix} Stopping OpenAI session due to cleanup.`);
+        try {
+          sessionManager.stopOpenAISession(callId, `cleanup_${reason}`);
+        } catch (e:any) { call.callLogger.error(`${logPrefix} Error stopping OpenAI session during cleanup: ${e.message}`); }
+      }
+      call.openAIStreamingActive = false;
+      call.isOpenAIStreamEnding = true;
+
+      await this.cleanupCallResources(callId, hangupMainChannel, false, call.callLogger);
+
+    } else {
+      moduleLogger.warn(`[${callId}] _fullCleanup called for non-existent callId.`);
+    }
+  }
+  private async cleanupCallResources(channelId: string, hangupChannel: boolean = false, isAriClosing: boolean = false, loggerInstance?: any ): Promise<void> {
+    const call = this.activeCalls.get(channelId);
+    const resolvedLogger = loggerInstance || this.logger.child({ callId: channelId, context: 'cleanupCallResources' });
+    const logPrefix = call ? `[${call.channel?.id || channelId}][Caller: ${call.channel?.caller?.number || 'N/A'}]` : `[${channelId}]`;
+
+    resolvedLogger.info(`${logPrefix} Starting cleanupCallResources.`);
+
+    if (call?.rtpServer) {
+      resolvedLogger.info(`${logPrefix} Stopping RTP server.`);
+      try { await call.rtpServer.stop(); }
+      catch (e:any) { resolvedLogger.error(`${logPrefix} Error stopping RTP server: ${e.message}`); }
+      call.rtpServer = undefined;
+    }
+
+    const channelsToHangup: (Channel | undefined)[] = [];
+    if (call?.snoopChannel) {
+      resolvedLogger.info(`${logPrefix} Cleaning up snoopChannel ${call.snoopChannel.id}.`);
+      if (!isAriClosing) { channelsToHangup.push(call.snoopChannel); }
+      this.appOwnedChannelIds.delete(call.snoopChannel.id);
+      call.snoopChannel = undefined;
+    }
+    if (call?.externalMediaChannel) {
+      resolvedLogger.info(`${logPrefix} Cleaning up externalMediaChannel ${call.externalMediaChannel.id}.`);
+      if (!isAriClosing) { channelsToHangup.push(call.externalMediaChannel); }
+      this.appOwnedChannelIds.delete(call.externalMediaChannel.id);
+      call.externalMediaChannel = undefined;
+    }
+
+    for (const ch of channelsToHangup) {
+      if (ch) {
+        try {
+          resolvedLogger.info(`${logPrefix} Attempting to hangup app-owned channel ${ch.id}.`);
+          await ch.hangup();
+          resolvedLogger.info(`${logPrefix} Successfully hung up app-owned channel ${ch.id}.`);
+        } catch (e:any) { resolvedLogger.warn(`${logPrefix} Error hanging up app-owned channel ${ch.id}: ${e.message} (might be already hung up).`); }
+      }
+    }
+
+    if (call?.snoopBridge) {
+      resolvedLogger.info(`${logPrefix} Destroying snoopBridge ${call.snoopBridge.id}.`);
+      try { await call.snoopBridge.destroy(); }
+      catch (e:any) { resolvedLogger.error(`${logPrefix} Error destroying snoopBridge: ${e.message}`); }
+      call.snoopBridge = undefined;
+    }
+    if (call?.userBridge) {
+      resolvedLogger.info(`${logPrefix} Destroying userBridge ${call.userBridge.id}.`);
+      try { await call.userBridge.destroy(); }
+      catch (e:any) { resolvedLogger.error(`${logPrefix} Error destroying userBridge: ${e.message}`); }
+      call.userBridge = undefined;
+    }
+
+    if (hangupChannel && call?.channel) {
+      try {
+        resolvedLogger.info(`${logPrefix} Attempting to hangup main channel ${call.channel.id}.`);
+        await call.channel.hangup();
+        resolvedLogger.info(`${logPrefix} Main channel ${call.channel.id} hung up successfully.`);
+      } catch (e: any) {
+        resolvedLogger.error(`${logPrefix} Error hanging up main channel ${call.channel.id}: ${e.message} (might be already hung up or StasisEnd occurred).`);
+      }
+    }
+
+    if (call) { // Remove from activeCalls only if it was found
+        this.activeCalls.delete(channelId);
+        sessionManager.handleAriCallEnd(channelId);
+        resolvedLogger.info(`${logPrefix} Call resources fully cleaned up and removed from active sessions.`);
+    } else if (!isAriClosing) { // Avoid logging if ARI is closing and call might not have been fully setup
+        resolvedLogger.warn(`${logPrefix} cleanupCallResources: No call object found for channelId ${channelId} during cleanup.`);
+    }
+  }
+  private onAriError(err: any): void {
     this.logger.error('General ARI Client Error:', err);
    }
-  private onAriClose(): void { /* ... */ } // Kept simple as it takes no args
-  public async playbackAudio(channelId: string, audioPayloadB64: string): Promise<void> { /* ... */ }
-  public async endCall(channelId: string): Promise<void> { /* ... */ }
+  private onAriClose(): void {
+    this.logger.info('ARI connection closed. Cleaning up all active calls.');
+    const callIds = Array.from(this.activeCalls.keys());
+    for (const callId of callIds) {
+        const call = this.activeCalls.get(callId);
+        if (call) {
+            const logPrefix = `[${call.channel?.id || callId}][Caller: ${call.channel?.caller?.number || 'N/A'}]`;
+            call.callLogger.warn(`${logPrefix} ARI connection closed, forcing cleanup for this call.`);
+            this._fullCleanup(callId, true, "ARI_CONNECTION_CLOSED");
+        }
+    }
+    this.activeCalls.clear();
+    this.appOwnedChannelIds.clear();
+   }
+  public async playbackAudio(channelId: string, audioPayloadB64: string): Promise<void> {
+    const call = this.activeCalls.get(channelId);
+    if (!call || call.isCleanupCalled || !this.client) {
+      (call?.callLogger || this.logger).warn(`[${channelId}] Cannot playback audio, call not active or client missing.`);
+      return;
+    }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.debug(`${logPrefix} Attempting to play audio chunk of length ${audioPayloadB64.length}.`);
+    try {
+      if (call.waitingPlayback) {
+        try {
+          await call.waitingPlayback.stop();
+          call.callLogger.debug(`${logPrefix} Stopped previous waiting playback.`);
+        }
+        catch(e:any) { call.callLogger.warn(`${logPrefix} Error stopping previous waiting playback: ${e.message}`);}
+        call.waitingPlayback = undefined;
+      }
+
+      call.waitingPlayback = this.client.Playback();
+      const playbackId = call.waitingPlayback.id; // Correctly use call.waitingPlayback.id
+      const currentCallId = call.channel.id; // Capture callId for use in handlers
+      call.callLogger.debug(`${logPrefix} Created playback object ${playbackId}.`);
+
+      // Define PlaybackFinished handler
+      const waitingPlaybackFinishedCb = () => {
+        const currentCall = this.activeCalls.get(currentCallId);
+        if (!currentCall) return;
+        const cbLogPrefix = `[${currentCall.channel.id}][Caller: ${currentCall.channel.caller?.number || 'N/A'}]`;
+        currentCall.callLogger.debug(`${cbLogPrefix} Playback ${playbackId} finished.`);
+        if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
+          currentCall.waitingPlayback = undefined;
+        }
+        // Attempt to remove the corresponding PlaybackFailed handler
+        if (this.client && currentCall.waitingPlaybackFailedHandler) {
+          this.client.removeListener('PlaybackFailed' as any, currentCall.waitingPlaybackFailedHandler);
+          currentCall.waitingPlaybackFailedHandler = null;
+        }
+      };
+      if (call.waitingPlayback) { // Ensure 'call.waitingPlayback' is not undefined before calling 'once'
+          call.waitingPlayback.once('PlaybackFinished', waitingPlaybackFinishedCb);
+      }
+
+      // Define PlaybackFailed handler
+      const waitingPlaybackFailedCb = (event: any, failedPlayback: Playback) => {
+        if (this.client && failedPlayback.id === playbackId) {
+          const currentCall = this.activeCalls.get(currentCallId);
+          if (!currentCall) return;
+          const cbLogPrefix = `[${currentCall.channel.id}][Caller: ${currentCall.channel.caller?.number || 'N/A'}]`;
+          currentCall.callLogger.error(`${cbLogPrefix} Playback ${playbackId} failed: ${failedPlayback?.state}, ${event?.message || (event?.playback?.reason || 'Unknown')}`);
+          if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
+            currentCall.waitingPlayback = undefined;
+          }
+          // Remove this failed handler itself
+          this.client.removeListener('PlaybackFailed' as any, waitingPlaybackFailedCb);
+          if (currentCall.waitingPlaybackFailedHandler === waitingPlaybackFailedCb) { // ensure it's the one we stored
+              currentCall.waitingPlaybackFailedHandler = null;
+          }
+        }
+      };
+      call.waitingPlaybackFailedHandler = waitingPlaybackFailedCb;
+      this.client.on('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
+
+      await call.channel.play({ media: `sound:base64:${audioPayloadB64}` }, call.waitingPlayback);
+      call.callLogger.debug(`${logPrefix} Playback ${playbackId} started.`);
+    } catch (err: any) {
+      call.callLogger.error(`${logPrefix} Error playing audio: ${err.message || JSON.stringify(err)}`);
+      // Ensure waitingPlayback is cleared on error during play start
+      if (call.waitingPlayback) {
+        if (call.waitingPlaybackFailedHandler && this.client) {
+            this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
+            call.waitingPlaybackFailedHandler = null;
+        }
+        call.waitingPlayback = undefined;
+      }
+    }
+  }
+  public async endCall(channelId: string): Promise<void> {
+    const call = this.activeCalls.get(channelId);
+    if (!call) {
+      this.logger.warn(`[${channelId}] Attempted to end non-existent call.`);
+      return;
+    }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} endCall invoked. Initiating full cleanup.`);
+    await this._fullCleanup(channelId, true, "EXPLICIT_ENDCALL_REQUEST");
+  }
 }
 
 let ariClientServiceInstance: AriClientService | null = null;

@@ -152,3 +152,117 @@ Correct audio format handling is critical for the success of transcription and p
     *   If audio is garbled or transcription is poor despite clear input, audio format mismatch or mishandling is a prime suspect.
 
 This testing plan provides a structured approach to verifying the core functionalities of the application.
+
+## 4. Testing Specific Operational Modes and Timers
+
+This section focuses on verifying the behavior of different `RECOGNITION_ACTIVATION_MODE` settings and associated timer logic as defined in `ari-client.ts` and configured via `config/default.json` or environment variables.
+
+### General Setup for Mode Testing:
+
+*   Ensure the `websocket-server` is running with the desired configuration for the mode under test.
+*   Use the `webapp` to observe logs and transcripts if helpful, but primarily rely on `websocket-server` console logs for detailed timer and mode transition information.
+*   Initiate calls using a SIP client.
+
+---
+
+### TC4.1: `IMMEDIATE` Mode Testing
+
+*   **Scenario**: Test that OpenAI streaming starts immediately upon call connection.
+*   **Key Configuration**:
+    *   `RECOGNITION_ACTIVATION_MODE="IMMEDIATE"`
+    *   (Optional) `GREETING_AUDIO_PATH` (e.g., `sound:hello-world`) - stream should start regardless of greeting.
+*   **Expected Behavior**:
+    *   Upon call connection (`onStasisStart`), `_activateOpenAIStreaming` should be called very early.
+    *   Logs should indicate OpenAI session starting, potentially before or during any greeting playback.
+    *   Standard active stream timers (`noSpeechBeginTimer`, `initialOpenAIStreamIdleTimer`, `speechEndSilenceTimer`, `maxRecognitionDurationTimer`) should become active once the stream is initiated.
+    *   VAD-specific timers and `bargeInActivationTimer` should NOT be active.
+
+---
+
+### TC4.2: `FIXED_DELAY` Mode Testing
+
+*   **Scenario**: Test OpenAI streaming starts after a configured delay, typically post-greeting.
+*   **Key Configuration**:
+    *   `RECOGNITION_ACTIVATION_MODE="FIXED_DELAY"`
+    *   `GREETING_AUDIO_PATH` (e.g., `sound:hello-world`)
+    *   `BARGE_IN_DELAY_SECONDS` (e.g., `3` for a 3-second delay after greeting ends).
+*   **Expected Behavior**:
+    *   Greeting audio should play.
+    *   After the greeting playback finishes (`PlaybackFinished` event), the `bargeInActivationTimer` should be set if `BARGE_IN_DELAY_SECONDS > 0`.
+    *   Logs should show `_activateOpenAIStreaming` being called only *after* `bargeInActivationTimer` expires.
+    *   If `BARGE_IN_DELAY_SECONDS` is `0` or not set, streaming should activate immediately after greeting.
+    *   Standard active stream timers apply once the stream is initiated.
+    *   VAD-specific timers should NOT be active.
+
+---
+
+### TC4.3: `VAD` Mode with `vadRecogActivation: 'afterPrompt'`
+
+*   **Scenario**: Test VAD behavior where speech detection is primarily active after a prompt/greeting.
+*   **Key Configuration**:
+    *   `RECOGNITION_ACTIVATION_MODE="VAD"`
+    *   `VAD_RECOG_ACTIVATION_MODE="afterPrompt"`
+    *   `GREETING_AUDIO_PATH` (e.g., `sound:hello-world`)
+    *   `VAD_MAX_WAIT_AFTER_PROMPT_SECONDS` (e.g., `5`)
+    *   `VAD_SILENCE_THRESHOLD_MS`, `VAD_TALK_THRESHOLD_MS` (use defaults or specific values like 250, 40).
+*   **Test Cases**:
+    1.  **Speech during greeting**:
+        *   **Action**: Start speaking *during* the greeting playback.
+        *   **Expected**: `ChannelTalkingStarted` logged. Greeting may stop (barge-in). After greeting finishes, `_activateOpenAIStreaming` is called, and buffered audio (including speech during greeting) should be sent.
+    2.  **Speech after greeting, before max wait timeout**:
+        *   **Action**: Remain silent during greeting. After greeting, speak before `VAD_MAX_WAIT_AFTER_PROMPT_SECONDS` expires.
+        *   **Expected**: `vadMaxWaitAfterPromptTimer` starts after greeting. `ChannelTalkingStarted` logged upon speech. `_activateOpenAIStreaming` called.
+    3.  **No speech after greeting (max wait timeout)**:
+        *   **Action**: Remain silent during and after greeting.
+        *   **Expected**: `vadMaxWaitAfterPromptTimer` starts. When it expires, logs should indicate call cleanup due to VAD max wait timeout. OpenAI stream should not have activated.
+*   **Standard Active Timers**: Apply once stream is active.
+*   **Other Timers**: `vadInitialSilenceDelayTimer`, `vadActivationDelayTimer` should NOT be active in this sub-mode.
+
+---
+
+### TC4.4: `VAD` Mode with `vadRecogActivation: 'vadMode'`
+
+*   **Scenario**: Test VAD behavior with initial silence and activation delays.
+*   **Key Configuration**:
+    *   `RECOGNITION_ACTIVATION_MODE="VAD"`
+    *   `VAD_RECOG_ACTIVATION_MODE="vadMode"`
+    *   `VAD_INITIAL_SILENCE_DELAY_SECONDS` (e.g., `3`)
+    *   `VAD_ACTIVATION_DELAY_SECONDS` (e.g., `2`)
+    *   `GREETING_AUDIO_PATH` (optional, test with and without).
+*   **Test Cases**:
+    1.  **Speech during initial silence delay**:
+        *   **Action**: Speak *during* the `VAD_INITIAL_SILENCE_DELAY_SECONDS` window.
+        *   **Expected**: `ChannelTalkingStarted` logged. `vadSpeechActiveDuringDelay` set to true. OpenAI stream should activate only *after* both `vadInitialSilenceDelayTimer` and `vadActivationDelayTimer` have completed. Buffered audio should be sent.
+    2.  **Speech after all delays**:
+        *   **Action**: Remain silent through all initial delays. Then speak.
+        *   **Expected**: `vadInitialSilenceDelayTimer` and `vadActivationDelayTimer` complete. Logs indicate system is listening. Upon speech, `ChannelTalkingStarted` logged, and `_activateOpenAIStreaming` called.
+    3.  **No speech at all**:
+        *   **Action**: Remain silent throughout.
+        *   **Expected**: All VAD timers complete. No OpenAI activation. Call eventually times out via `maxRecognitionDurationTimer` or other overarching logic if applicable.
+*   **Standard Active Timers**: Apply once stream is active.
+
+---
+
+### TC4.5: `DTMF` Mode Interruption
+
+*   **Scenario**: Test DTMF input interrupting an active speech recognition session.
+*   **Key Configuration**:
+    *   Use any speech-activating mode (e.g., `IMMEDIATE` or `VAD` after speech starts).
+    *   Ensure `DTMF_ENABLED="true"`.
+*   **Test Cases**:
+    1.  **DTMF during active OpenAI stream**:
+        *   **Action**: Once OpenAI stream is active and you are speaking/being transcribed, press a DTMF key (e.g., `1`).
+        *   **Expected**:
+            *   `_onDtmfReceived` logged.
+            *   Logs indicate "Entering DTMF mode".
+            *   Active playbacks stop.
+            *   OpenAI stream is stopped (`sessionManager.stopOpenAISession` called with 'dtmf_interrupt').
+            *   Speech-related timers cleared: `noSpeechBeginTimer`, `initialOpenAIStreamIdleTimer`, `speechEndSilenceTimer`.
+            *   VAD timers cleared (if VAD mode was active): `vadMaxWaitAfterPromptTimer`, `vadActivationDelayTimer`, `vadInitialSilenceDelayTimer`.
+            *   Crucially, `maxRecognitionDurationTimer` should be logged as cleared.
+            *   DTMF collection timers (`dtmfInterDigitTimer`, `dtmfFinalTimer`) start.
+            *   Collected digits logged.
+    2.  **DTMF sequence and timeout**:
+        *   **Action**: Press a few DTMF digits (e.g., `123`). Wait for `DTMF_FINAL_TIMEOUT_SECONDS`.
+        *   **Expected**: `dtmfFinalTimer` expires. Collected digits (`123`) are set as `DTMF_RESULT` channel variable. Call is cleaned up.
+*   **Standard Active Timers**: Speech timers are NOT active during DTMF mode. Only DTMF timers govern this phase.

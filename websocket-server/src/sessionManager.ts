@@ -75,6 +75,7 @@ export async function startOpenAISession(callId: string, ariClient: AriClientSer
   try {
     const oaiConfig = config.openAIRealtimeAPI;
     const modelToUse = oaiConfig.model || "gpt-4o-realtime-preview-2024-12-17";
+    console.info(`[${callId}] Starting new OpenAI session. Model: ${modelToUse}, Language: ${oaiConfig.language || 'Not specified'}, Input Format: ${oaiConfig.inputAudioFormat || 'g711_ulaw'}@${oaiConfig.inputAudioSampleRate || 8000}, Output Format: ${oaiConfig.outputAudioFormat || 'g711_ulaw'}@${oaiConfig.outputAudioSampleRate || 8000}`);
 
     console.log(`SessionManager: Connecting to OpenAI model '${modelToUse}' for callId ${callId}.`);
     session.modelConn = new WebSocket(
@@ -141,6 +142,7 @@ export function stopOpenAISession(callId: string, reason: string) {
 export function sendAudioToOpenAI(callId: string, audioPayload: Buffer) {
   const session = activeSessions.get(callId);
   if (session && isOpen(session.modelConn)) {
+    console.debug(`[${callId}] Sending audio chunk to OpenAI, length: ${audioPayload.length}`);
     jsonSend(session.modelConn, { type: "input_audio_buffer.append", audio: audioPayload.toString('base64') });
   }
 }
@@ -201,10 +203,12 @@ function handleModelMessage(callId: string, data: RawData) {
     console.error(`SessionManager: Failed to parse JSON message from OpenAI for call ${callId}:`, data.toString());
     return;
   }
+  console.debug(`[${callId}] Received message from OpenAI model: type '${event?.type}'`);
   jsonSend(globalFrontendConn || session.frontendConn, event);
 
   switch (event.type) {
     case "transcript":
+      console.info(`[${callId}] OpenAI transcript (is_final: ${event.is_final}): ${event.text}`);
       session.ariClient._onOpenAISpeechStarted(callId);
       if (event.is_final === true && typeof event.text === 'string') {
         session.ariClient._onOpenAIFinalResult(callId, event.text);
@@ -216,6 +220,7 @@ function handleModelMessage(callId: string, data: RawData) {
       session.ariClient._onOpenAISpeechStarted(callId);
       break;
     case "response.audio.delta":
+      console.debug(`[${callId}] OpenAI audio chunk received, length: ${event.delta?.length || 0}`);
       if (session.ariClient && event.delta && typeof event.delta === 'string') {
         session.ariClient.playbackAudio(callId, event.delta);
       }
@@ -223,6 +228,7 @@ function handleModelMessage(callId: string, data: RawData) {
     case "response.output_item.done":
       const { item } = event;
       if (item?.type === "function_call") {
+        console.info(`[${callId}] OpenAI function call request: ${item.name}`);
         handleFunctionCall(callId, item)
           .then((output) => {
             if(isOpen(session.modelConn)) {
@@ -234,6 +240,8 @@ function handleModelMessage(callId: string, data: RawData) {
       }
       break;
     case "error":
+        console.error(`[${callId}] OpenAI model error: ${event.message}`);
+        // The original detailed log is kept below as it includes the full event object.
         console.error(`SessionManager: Received error event from OpenAI for callId ${callId}:`, event.message || event);
         session.ariClient._onOpenAIError(callId, event.message || event);
         break;

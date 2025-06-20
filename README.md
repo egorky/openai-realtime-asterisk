@@ -30,7 +30,7 @@ This repository implements a phone calling assistant using OpenAI's Realtime API
     *   Forwards audio from Asterisk to OpenAI for transcription.
     *   Plays back audio responses from OpenAI to Asterisk.
     *   Forwards events (transcripts, function calls, errors) to the `webapp` via a WebSocket connection.
-    *   Supports various operational modes for speech recognition activation (e.g., immediate, fixed delay, VAD) and DTMF handling, configured via environment variables and a JSON configuration file.
+    *   Supports detailed operational modes (e.g., Immediate, FixedDelay, VAD with sub-modes 'vadMode'/'afterPrompt', and DTMF handling) to control speech recognition activation and interaction. Refer to `websocket-server/README.md` for specifics on these modes and their associated timer logic.
 
 **Call Flow:**
 
@@ -81,13 +81,15 @@ Key environment variables for the `websocket-server` include:
 *   `ASTERISK_ARI_USERNAME`: Username for ARI authentication.
 *   `ASTERISK_ARI_PASSWORD`: Password for ARI authentication.
 *   `ASTERISK_ARI_APP_NAME`: The name of your Stasis application.
+*   `WEBSOCKET_SERVER_HOST_IP` (Optional): The IP address the WebSocket server listens on. Defaults to `0.0.0.0` (all interfaces).
 *   `RECOGNITION_ACTIVATION_MODE` (Optional): Defines how speech recognition starts (e.g., `VAD`, `IMMEDIATE`, `FIXED_DELAY`). Defaults to `VAD`.
+*   `INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS` (Optional): Timeout in seconds for the initial OpenAI stream to become responsive (e.g., receive the first transcript or speech start event). Default: 10s.
 
-Many other operational parameters, such as detailed VAD settings, DTMF timeouts, and other timers, are configurable via environment variables which override defaults defined in `websocket-server/config/default.json`. Please refer to `websocket-server/.env.example` for a comprehensive list of available environment variables and the (upcoming) `websocket-server/README.md` for detailed explanations of these advanced configurations.
+Many other operational parameters, such as detailed VAD settings, DTMF timeouts, and other timers, are configurable via environment variables which override defaults defined in `websocket-server/config/default.json`. Please refer to `websocket-server/.env.example` for a comprehensive list of available environment variables and `websocket-server/README.md` for detailed explanations of these advanced configurations.
 
 ### `webapp/.env`
 
-*   `NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL`: The base URL of the `websocket-server` (e.g., `http://localhost:8081`). The webapp uses this to connect to the `/logs` WebSocket and `/tools` HTTP endpoint.
+*   `NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL`: The base URL of the `websocket-server` (e.g., `http://localhost:8081`). The webapp uses this to connect. **IMPORTANT:** If the `webapp` and `websocket-server` run on different machines, or if the `websocket-server` is not accessible via `localhost` from the machine running the `webapp`, you MUST change `localhost` to the actual network IP address (or resolvable hostname) of the `websocket-server` machine (e.g., `NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL="http://192.168.1.100:8081"`).
 
 ## Asterisk Configuration
 
@@ -138,3 +140,4 @@ For detailed testing procedures, including audio format verification steps, plea
 # Additional Notes
 
 This repository provides a foundation. Security practices, error handling, and production readiness should be thoroughly reviewed and enhanced before deploying in a live environment.
+The `websocket-server` features enhanced logging. Refer to its README for details on log levels.

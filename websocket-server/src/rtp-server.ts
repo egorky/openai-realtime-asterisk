@@ -53,7 +53,7 @@ export class RtpServer extends EventEmitter {
       const payload = Buffer.from(msg.subarray(RTP_HEADER_LENGTH));
 
       if (payload.length > 0) {
-        if (this.logger.isLevelEnabled?.('silly')) {
+        if (this.logger && typeof this.logger.silly === 'function') {
           this.logger.silly(`RtpServer: Packet #${this.packetCount} contains audio payload of ${payload.length} bytes. Emitting 'audioPacket'.`);
         }
         this.emit('audioPacket', payload, rinfo);
