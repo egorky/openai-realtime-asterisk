@@ -1,16 +1,15 @@
 import { RawData, WebSocket } from "ws";
-import axios from 'axios'; // Added axios import
 import functions from "./functionHandlers";
-import { CallSpecificConfig, OpenAIRealtimeAPIConfig, AriClientInterface } from "./types"; // Added AriClientInterface
-import { AriClientService } from "./ari-client"; // AriClientService might be more specific than AriClientInterface
+import { CallSpecificConfig, OpenAIRealtimeAPIConfig, AriClientInterface } from "./types";
+import { AriClientService } from "./ari-client";
 
 // Define a type/interface for storing session information
 interface OpenAISession {
   ws: WebSocket;
-  ariClient: AriClientInterface; // Using the interface as requested
+  ariClient: AriClientInterface;
   callId: string;
-  config: CallSpecificConfig; // Store config for potential use during the session
-  // any other state for the session
+  config: CallSpecificConfig;
+  // isReady?: boolean; // Optional: if specific ready state needed after session.created
 }
 
 // Declare a map to store active sessions
@@ -108,126 +107,151 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
   activeOpenAISessions.set(callId, newSession);
 
   ws.on('open', () => {
-    console.log(`SessionManager: OpenAI STT WebSocket connection established for callId ${callId}.`);
-    ariClient._onOpenAISpeechStarted(callId); // Indicate stream is ready
+    console.log(`SessionManager: OpenAI Realtime WebSocket connection established for callId ${callId}.`);
+    // Do not call _onOpenAISpeechStarted here; wait for session.created or actual speech events.
 
-    // Send initial configuration message to OpenAI STT WebSocket.
-    // IMPORTANT: The exact structure of this message and whether it's needed
-    // must be verified with the official OpenAI Realtime API documentation for WebSocket STT.
-    // The following is a placeholder based on common patterns.
     const sttConfig = config.openAIRealtimeAPI;
-    const initialSttConfigMessage = {
-      // type: 'configure_stream', // Hypothetical type field, if required by OpenAI
-      audio_attributes: { // Fictional structure, replace with actual
-        content_type: sttConfig?.inputAudioFormat || 'audio/pcm;rate=16000', // Example mapping
-        sample_rate: sttConfig?.inputAudioSampleRate || 16000,
-        channels: 1, // Typically 1 for telephony
-        encoding: sttConfig?.inputAudioFormat === 'pcm_s16le' ? 'pcm_s16le' : 'mulaw', // Or map to OpenAI specific terms
-      },
-      language: sttConfig?.language || 'en',
-      interim_results: true, // Or make this configurable
-      vad_enabled: true,     // Or make this configurable, if OpenAI supports server-side VAD tuning here
-      // Any other parameters like 'end_of_speech_timeout_ms', etc.
+    const sessionLoggerForOpen = newSession.ariClient.logger || console;
+
+    // IMPORTANT: The exact structure of this session.update message, especially audio_attributes,
+    // must be verified with the official OpenAI Realtime API documentation.
+    const sessionUpdateEvent = {
+      type: "session.update",
+      session: {
+        input_audio_format: {
+           encoding: sttConfig?.inputAudioFormat || 'pcm_s16le',
+           sample_rate: sttConfig?.inputAudioSampleRate || 16000,
+           channels: 1,
+        },
+        output_audio_format: {
+           encoding: sttConfig?.outputAudioFormat || 'pcm_s16le',
+           sample_rate: sttConfig?.outputAudioSampleRate || 24000,
+           channels: 1,
+        },
+        voice: sttConfig?.ttsVoice || 'alloy',
+        language: sttConfig?.language || "en",
+        // instructions: "Your default system prompt here if any", // Example
+      }
     };
 
     if (ws.readyState === WebSocket.OPEN) {
       try {
-        // ws.send(JSON.stringify(initialSttConfigMessage));
-        // For subtask, log what would be sent:
-        const loggerForOpen = newSession.ariClient.logger || console; // Get logger from session or fallback
-        loggerForOpen.info(`OpenAI STT: Would send initial configuration message for callId ${callId}: ${JSON.stringify(initialSttConfigMessage)} (Actual send is commented out pending API spec)`);
+        ws.send(JSON.stringify(sessionUpdateEvent));
+        sessionLoggerForOpen.info(`OpenAI Realtime: Sent session.update event for callId ${callId}: ${JSON.stringify(sessionUpdateEvent)}`);
       } catch (e: any) {
-        const loggerForOpenError = newSession.ariClient.logger || console;
-        loggerForOpenError.error(`OpenAI STT: Failed to send initial configuration message for callId ${callId}: ${e.message}`);
+        sessionLoggerForOpen.error(`OpenAI Realtime: Failed to send session.update event for callId ${callId}: ${e.message}`);
       }
     }
   });
 
   ws.on('message', (data: RawData) => {
     let messageContent: string = '';
-    const sessionLogger = activeOpenAISessions.get(callId)?.ariClient?.logger || console; // Get logger if possible
+    const session = activeOpenAISessions.get(callId);
+    if (!session) return;
+
+    const ariClient = session.ariClient;
+    const sessionLogger = ariClient.logger || console;
 
     if (Buffer.isBuffer(data)) {
       messageContent = data.toString('utf8');
-    } else if (Array.isArray(data)) { // Handles Buffer[]
+    } else if (Array.isArray(data)) {
       try {
         messageContent = Buffer.concat(data).toString('utf8');
       } catch (e: any) {
-        sessionLogger.error(`OpenAI STT WebSocket: Error concatenating Buffer array for callId ${callId}: ${e.message}`);
-        messageContent = ''; // Ensure it's an empty string on error
+        sessionLogger.error(`OpenAI Realtime WebSocket: Error concatenating Buffer array for callId ${callId}: ${e.message}`);
+        messageContent = '';
       }
     } else if (data instanceof ArrayBuffer) {
       messageContent = Buffer.from(data).toString('utf8');
     } else {
-      sessionLogger.error(`OpenAI STT WebSocket: Received unexpected data type from WebSocket message for callId ${callId} that is not Buffer, Buffer[], or ArrayBuffer. Data inspection needed.`);
+      sessionLogger.error(`OpenAI Realtime WebSocket: Received unexpected data type for callId ${callId}.`);
       if (typeof data === 'string') {
          messageContent = data;
       } else if (data && typeof (data as any).toString === 'function') {
          messageContent = (data as any).toString();
-         sessionLogger.warn(`OpenAI STT WebSocket: Used generic .toString() on unexpected data type for callId ${callId}.`);
+         sessionLogger.warn(`OpenAI Realtime WebSocket: Used generic .toString() on unexpected data type for callId ${callId}.`);
       } else {
          messageContent = '';
-         sessionLogger.error(`OpenAI STT WebSocket: Data for callId ${callId} has no .toString() method and is of unknown type.`);
+         sessionLogger.error(`OpenAI Realtime WebSocket: Data for callId ${callId} has no .toString() method and is of unknown type.`);
       }
     }
 
     if (messageContent && messageContent.trim().length > 0) {
       try {
-        const parsedJson = JSON.parse(messageContent);
-        sessionLogger.debug(`[${callId}] OpenAI STT WebSocket message received (parsed):`, parsedJson);
+        const serverEvent = JSON.parse(messageContent);
+        sessionLogger.debug(`[${callId}] OpenAI Server Event:`, serverEvent);
 
-        // Existing logic to handle parsedJson and call ariClient methods (assumed to be below)
-        // For example, this is where the 'response' variable was used previously.
-        // We'll rename 'response' to 'parsedJson' for clarity if it's used below.
-        const response = parsedJson; // Keep 'response' if subsequent logic uses it.
-
-        // Hypothetical: Adapt OpenAI response to the structure ari-client expects
-      // This will need to be adjusted based on actual OpenAI STT API
-      let transcript = "";
-      let isFinal = false;
-      let speechEventType: "SPEECH_ACTIVITY_BEGIN" | "SPEECH_ACTIVITY_END" | null = null;
-
-      // Example adaptation (NEEDS ACTUAL API DOCS)
-      if (response.transcript) { // Fictional field
-          transcript = response.transcript;
+        switch (serverEvent.type) {
+          case 'session.created':
+            sessionLogger.info(`OpenAI session.created for ${callId}: ${JSON.stringify(serverEvent.session)}`);
+            // if (!session.isReady) {
+            //    ariClient._onOpenAISpeechStarted(callId);
+            //    session.isReady = true;
+            // }
+            break;
+          case 'response.text.delta':
+            if (serverEvent.delta && typeof serverEvent.delta.text === 'string') {
+              ariClient._onOpenAIInterimResult(callId, serverEvent.delta.text);
+            }
+            break;
+          case 'response.done':
+            sessionLogger.info(`OpenAI response.done for ${callId}.`);
+            let finalTranscriptText = "";
+            if (serverEvent.response && serverEvent.response.output && serverEvent.response.output.length > 0) {
+                const textOutput = serverEvent.response.output.find((item: any) => item.type === 'text_content' || (item.content && item.content.find((c:any) => c.type === 'text')));
+                if (textOutput) {
+                    if (textOutput.type === 'text_content') finalTranscriptText = textOutput.text;
+                    else if (textOutput.content) {
+                        const textPart = textOutput.content.find((c:any) => c.type === 'text');
+                        if (textPart) finalTranscriptText = textPart.text;
+                    }
+                } else {
+                    const altTextOutput = serverEvent.response.output.find((item:any) => item.transcript); // Check for direct transcript field as fallback
+                    if (altTextOutput) finalTranscriptText = altTextOutput.transcript;
+                }
+            }
+            if (finalTranscriptText) {
+              ariClient._onOpenAIFinalResult(callId, finalTranscriptText);
+            }
+            break;
+          case 'response.audio.delta':
+            if (serverEvent.delta && typeof serverEvent.delta.audio === 'string') {
+              if (typeof ariClient._onOpenAIAudioChunk === 'function') {
+                   ariClient._onOpenAIAudioChunk(callId, serverEvent.delta.audio, false); // isLast is false here
+              } else {
+                   sessionLogger.warn("ariClient._onOpenAIAudioChunk is not implemented yet.");
+              }
+            }
+            break;
+          case 'response.audio.done':
+            sessionLogger.info(`OpenAI response.audio.done for ${callId}.`);
+            // If _onOpenAIAudioChunk is used, this might be where you send the last chunk or signal completion.
+            // For now, we assume response.done might be the primary end signal for a full turn.
+            break;
+          case 'input_audio_buffer.speech_started':
+               sessionLogger.info(`OpenAI detected speech started for ${callId}`);
+               ariClient._onOpenAISpeechStarted(callId); // Explicitly call on speech_started from OpenAI
+               break;
+          case 'input_audio_buffer.speech_stopped':
+               sessionLogger.info(`OpenAI detected speech stopped for ${callId}`);
+               // Potentially trigger requestOpenAIResponse here if auto-responding after user speech.
+               break;
+          case 'error':
+            sessionLogger.error(`OpenAI Server Error for ${callId}:`, serverEvent.error || serverEvent);
+            ariClient._onOpenAIError(callId, serverEvent.error || serverEvent);
+            break;
+          default:
+            sessionLogger.debug(`OpenAI: Unhandled event type '${serverEvent.type}' for ${callId}.`);
+        }
+      } catch (e: any) {
+        sessionLogger.error(`OpenAI Realtime WebSocket: Error parsing JSON message for callId ${callId}: ${e.message}. Raw content: "${messageContent}"`);
+        ariClient._onOpenAIError(callId, new Error(`Failed to process STT message: ${e.message}`));
       }
-      if (response.is_final !== undefined) { // Fictional field
-          isFinal = response.is_final;
-      }
-      if(response.event === "speech_start") speechEventType = "SPEECH_ACTIVITY_BEGIN";
-      if(response.event === "speech_end") speechEventType = "SPEECH_ACTIVITY_END";
-
-
-      // Log the processed/adapted message
-      console.log(`[${callId}] Processed OpenAI STT message: Transcript='${transcript}', IsFinal=${isFinal}, Event=${speechEventType || 'none'}`);
-
-
-      if (isFinal) {
-        ariClient._onOpenAIFinalResult(callId, transcript);
-      } else if (transcript) { // Only send interim if there's text
-        ariClient._onOpenAIInterimResult(callId, transcript);
-      }
-      // If OpenAI sends explicit speech start/end events and they are mapped to speechEventType
-      if (speechEventType === "SPEECH_ACTIVITY_BEGIN") {
-         ariClient._onOpenAISpeechStarted(callId); // May be redundant if already called on 'open'
-      }
-      // TODO: Handle speech_end if OpenAI provides it and if ariClient needs it.
-      // ariClient._onOpenAISpeechEnded(callId);
-
-    } catch (e: any) {
-      sessionLogger.error(`OpenAI STT WebSocket: Error parsing JSON message for callId ${callId}: ${e.message}. Raw content: "${messageContent}"`);
-      // If ariClient is available on the session, call the error handler
-      const sessionForError = activeOpenAISessions.get(callId);
-      if (sessionForError) {
-        sessionForError.ariClient._onOpenAIError(callId, new Error(`Failed to process STT message: ${e.message}`));
+    } else {
+      if (messageContent !== '') {
+          sessionLogger.warn(`OpenAI Realtime WebSocket: Message content was empty after conversion/trimming for callId ${callId}.`);
       }
     }
-  } else {
-    if (messageContent !== '') {
-        sessionLogger.warn(`OpenAI STT WebSocket: Message content was empty after conversion/trimming or due to unexpected data type for callId ${callId}. Original data might have been non-empty.`);
-    }
-    // else, it was genuinely an empty message, potentially a keep-alive, so don't log verbosely.
-  }
   });
 
   ws.on('error', (error: Error) => {
@@ -275,10 +299,54 @@ export function stopOpenAISession(callId: string, reason: string): void {
 export function sendAudioToOpenAI(callId: string, audioPayload: Buffer): void {
   const session = activeOpenAISessions.get(callId);
   if (session && session.ws && session.ws.readyState === WebSocket.OPEN) {
-    // console.debug(`[${callId}] Sending audio chunk to OpenAI STT, length: ${audioPayload.length}`);
-    session.ws.send(audioPayload); // Send raw buffer as per subtask example
+    const base64AudioChunk = audioPayload.toString('base64');
+    const audioEvent = { type: 'input_audio_buffer.append', audio: base64AudioChunk };
+    try {
+      session.ws.send(JSON.stringify(audioEvent));
+    } catch (e:any) {
+      const sessionLogger = session.ariClient.logger || console;
+      sessionLogger.error(`[${callId}] Error sending audio event to OpenAI: ${e.message}`);
+    }
   } else {
-    // console.warn(`[${callId}] Cannot send audio to OpenAI STT: session not found or WebSocket not open. State: ${session?.ws?.readyState}`);
+    // const sessionLogger = session?.ariClient?.logger || console;
+    // sessionLogger.warn(`[${callId}] Cannot send audio to OpenAI: session not found or WebSocket not open. State: ${session?.ws?.readyState}`);
+  }
+}
+
+export function requestOpenAIResponse(callId: string, transcript: string, config: CallSpecificConfig): void {
+  const session = activeOpenAISessions.get(callId);
+  const sessionLogger = session?.ariClient?.logger || console;
+
+  if (!session || !session.ws || session.ws.readyState !== WebSocket.OPEN) {
+    sessionLogger.error(`[${callId}] Cannot request OpenAI response: session not found or WebSocket not open.`);
+    return;
+  }
+
+  try {
+    const conversationItemCreateEvent = {
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: transcript }]
+      }
+    };
+    session.ws.send(JSON.stringify(conversationItemCreateEvent));
+    sessionLogger.info(`[${callId}] Sent conversation.item.create with user transcript.`);
+
+    const responseCreateEvent = {
+      type: "response.create",
+      response: {
+        modalities: ["audio", "text"] // Request both audio and text
+        // voice: config.openAIRealtimeAPI?.ttsVoice || 'alloy', // Voice can also be set here or in session.update
+        // output_audio_format: { ... } // Can also be set here or in session.update
+      }
+    };
+    session.ws.send(JSON.stringify(responseCreateEvent));
+    sessionLogger.info(`[${callId}] Sent response.create requesting audio and text.`);
+
+  } catch (e:any) {
+    sessionLogger.error(`[${callId}] Error sending request for OpenAI response: ${e.message}`);
   }
 }
 
@@ -403,69 +471,8 @@ function closeModelConnection(callId: string) {
   }
 }
 
-export async function synthesizeSpeechOpenAI(config: CallSpecificConfig, textToSpeak: string, callLogger: any /* or your specific logger type */): Promise<Buffer | null> {
-  callLogger.info(`Attempting to synthesize speech for text: "${textToSpeak}"`);
-
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    callLogger.error('OpenAI API key is not set in environment variables.');
-    return null;
-  }
-
-  const ttsConfig = config.openAIRealtimeAPI;
-  if (!ttsConfig) {
-      callLogger.error('OpenAI TTS configuration is missing.');
-      return null;
-  }
-
-  const ttsUrl = `https://api.openai.com/v1/audio/speech`; // Standard URL, or use one from config if made configurable
-  const headers = {
-    'Authorization': `Bearer ${apiKey}`,
-    'Content-Type': 'application/json',
-  };
-
-  // Determine a suitable response_format. 'pcm' is preferred for raw audio if available.
-  // OpenAI supports: mp3, opus, aac, flac, wav, pcm.
-  // 'pcm' with s16le (signed 16-bit little-endian) is often good for Asterisk.
-  // If 'pcm' is chosen, ensure sample rate matches what Asterisk expects for base64 playback.
-  const responseFormat = ttsConfig.outputAudioFormat || 'mp3'; // Default to mp3 if not specified
-
-  const body: any = { // Use 'any' for body to dynamically add sample_rate
-    model: ttsConfig.ttsModel || 'tts-1', // Default model
-    input: textToSpeak,
-    voice: ttsConfig.ttsVoice || 'alloy',   // Default voice
-    response_format: responseFormat,
-    // speed: 1.0, // Optional: control speed
-  };
-
-  // OpenAI's API for PCM requires sample_rate if format is pcm or flac.
-  // Let's refine the body for this.
-  if (responseFormat === 'pcm' || responseFormat === 'flac') {
-      if (ttsConfig.outputAudioSampleRate) {
-          body.sample_rate = ttsConfig.outputAudioSampleRate;
-      } else {
-          // Default sample rate for PCM if not specified, e.g., 16000 or 24000
-          // OpenAI's default for PCM is 24kHz.
-          body.sample_rate = 24000;
-           callLogger.warn(`No outputAudioSampleRate specified for PCM/FLAC, defaulting to 24000 Hz for OpenAI TTS.`);
-      }
-  }
-
-  callLogger.debug(`OpenAI TTS Request: URL=${ttsUrl}, Model=${body.model}, Voice=${body.voice}, Format=${body.response_format}, SampleRate=${body.sample_rate || 'N/A'}`);
-
-  try {
-    const response = await axios.post(ttsUrl, body, { headers, responseType: 'arraybuffer' });
-    callLogger.info(`OpenAI TTS request successful. Received audio buffer of length: ${response.data.byteLength}`);
-    return Buffer.from(response.data);
-  } catch (error: any) {
-    if (axios.isAxiosError(error) && error.response) {
-      callLogger.error(`OpenAI TTS API error: ${error.response.status} - ${JSON.stringify(error.response.data)}`);
-    } else {
-      callLogger.error(`OpenAI TTS request error: ${error.message}`);
-    }
-    return null;
-  }
-}
+// Removing the axios-based synthesizeSpeechOpenAI as TTS audio is expected via WebSocket events
+// import axios from 'axios'; // Ensure this is removed if not used elsewhere, already done at top.
 
 function parseMessage(data: RawData): any {
   try { return JSON.parse(data.toString()); }

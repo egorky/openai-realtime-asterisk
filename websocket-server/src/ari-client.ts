@@ -98,8 +98,9 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   dtmfConf.dtmfTerminatorDigit = getVar(logger, channel, 'DTMF_TERMINATOR_DIGIT', dtmfConf.dtmfTerminatorDigit) ?? "#";
   dtmfConf.dtmfFinalTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_FINAL_TIMEOUT_SECONDS', dtmfConf.dtmfFinalTimeoutSeconds) ?? 3;
   const oaiConf = callConfig.openAIRealtimeAPI = callConfig.openAIRealtimeAPI || {};
+  // oaiConf.model = getVar(logger, channel, 'OPENAI_MODEL', oaiConf.model); // Commented out generic model
   // Ensure new fields are loaded, matching the structure in default.json
-  oaiConf.sttModel = getVar(logger, channel, 'APP_OPENAI_STT_MODEL', oaiConf.sttModel) ?? "whisper-1";
+  oaiConf.sttModel = getVar(logger, channel, 'OPENAI_STT_MODEL', oaiConf.sttModel, 'APP_OPENAI_STT_MODEL');
   oaiConf.ttsModel = getVar(logger, channel, 'APP_OPENAI_TTS_MODEL', oaiConf.ttsModel) ?? "tts-1";
   oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language) ?? "en";
   oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "pcm_s16le";
@@ -166,6 +167,8 @@ interface CallResources {
   vadActivationDelayTimer: NodeJS.Timeout | null; vadInitialSilenceDelayTimer: NodeJS.Timeout | null;
   playbackFailedHandler?: ((event: any, failedPlayback: Playback) => void) | null;
   waitingPlaybackFailedHandler?: ((event: any, playback: Playback) => void) | null;
+  ttsAudioChunks?: string[];
+  currentTtsResponseId?: string;
 }
 
 export class AriClientService implements AriClientInterface {
@@ -250,23 +253,58 @@ export class AriClientService implements AriClientInterface {
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
 
-    // Placeholder: Immediately synthesize and play back the received transcript (or a fixed response)
-    // In a real app, you'd generate a meaningful response based on the transcript.
-    const responseText = `I heard you say: ${transcript}. Thank you.`;
-    this._playTTSToCaller(callId, responseText)
-        .then(() => {
-            call.callLogger.info(`${logPrefix} TTS playback initiated for final transcript response.`);
-            // Decide if the call should end here or wait for more interaction.
-            // For this example, let's assume the call might continue or be cleaned up by other logic.
-            // If TTS marks the end of interaction, then cleanup:
-            // this._fullCleanup(callId, false, "TTS_PLAYBACK_COMPLETED");
-        })
-        .catch(e => call.callLogger.error(`${logPrefix} Error in TTS playback chain: ${e.message}`));
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
 
-    // The original _fullCleanup might be too soon if TTS is playing.
-    // Comment out the immediate cleanup:
-    // this._fullCleanup(callId, false, "FINAL_TRANSCRIPT_RECEIVED");
-    // Cleanup should happen after TTS or if no TTS is played.
+    if (call.ttsAudioChunks) {
+        call.ttsAudioChunks = [];
+    }
+
+    try {
+      sessionManager.requestOpenAIResponse(callId, transcript, call.config);
+    } catch (e: any) {
+      call.callLogger.error(`${logPrefix} Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
+    }
+
+    call.callLogger.info(`${logPrefix} Waiting for OpenAI to generate response (including potential audio).`);
+  }
+
+  public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, isLastChunk: boolean): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) {
+      (call?.callLogger || this.logger).warn(`[${callId}] _onOpenAIAudioChunk: Call not active or cleanup called. Ignoring audio chunk.`);
+      return;
+    }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+
+    if (!call.ttsAudioChunks) {
+      call.ttsAudioChunks = [];
+    }
+
+    if (audioChunkBase64 && audioChunkBase64.length > 0) {
+       call.callLogger.debug(`${logPrefix} Received TTS audio chunk, length: ${audioChunkBase64.length}. IsLast: ${isLastChunk}`);
+       call.ttsAudioChunks.push(audioChunkBase64);
+    }
+
+    if (isLastChunk) {
+      if (call.ttsAudioChunks.length > 0) {
+        const fullAudioBase64 = call.ttsAudioChunks.join('');
+        call.callLogger.info(`${logPrefix} All TTS audio chunks received. Total base64 length: ${fullAudioBase64.length}. Playing audio.`);
+        this.playbackAudio(callId, fullAudioBase64)
+          .then(() => {
+            call.callLogger.info(`${logPrefix} TTS audio playback initiated.`);
+            // TODO: Decide on call flow after TTS. Does it end? Wait for more user input?
+            // For now, let's assume the call continues or other logic handles cleanup.
+            // If TTS always ends the call: this._fullCleanup(callId, false, "TTS_PLAYBACK_COMPLETE");
+          })
+          .catch(e => {
+            call.callLogger.error(`${logPrefix} Error initiating TTS audio playback: ${e.message}`, e);
+          });
+      } else {
+        call.callLogger.warn(`${logPrefix} Received isLastChunk=true for TTS, but no audio chunks were accumulated.`);
+      }
+      call.ttsAudioChunks = []; // Reset for next potential TTS response
+    }
   }
 
   public _onOpenAIError(callId: string, error: any): void {
