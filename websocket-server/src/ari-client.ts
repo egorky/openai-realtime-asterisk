@@ -162,13 +162,12 @@ export class AriClientService implements AriClientInterface {
 
       this.client.on('StasisStart', this.onStasisStart.bind(this));
       this.client.on('ChannelDtmfReceived', this._onDtmfReceived.bind(this));
-      // PlaybackFinished and PlaybackFailed are now handled per-playback instance, not globally on client.
-      // this.client.on('PlaybackFinished', this.onPlaybackFinished.bind(this)); // Removed
-      // this.client.on('PlaybackFailed', this.onPlaybackFailed.bind(this));     // Removed
+      // PlaybackFinished and PlaybackFailed are handled per-playback instance
       this.client.on('ChannelTalkingStarted', this._onChannelTalkingStarted.bind(this));
       this.client.on('ChannelTalkingFinished', this._onChannelTalkingFinished.bind(this));
-      this.client.on('error', (err: Error) => this.onAriError(err));
-      this.client.on('close', () => this.onAriClose());
+      // Using 'as any' for event names and 'any' for err/event parameters to bypass potential strict type mismatches with @types/ari-client
+      this.client.on('error' as any, (err: any) => { this.onAriError(err); });
+      this.client.on('close' as any, () => { this.onAriClose(); }); // Kept simple, if event args needed, use (event: any)
 
       await this.client.start(ASTERISK_ARI_APP_NAME);
       this.logger.info(`ARI Stasis application '${ASTERISK_ARI_APP_NAME}' started and listening for calls.`);
@@ -182,24 +181,314 @@ export class AriClientService implements AriClientInterface {
     }
   }
 
-  public _onOpenAISpeechStarted(callId: string): void { /* ... existing code ... */ }
-  public _onOpenAIInterimResult(callId: string, transcript: string): void { /* ... existing code ... */ }
-  public _onOpenAIFinalResult(callId: string, transcript: string): void { /* ... existing code ... */ }
-  public _onOpenAIError(callId: string, error: any): void { /* ... existing code ... */ }
-  public _onOpenAISessionEnded(callId: string, reason: string): void { /* ... existing code ... */ }
-  private async _stopAllPlaybacks(call: CallResources): Promise<void> { /* ... existing code ... */ }
-  private async _onDtmfReceived(event: ChannelDtmfReceived, channel: Channel): Promise<void> { /* ... existing code ... */ }
-  private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> { /* ... existing code ... */ }
-  private _handleVADDelaysCompleted(callId: string): void { /* ... existing code ... */ }
-  private _handlePostPromptVADLogic(callId: string): void { /* ... existing code ... */ }
-  private async _onChannelTalkingStarted(event: ChannelTalkingStarted, channel: Channel): Promise<void> { /* ... existing code ... */ }
+  public _onOpenAISpeechStarted(callId: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.info('OpenAI speech recognition started (or first transcript received).');
+    if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+    if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+    call.speechHasBegun = true;
+  }
+
+  public _onOpenAIInterimResult(callId: string, transcript: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.debug(`OpenAI interim transcript: "${transcript}"`);
+    if (!call.speechHasBegun) {
+        if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+        if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+        call.speechHasBegun = true;
+        call.callLogger.info('Speech implicitly started with first interim transcript.');
+    }
+    if (call.mainPlayback && !call.promptPlaybackStoppedForInterim && call.config.appConfig.bargeInConfig.bargeInModeEnabled) {
+      call.callLogger.info('Stopping main prompt due to interim transcript (barge-in).');
+      this._stopAllPlaybacks(call).catch(e => call.callLogger.error("Error stopping playback on interim: " + (e instanceof Error ? e.message : String(e))));
+      call.promptPlaybackStoppedForInterim = true;
+    }
+    if (call.speechEndSilenceTimer) clearTimeout(call.speechEndSilenceTimer);
+    const silenceTimeout = (call.config.appConfig.appRecognitionConfig.speechCompleteTimeoutSeconds ?? 5) * 1000;
+    call.speechEndSilenceTimer = setTimeout(() => {
+      if (call.isCleanupCalled || !call.openAIStreamingActive) return;
+      call.callLogger.warn(`Silence detected for ${silenceTimeout}ms after interim transcript. Stopping OpenAI session for this turn.`);
+      sessionManager.stopOpenAISession(callId, 'interim_result_silence_timeout');
+    }, silenceTimeout);
+  }
+
+  public _onOpenAIFinalResult(callId: string, transcript: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.info(`OpenAI final transcript received: "${transcript}"`);
+    if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
+    call.finalTranscription = transcript;
+    this._fullCleanup(callId, false, "FINAL_TRANSCRIPT_RECEIVED");
+  }
+
+  public _onOpenAIError(callId: string, error: any): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.error('OpenAI stream error reported by sessionManager:', error);
+    call.openAIStreamError = error;
+    this._fullCleanup(callId, true, "OPENAI_STREAM_ERROR");
+  }
+
+  public _onOpenAISessionEnded(callId: string, reason: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.info(`OpenAI session ended event from sessionManager. Reason: ${reason}`);
+    call.openAIStreamingActive = false;
+    if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive) {
+        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout.`);
+    } else {
+        call.callLogger.info(`OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result, DTMF, error, or explicit stop).`);
+    }
+  }
+
+  private async _stopAllPlaybacks(call: CallResources): Promise<void> {
+    const playbacksToStop = [call.mainPlayback, call.waitingPlayback, call.postRecognitionWaitingPlayback];
+    for (const playback of playbacksToStop) {
+      if (playback) {
+        try {
+          call.callLogger.debug(`Stopping playback ${playback.id}.`);
+          await playback.stop();
+        } catch (e:any) { call.callLogger.warn(`Error stopping playback ${playback.id}: ${(e instanceof Error ? e.message : String(e))}`); }
+      }
+    }
+    call.mainPlayback = undefined;
+    call.waitingPlayback = undefined;
+    call.postRecognitionWaitingPlayback = undefined;
+  }
+
+  private async _onDtmfReceived(event: ChannelDtmfReceived, channel: Channel): Promise<void> {
+    const call = this.activeCalls.get(channel.id);
+    if (!call || call.isCleanupCalled) { return; }
+    if (call.channel.id !== channel.id) { return; }
+
+    call.callLogger.info(`DTMF digit '${event.digit}' received.`);
+    if (!call.config.appConfig.dtmfConfig.dtmfEnabled) {
+      call.callLogger.info('DTMF disabled by config. Ignoring.');
+      return;
+    }
+    call.callLogger.info('Entering DTMF mode: interrupting speech/VAD activities.');
+    call.dtmfModeActive = true;
+    call.speechRecognitionDisabledDueToDtmf = true;
+    call.isVADBufferingActive = false;
+    call.vadAudioBuffer = [];
+    call.pendingVADBufferFlush = false;
+    await this._stopAllPlaybacks(call);
+
+    if (call.openAIStreamingActive) {
+      call.callLogger.info('DTMF interrupting active OpenAI stream.');
+      call.dtmfInterruptedSpeech = true;
+      sessionManager.stopOpenAISession(call.channel.id, 'dtmf_interrupt');
+      call.openAIStreamingActive = false;
+      if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+      if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+      if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
+      call.speechHasBegun = false;
+    }
+    if(call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
+    if(call.vadActivationDelayTimer) { clearTimeout(call.vadActivationDelayTimer); call.vadActivationDelayTimer = null; }
+    if(call.vadInitialSilenceDelayTimer) { clearTimeout(call.vadInitialSilenceDelayTimer); call.vadInitialSilenceDelayTimer = null; }
+
+    call.collectedDtmfDigits += event.digit;
+    call.callLogger.info(`Collected DTMF: ${call.collectedDtmfDigits}`);
+
+    if (call.dtmfInterDigitTimer) clearTimeout(call.dtmfInterDigitTimer);
+    const interDigitTimeout = (call.config.appConfig.dtmfConfig.dtmfInterdigitTimeoutSeconds ?? 2) * 1000;
+    call.dtmfInterDigitTimer = setTimeout(() => { call.callLogger.info('DTMF inter-digit timer expired.'); }, interDigitTimeout);
+
+    if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
+    const finalTimeout = (call.config.appConfig.dtmfConfig.dtmfFinalTimeoutSeconds ?? 3) * 1000;
+    call.dtmfFinalTimer = setTimeout(async () => {
+      if (call.isCleanupCalled) return;
+      call.callLogger.info(`DTMF final timeout. Digits: ${call.collectedDtmfDigits}`);
+      if (call.dtmfModeActive && call.collectedDtmfDigits.length > 0) {
+        try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
+        catch (e: any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
+        this._fullCleanup(call.channel.id, false, "DTMF_FINAL_TIMEOUT");
+      } else { this._fullCleanup(call.channel.id, false, "DTMF_FINAL_TIMEOUT_NO_DIGITS"); }
+    }, finalTimeout);
+
+    const dtmfConfig = call.config.appConfig.dtmfConfig;
+    if (event.digit === dtmfConfig.dtmfTerminatorDigit) {
+      call.callLogger.info('DTMF terminator digit received.');
+      if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
+      try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
+      catch (e:any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
+      this._fullCleanup(call.channel.id, false, "DTMF_TERMINATOR_RECEIVED");
+    } else if (call.collectedDtmfDigits.length >= (dtmfConfig.dtmfMaxDigits ?? 16)) {
+      call.callLogger.info('Max DTMF digits reached.');
+      if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
+      try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
+      catch (e:any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
+      this._fullCleanup(call.channel.id, false, "DTMF_MAX_DIGITS_REACHED");
+    }
+  }
+
+  private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled || call.openAIStreamingActive) {
+      if(call?.openAIStreamingActive) call.callLogger.debug(`Activate called but stream already active. Reason: ${reason}`);
+      return;
+    }
+    call.callLogger.info(`Activating OpenAI streaming. Reason: ${reason}`);
+    call.openAIStreamingActive = true;
+
+    try {
+      await sessionManager.startOpenAISession(callId, this, call.config);
+      call.callLogger.info(`Session manager initiated OpenAI session for ${callId}.`);
+      if (call.pendingVADBufferFlush && call.vadAudioBuffer.length > 0) {
+        call.callLogger.info(`Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
+        call.isVADBufferingActive = false;
+        for (const audioPayload of call.vadAudioBuffer) { sessionManager.sendAudioToOpenAI(callId, audioPayload); }
+        call.vadAudioBuffer = []; call.pendingVADBufferFlush = false;
+      }
+      const noSpeechTimeout = call.config.appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds;
+      if (noSpeechTimeout > 0 && !call.speechHasBegun) {
+        call.noSpeechBeginTimer = setTimeout(() => {
+          if (call.isCleanupCalled || call.speechHasBegun) return;
+          call.callLogger.warn(`No speech from OpenAI in ${noSpeechTimeout}s. Stopping session & call.`);
+          sessionManager.stopOpenAISession(callId, "no_speech_timeout_in_ari");
+          this._fullCleanup(callId, true, "NO_SPEECH_BEGIN_TIMEOUT");
+        }, noSpeechTimeout * 1000);
+        call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
+      }
+      const streamIdleTimeout = 10;
+      call.initialOpenAIStreamIdleTimer = setTimeout(() => {
+         if (call.isCleanupCalled || call.speechHasBegun) return;
+         call.callLogger.warn(`OpenAI stream idle for ${streamIdleTimeout}s. Stopping session & call.`);
+         sessionManager.stopOpenAISession(callId, "initial_stream_idle_timeout_in_ari");
+         this._fullCleanup(callId, true, "OPENAI_STREAM_IDLE_TIMEOUT");
+      }, streamIdleTimeout * 1000);
+      call.callLogger.info(`InitialOpenAIStreamIdleTimer started (${streamIdleTimeout}s).`);
+    } catch (error: any) {
+        call.callLogger.error(`Error during _activateOpenAIStreaming for ${callId}: ${(error instanceof Error ? error.message : String(error))}`);
+        call.openAIStreamingActive = false;
+        this._onOpenAIError(callId, error);
+    }
+  }
+
+  private _handleVADDelaysCompleted(callId: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD' || call.config.appConfig.appRecognitionConfig.vadRecogActivation !== 'vadMode') {
+      return;
+    }
+    call.callLogger.debug(`VAD delays completed. InitialSilence: ${call.vadInitialSilenceDelayCompleted}, ActivationDelay: ${call.vadActivationDelayCompleted}`);
+
+    if (call.vadInitialSilenceDelayCompleted && call.vadActivationDelayCompleted) {
+      call.callLogger.info(`VAD vadMode: All initial delays completed.`);
+      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
+
+      if (call.vadSpeechActiveDuringDelay) {
+        call.callLogger.info('VAD vadMode: Speech detected during delays. Activating OpenAI stream.');
+        this._activateOpenAIStreaming(callId, "vad_speech_during_delay_window");
+        call.pendingVADBufferFlush = true;
+        if(call.channel) {
+            call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
+                .catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`));
+        }
+      } else {
+        call.callLogger.info('VAD vadMode: Delays completed, no prior speech. Listening via TALK_DETECT.');
+        this._handlePostPromptVADLogic(callId);
+      }
+    }
+  }
+
+  private _handlePostPromptVADLogic(callId: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
+      return;
+    }
+    call.callLogger.info(`VAD: Handling post-prompt/no-prompt logic for mode '${call.config.appConfig.appRecognitionConfig.vadRecogActivation}'.`);
+
+    const vadRecogActivation = call.config.appConfig.appRecognitionConfig.vadRecogActivation;
+
+    if (vadRecogActivation === 'afterPrompt') {
+      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
+      if (call.vadSpeechDetected) {
+        call.callLogger.info('VAD (afterPrompt): Speech previously detected. Activating OpenAI stream.');
+        this._activateOpenAIStreaming(callId, "vad_afterPrompt_speech_during_prompt");
+        call.pendingVADBufferFlush = true;
+        if(call.channel) {
+            call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
+                .catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`));
+        }
+      } else {
+        call.callLogger.info('VAD (afterPrompt): No speech during prompt. Starting max wait timer.');
+        const maxWait = call.config.appConfig.appRecognitionConfig.vadMaxWaitAfterPromptSeconds ?? 5;
+        if (maxWait > 0) {
+          if(call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
+          call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
+            if (call.isCleanupCalled || call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) return;
+            call.callLogger.warn(`VAD (afterPrompt): Max wait ${maxWait}s reached. Ending call.`);
+            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`)); }
+            this._fullCleanup(callId, true, "VAD_MAX_WAIT_TIMEOUT");
+          }, maxWait * 1000);
+        } else {
+            call.callLogger.info('VAD (afterPrompt): Max wait is 0 and no speech during prompt. Ending call.');
+            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`)); }
+            this._fullCleanup(callId, true, "VAD_MAX_WAIT_0_NO_SPEECH");
+        }
+      }
+    } else if (vadRecogActivation === 'vadMode') {
+      call.callLogger.info("VAD vadMode: Delays completed, no speech during delay. Actively listening via TALK_DETECT.");
+    }
+  }
+
+  private async _onChannelTalkingStarted(event: ChannelTalkingStarted, channel: Channel): Promise<void> {
+    const call = this.activeCalls.get(channel.id);
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
+      return;
+    }
+    call.callLogger.info(`TALK_DETECT: Speech started on channel ${channel.id}.`);
+
+    if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
+
+    const vadRecogActivation = call.config.appConfig.appRecognitionConfig.vadRecogActivation;
+    if (vadRecogActivation === 'vadMode') {
+      if (!call.vadInitialSilenceDelayCompleted || !call.vadActivationDelayCompleted) {
+        call.callLogger.debug('VAD (vadMode): Speech detected during initial VAD delays.');
+        call.vadSpeechActiveDuringDelay = true;
+        call.vadSpeechDetected = true;
+        return;
+      }
+    } else if (vadRecogActivation === 'afterPrompt') {
+      if (call.mainPlayback) {
+        call.callLogger.debug('VAD (afterPrompt): Speech detected during main prompt.');
+        call.vadSpeechDetected = true;
+        return;
+      }
+    }
+
+    call.callLogger.info('VAD: Speech detected, proceeding to activate stream.');
+    call.vadSpeechDetected = true;
+    call.vadRecognitionTriggeredAfterInitialDelay = true;
+
+    if (call.mainPlayback && !call.promptPlaybackStoppedForInterim) {
+      try {
+        call.callLogger.info('VAD: Stopping main prompt due to speech.');
+        await call.mainPlayback.stop();
+        call.promptPlaybackStoppedForInterim = true;
+      } catch (e: any) { call.callLogger.warn(`VAD: Error stopping main playback: ${e.message}`); }
+    }
+
+    if(call.bargeInActivationTimer) { clearTimeout(call.bargeInActivationTimer); call.bargeInActivationTimer = null; }
+    if(call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
+
+    this._activateOpenAIStreaming(call.channel.id, "vad_speech_detected_direct");
+    call.pendingVADBufferFlush = true;
+
+    try {
+      call.callLogger.info('VAD: Removing TALK_DETECT from channel after confirmed speech.');
+      await channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' });
+    } catch (e: any) { call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`); }
+  }
 
   private async _onChannelTalkingFinished(event: ChannelTalkingFinished, channel: Channel): Promise<void> {
     const call = this.activeCalls.get(channel.id);
     if (!call || call.channel.id !== channel.id || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
       return;
     }
-    // Corrected: event.duration from @types/ari-client
     call.callLogger.info(`TALK_DETECT: Speech finished. Duration: ${event.duration}ms`);
     call.vadSpeechDetected = false;
     if (!call.vadInitialSilenceDelayCompleted || !call.vadActivationDelayCompleted) {
@@ -207,12 +496,6 @@ export class AriClientService implements AriClientInterface {
     }
   }
 
-  /**
-   * Handles the completion or failure of a playback operation.
-   * This method is now called by specific event handlers on individual playback objects.
-   * @param callId The ID of the call.
-   * @param reason A string indicating why this handler was called (e.g., 'main_greeting_finished', 'main_greeting_failed').
-   */
   private _handlePlaybackFinished(callId: string, reason: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) {
@@ -221,7 +504,7 @@ export class AriClientService implements AriClientInterface {
 
     if (reason.startsWith('main_greeting_')) {
       call.callLogger.info(`Handling post-greeting logic for call ${callId}. Reason: ${reason}`);
-      call.mainPlayback = undefined; // Clear the playback object reference
+      call.mainPlayback = undefined;
 
       const activationMode = call.config.appConfig.appRecognitionConfig.recognitionActivationMode;
       if (activationMode === 'VAD') {
@@ -239,12 +522,8 @@ export class AriClientService implements AriClientInterface {
           this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation_post_greeting");
         }
       }
-      // If 'immediate' mode, OpenAI stream might have already started. No specific action here based on greeting.
     }
-    // TODO: Handle other playback types (e.g. waitingPlayback) if needed
   }
-
-  // Removed global onPlaybackFinished and onPlaybackFailed as they are now per-instance.
 
   private async onStasisStart(event: any, incomingChannel: Channel): Promise<void> {
     const callId = incomingChannel.id;
@@ -339,31 +618,29 @@ export class AriClientService implements AriClientInterface {
       }
 
       const greetingAudio = appRecogConf.greetingAudioPath;
-      if (greetingAudio && this.client) { // Removed promptPlaybackStoppedForInterim check here, as it's for barge-in
+      const call = callResources; // For use in event handlers if needed before full 'call' object is established
+      if (greetingAudio && this.client) {
         callLogger.info(`Playing greeting audio: ${greetingAudio}`);
-        // Corrected Playback Creation:
-        callResources.mainPlayback = this.client.Playback(); // Create playback object
+        callResources.mainPlayback = this.client.Playback();
 
         if (callResources.mainPlayback) {
-          // Attach event handlers to this specific playback instance
           callResources.mainPlayback.once('PlaybackFailed', (evt: any, instance: Playback) => {
-            const currentCall = this.activeCalls.get(callId); // Refresh call object
-            if (currentCall && instance.id === currentCall.mainPlayback?.id) { // Check if it's still the same playback
+            const currentCall = this.activeCalls.get(callId);
+            if (currentCall && instance.id === currentCall.mainPlayback?.id) {
               currentCall.callLogger.warn(`Main greeting playback ${instance.id} FAILED for call ${callId}. Reason: ${evt.message || 'Unknown'}`);
               this._handlePlaybackFinished(callId, 'main_greeting_failed');
             }
           });
           callResources.mainPlayback.once('PlaybackFinished', (evt: any, instance: Playback) => {
-            const currentCall = this.activeCalls.get(callId); // Refresh call object
+            const currentCall = this.activeCalls.get(callId);
             if (currentCall && instance.id === currentCall.mainPlayback?.id) {
               currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED for call ${callId}.`);
               this._handlePlaybackFinished(callId, 'main_greeting_finished');
             }
           });
-
-          // Initiate playback on the channel using the created playback's ID
           try {
-            await callResources.channel.play({ media: greetingAudio, playbackId: callResources.mainPlayback.id });
+            // Corrected channel.play call
+            await callResources.channel.play({ media: greetingAudio }, callResources.mainPlayback);
             callLogger.info(`Started main greeting playback ${callResources.mainPlayback.id} on channel ${callId}`);
           } catch (playError: any) {
             callLogger.error(`Error STARTING main greeting playback for call ${callId}: ${(playError instanceof Error ? playError.message : String(playError))}`);
@@ -373,10 +650,8 @@ export class AriClientService implements AriClientInterface {
            callLogger.error("Failed to create mainPlayback object.");
            this._handlePlaybackFinished(callId, 'main_greeting_creation_failed');
         }
-        // Removed: await callResources.mainPlayback.control();
-      } else { // No greeting audio or no client
+      } else {
         callLogger.info(greetingAudio ? 'Client not available for greeting playback.' : 'No greeting audio specified.');
-        // If no greeting, directly trigger post-greeting logic for applicable modes
         if (activationMode === 'FIXED_DELAY') {
             const delaySeconds = appRecogConf.bargeInDelaySeconds ?? 0.5;
             if(delaySeconds > 0) { callResources.bargeInActivationTimer = setTimeout(() => { if(!callResources.isCleanupCalled) this._activateOpenAIStreaming(callId, "fixedDelay_no_greeting_timer"); }, delaySeconds * 1000); }
@@ -397,8 +672,10 @@ export class AriClientService implements AriClientInterface {
   private _clearCallTimers(call: CallResources): void { /* ... */ }
   private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {  /* ... */  }
   private async cleanupCallResources(channelId: string, hangupChannel: boolean = false, isAriClosing: boolean = false, loggerInstance?: any ): Promise<void> { /* ... */ }
-  private onAriError(err: Error): void { /* ... */ }
-  private onAriClose(): void { /* ... */ }
+  private onAriError(err: any): void { // Changed to any for aggressive fix
+    this.logger.error('General ARI Client Error:', err);
+   }
+  private onAriClose(): void { /* ... */ } // Kept simple as it takes no args
   public async playbackAudio(channelId: string, audioPayloadB64: string): Promise<void> { /* ... */ }
   public async endCall(channelId: string): Promise<void> { /* ... */ }
 }
