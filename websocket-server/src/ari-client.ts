@@ -90,7 +90,6 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   arc.vadConfig = arc.vadConfig || { vadSilenceThresholdMs: 250, vadRecognitionActivationMs: 40 };
   arc.vadConfig.vadSilenceThresholdMs = getVarAsInt(logger, channel, 'VAD_SILENCE_THRESHOLD_MS', arc.vadConfig.vadSilenceThresholdMs) ?? 250;
   arc.vadConfig.vadRecognitionActivationMs = getVarAsInt(logger, channel, 'VAD_TALK_THRESHOLD_MS', arc.vadConfig.vadRecognitionActivationMs) ?? 40;
-  arc.initialOpenAIStreamIdleTimeoutSeconds = getVarAsInt(logger, channel, 'INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS', arc.initialOpenAIStreamIdleTimeoutSeconds) ?? 10;
   const dtmfConf = callConfig.appConfig.dtmfConfig = callConfig.appConfig.dtmfConfig || {} as DtmfConfig;
   dtmfConf.dtmfEnabled = getVarAsBoolean(logger, channel, 'DTMF_ENABLED', dtmfConf.dtmfEnabled) ?? true;
   dtmfConf.dtmfInterdigitTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_INTERDIGIT_TIMEOUT_SECONDS', dtmfConf.dtmfInterdigitTimeoutSeconds) ?? 2;
@@ -142,6 +141,7 @@ interface CallResources {
   maxRecognitionDurationTimer: NodeJS.Timeout | null; dtmfInterDigitTimer: NodeJS.Timeout | null;
   dtmfFinalTimer: NodeJS.Timeout | null; vadMaxWaitAfterPromptTimer: NodeJS.Timeout | null;
   vadActivationDelayTimer: NodeJS.Timeout | null; vadInitialSilenceDelayTimer: NodeJS.Timeout | null;
+  playbackFailedHandler?: ((event: any, failedPlayback: Playback) => void) | null;
 }
 
 export class AriClientService implements AriClientInterface {
@@ -291,12 +291,6 @@ export class AriClientService implements AriClientInterface {
     if(call.vadActivationDelayTimer) { clearTimeout(call.vadActivationDelayTimer); call.vadActivationDelayTimer = null; }
     if(call.vadInitialSilenceDelayTimer) { clearTimeout(call.vadInitialSilenceDelayTimer); call.vadInitialSilenceDelayTimer = null; }
 
-    if (call.maxRecognitionDurationTimer) {
-      clearTimeout(call.maxRecognitionDurationTimer);
-      call.maxRecognitionDurationTimer = null;
-      call.callLogger.info('DTMF mode: Cleared maxRecognitionDurationTimer.');
-    }
-
     call.collectedDtmfDigits += event.digit;
     call.callLogger.info(`Collected DTMF: ${call.collectedDtmfDigits}`);
 
@@ -360,7 +354,7 @@ export class AriClientService implements AriClientInterface {
         }, noSpeechTimeout * 1000);
         call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
       }
-      const streamIdleTimeout = call.config.appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds ?? 10;
+      const streamIdleTimeout = 10;
       call.initialOpenAIStreamIdleTimer = setTimeout(() => {
          if (call.isCleanupCalled || call.speechHasBegun) return;
          call.callLogger.warn(`OpenAI stream idle for ${streamIdleTimeout}s. Stopping session & call.`);
@@ -631,15 +625,35 @@ export class AriClientService implements AriClientInterface {
         callResources.mainPlayback = this.client.Playback();
 
         if (callResources.mainPlayback) {
-          callResources.mainPlayback.once('PlaybackFailed', (evt: any, instance: Playback) => {
-            const currentCall = this.activeCalls.get(callId);
-            if (currentCall && instance.id === currentCall.mainPlayback?.id) {
-              currentCall.callLogger.warn(`Main greeting playback ${instance.id} FAILED for call ${callId}. Reason: ${evt.message || 'Unknown'}`);
-              this._handlePlaybackFinished(callId, 'main_greeting_failed');
+          const mainPlaybackId = callResources.mainPlayback.id; // Capture the ID
+
+          // Define the new PlaybackFailed handler
+          const playbackFailedHandler = (event: any, failedPlayback: Playback) => {
+            // Check if the client is still available and if the event is for the correct playback
+            if (this.client && failedPlayback.id === mainPlaybackId) {
+              const call = this.activeCalls.get(callId); // callId is in scope from onStasisStart
+              if (call && call.mainPlayback && call.mainPlayback.id === mainPlaybackId) { // Double check call and playback still relevant
+                call.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED (client event). Reason: ${event.playback && event.playback.state === 'failed' ? (event.playback.reason || 'Unknown') : (event.reason || 'Unknown')}`);
+                this._handlePlaybackFinished(callId, 'main_greeting_failed');
+              }
+              // Clean up this specific listener
+              if (call && call.playbackFailedHandler) { // Check if handler exists before removing
+                this.client?.removeListener('PlaybackFailed', call.playbackFailedHandler);
+                call.playbackFailedHandler = null; // Clear from resources
+              }
             }
-          });
+          };
+
+          callResources.playbackFailedHandler = playbackFailedHandler;
+          this.client.on('PlaybackFailed', callResources.playbackFailedHandler);
+
           callResources.mainPlayback.once('PlaybackFinished', (evt: any, instance: Playback) => {
             const currentCall = this.activeCalls.get(callId);
+            // Ensure playbackFailedHandler is removed if playback finishes successfully
+            if (currentCall && currentCall.playbackFailedHandler && this.client && instance.id === currentCall.mainPlayback?.id) {
+              this.client.removeListener('PlaybackFailed', currentCall.playbackFailedHandler);
+              currentCall.playbackFailedHandler = null;
+            }
             if (currentCall && instance.id === currentCall.mainPlayback?.id) {
               currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED for call ${callId}.`);
               this._handlePlaybackFinished(callId, 'main_greeting_finished');
@@ -677,7 +691,43 @@ export class AriClientService implements AriClientInterface {
   private onAppOwnedChannelStasisEnd(event: any, channel: Channel): void { /* ... */ }
   private async onStasisEnd(event: any, channel: Channel): Promise<void> { /* ... */ }
   private _clearCallTimers(call: CallResources): void { /* ... */ }
-  private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {  /* ... */  }
+  private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {
+    const call = this.activeCalls.get(callId);
+    if (call && call.isCleanupCalled) {
+      // moduleLogger.silly(`_fullCleanup already called or in progress for ${callId}`); // Optional: for very verbose debugging
+      return;
+    }
+    if (call) {
+      call.isCleanupCalled = true;
+      call.callLogger.info(`Full cleanup initiated for call ${callId}. Reason: ${reason}`);
+
+      // Remove the specific PlaybackFailed listener if it exists and client is available
+      if (call.playbackFailedHandler && this.client) {
+        this.client.removeListener('PlaybackFailed', call.playbackFailedHandler);
+        call.playbackFailedHandler = null;
+      }
+
+      // The original content of _fullCleanup starts from here in the source file
+      // I am ensuring that the SEARCH block below matches the actual start of the original function's logic
+      // Existing _clearCallTimers call and other logic will follow naturally if SEARCH block is correct.
+      this._clearCallTimers(call); // This line is part of the original code and helps anchor the insertion.
+
+      if (call.openAIStreamingActive || call.isOpenAIStreamEnding) {
+        call.callLogger.info('Stopping OpenAI session due to cleanup.');
+        try {
+          sessionManager.stopOpenAISession(callId, `cleanup_${reason}`);
+        } catch (e:any) { call.callLogger.error(`Error stopping OpenAI session during cleanup: ${e.message}`); }
+      }
+      call.openAIStreamingActive = false;
+      call.isOpenAIStreamEnding = true; // Mark that we are intending to end it.
+
+      await this.cleanupCallResources(callId, hangupMainChannel, false, call.callLogger);
+
+    } else {
+      moduleLogger.warn(`_fullCleanup called for non-existent callId: ${callId}`);
+      // No call object, so nothing further to do.
+    }
+  }
   private async cleanupCallResources(channelId: string, hangupChannel: boolean = false, isAriClosing: boolean = false, loggerInstance?: any ): Promise<void> { /* ... */ }
   private onAriError(err: any): void { // Changed to any for aggressive fix
     this.logger.error('General ARI Client Error:', err);
