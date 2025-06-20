@@ -550,6 +550,23 @@ export class AriClientService implements AriClientInterface {
     const callerIdNum = incomingChannel.caller?.number || 'N/A';
     const logPrefix = `[${channelId}][Caller: ${callerIdNum}]`;
 
+    if (incomingChannel.name.startsWith('UnicastRTP/') || incomingChannel.name.startsWith('Snoop/')) {
+      callLogger.info(`${logPrefix} StasisStart for utility channel ${incomingChannel.name} (${incomingChannel.id}). Answering if needed and ignoring further setup.`);
+      try {
+        // It's important to answer these channels so Asterisk knows the app is aware of them,
+        // otherwise, they might timeout or be handled by other parts of the dialplan.
+        if (incomingChannel.state === 'RINGING' || incomingChannel.state === 'RING') {
+          await incomingChannel.answer();
+          callLogger.info(`${logPrefix} Answered utility channel ${incomingChannel.name}.`);
+        }
+      } catch (err: any) {
+        callLogger.warn(`${logPrefix} Error answering utility channel ${incomingChannel.name} (may already be up or hungup): ${err.message}`);
+      }
+      // These channels should be added to appOwnedChannelIds by the logic that *creates* them.
+      // This early exit simply prevents them from being processed as new, independent calls.
+      return; // Exit early from onStasisStart
+    }
+
     callLogger.info(`${logPrefix} StasisStart: New call entering application '${ASTERISK_ARI_APP_NAME}'.`); // Already good due to callLogger binding
     callLogger.info(`${logPrefix} New call onStasisStart. Channel ID: ${incomingChannel.id}, Name: ${incomingChannel.name}, Caller: ${JSON.stringify(incomingChannel.caller)}, Dialplan: ${JSON.stringify(incomingChannel.dialplan)}`);
 
