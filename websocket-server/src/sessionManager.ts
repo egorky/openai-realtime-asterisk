@@ -143,29 +143,45 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     }
   });
 
-  ws.on('message', (data: RawData) => { // Changed WebSocket.Data to RawData
-    let messageContent: string;
+  ws.on('message', (data: RawData) => {
+    let messageContent: string = '';
+    const sessionLogger = activeOpenAISessions.get(callId)?.ariClient?.logger || console; // Get logger if possible
+
     if (Buffer.isBuffer(data)) {
       messageContent = data.toString('utf8');
-    } else if (Array.isArray(data)) { // For Buffer[]
-      messageContent = Buffer.concat(data).toString('utf8');
+    } else if (Array.isArray(data)) { // Handles Buffer[]
+      try {
+        messageContent = Buffer.concat(data).toString('utf8');
+      } catch (e: any) {
+        sessionLogger.error(`OpenAI STT WebSocket: Error concatenating Buffer array for callId ${callId}: ${e.message}`);
+        messageContent = ''; // Ensure it's an empty string on error
+      }
     } else if (data instanceof ArrayBuffer) {
-        messageContent = Buffer.from(data).toString('utf8');
+      messageContent = Buffer.from(data).toString('utf8');
     } else {
-      // Should not happen with standard ws usage if messages are text/JSON
-      // but as a fallback if it's already a string (e.g. from a specific ws config)
-      messageContent = data.toString();
+      sessionLogger.error(`OpenAI STT WebSocket: Received unexpected data type from WebSocket message for callId ${callId} that is not Buffer, Buffer[], or ArrayBuffer. Data inspection needed.`);
+      if (typeof data === 'string') {
+         messageContent = data;
+      } else if (data && typeof (data as any).toString === 'function') {
+         messageContent = (data as any).toString();
+         sessionLogger.warn(`OpenAI STT WebSocket: Used generic .toString() on unexpected data type for callId ${callId}.`);
+      } else {
+         messageContent = '';
+         sessionLogger.error(`OpenAI STT WebSocket: Data for callId ${callId} has no .toString() method and is of unknown type.`);
+      }
     }
 
-    try {
-      // const messageString = data.toString(); // Original line, now handled by messageContent
-      // Assuming OpenAI STT sends JSON messages. This needs verification.
-      // The exact structure of OpenAI's realtime STT messages needs to be handled here.
-      // For now, let's assume a hypothetical structure and log it.
-      console.debug(`[${callId}] Raw message from OpenAI STT: ${messageContent}`);
-      const response = JSON.parse(messageContent); // Use messageContent
+    if (messageContent && messageContent.trim().length > 0) {
+      try {
+        const parsedJson = JSON.parse(messageContent);
+        sessionLogger.debug(`[${callId}] OpenAI STT WebSocket message received (parsed):`, parsedJson);
 
-      // Hypothetical: Adapt OpenAI response to the structure ari-client expects
+        // Existing logic to handle parsedJson and call ariClient methods (assumed to be below)
+        // For example, this is where the 'response' variable was used previously.
+        // We'll rename 'response' to 'parsedJson' for clarity if it's used below.
+        const response = parsedJson; // Keep 'response' if subsequent logic uses it.
+
+        // Hypothetical: Adapt OpenAI response to the structure ari-client expects
       // This will need to be adjusted based on actual OpenAI STT API
       let transcript = "";
       let isFinal = false;
@@ -199,9 +215,19 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       // ariClient._onOpenAISpeechEnded(callId);
 
     } catch (e: any) {
-      console.error(`SessionManager: Error processing message from OpenAI STT for callId ${callId}: ${e.message}. Data: ${data.toString()}`);
-      ariClient._onOpenAIError(callId, new Error(`Failed to process STT message: ${e.message}`));
+      sessionLogger.error(`OpenAI STT WebSocket: Error parsing JSON message for callId ${callId}: ${e.message}. Raw content: "${messageContent}"`);
+      // If ariClient is available on the session, call the error handler
+      const sessionForError = activeOpenAISessions.get(callId);
+      if (sessionForError) {
+        sessionForError.ariClient._onOpenAIError(callId, new Error(`Failed to process STT message: ${e.message}`));
+      }
     }
+  } else {
+    if (messageContent !== '') {
+        sessionLogger.warn(`OpenAI STT WebSocket: Message content was empty after conversion/trimming or due to unexpected data type for callId ${callId}. Original data might have been non-empty.`);
+    }
+    // else, it was genuinely an empty message, potentially a keep-alive, so don't log verbosely.
+  }
   });
 
   ws.on('error', (error: Error) => {
