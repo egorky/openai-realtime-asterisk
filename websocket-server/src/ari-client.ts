@@ -97,18 +97,40 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   dtmfConf.dtmfTerminatorDigit = getVar(logger, channel, 'DTMF_TERMINATOR_DIGIT', dtmfConf.dtmfTerminatorDigit) ?? "#";
   dtmfConf.dtmfFinalTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_FINAL_TIMEOUT_SECONDS', dtmfConf.dtmfFinalTimeoutSeconds) ?? 3;
   const oaiConf = callConfig.openAIRealtimeAPI = callConfig.openAIRealtimeAPI || {};
-  oaiConf.model = getVar(logger, channel, 'OPENAI_MODEL', oaiConf.model) ?? "gpt-4o-realtime-preview-2024-12-17";
-  oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language);
-  oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "g711_ulaw";
-  oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 8000;
-  oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat) ?? "g711_ulaw";
-  oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate) ?? 8000;
-  if (!oaiConf.inputAudioFormat && oaiConf.audioFormat) oaiConf.inputAudioFormat = oaiConf.audioFormat;
-  if (!oaiConf.inputAudioSampleRate && oaiConf.sampleRate) oaiConf.inputAudioSampleRate = oaiConf.sampleRate;
-  if (!oaiConf.outputAudioFormat && oaiConf.audioFormat) oaiConf.outputAudioFormat = oaiConf.audioFormat;
-  if (!oaiConf.outputAudioSampleRate && oaiConf.sampleRate) oaiConf.outputAudioSampleRate = oaiConf.sampleRate;
-  oaiConf.apiKey = process.env.OPENAI_API_KEY || "";
-  if (!oaiConf.apiKey) {
+  // Ensure new fields are loaded, matching the structure in default.json
+  oaiConf.sttModel = getVar(logger, channel, 'APP_OPENAI_STT_MODEL', oaiConf.sttModel) ?? "whisper-1";
+  oaiConf.ttsModel = getVar(logger, channel, 'APP_OPENAI_TTS_MODEL', oaiConf.ttsModel) ?? "tts-1";
+  oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language) ?? "en";
+  oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "pcm_s16le";
+  oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 16000;
+  oaiConf.ttsVoice = getVar(logger, channel, 'APP_OPENAI_TTS_VOICE', oaiConf.ttsVoice) ?? "alloy";
+  oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat) ?? "mp3";
+  oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate) ?? 24000;
+
+  // Deprecate old generic fields if specific ones are present, but allow fallback for backward compatibility if new ones are missing
+  if (!oaiConf.inputAudioFormat && oaiConf.audioFormat) {
+    logger.warn("Deprecated: Using generic 'audioFormat' for 'inputAudioFormat'. Please define 'inputAudioFormat'.");
+    oaiConf.inputAudioFormat = oaiConf.audioFormat;
+  }
+  if (oaiConf.inputAudioSampleRate === 8000 && oaiConf.sampleRate && oaiConf.sampleRate !== 8000) { // Default for inputAudioSampleRate changed to 16000
+    logger.warn("Deprecated: Using generic 'sampleRate' for 'inputAudioSampleRate'. Please define 'inputAudioSampleRate'.");
+    oaiConf.inputAudioSampleRate = oaiConf.sampleRate;
+  }
+  if (!oaiConf.outputAudioFormat && oaiConf.audioFormat) {
+    logger.warn("Deprecated: Using generic 'audioFormat' for 'outputAudioFormat'. Please define 'outputAudioFormat'.");
+    oaiConf.outputAudioFormat = oaiConf.audioFormat;
+  }
+  if (oaiConf.outputAudioSampleRate === 8000 && oaiConf.sampleRate && oaiConf.sampleRate !== 8000) { // Default for outputAudioSampleRate changed to 24000
+    logger.warn("Deprecated: Using generic 'sampleRate' for 'outputAudioSampleRate'. Please define 'outputAudioSampleRate'.");
+    oaiConf.outputAudioSampleRate = oaiConf.sampleRate;
+  }
+
+  // Remove apiKey from here, should be loaded directly by the service needing it if required from env
+  // oaiConf.apiKey = process.env.OPENAI_API_KEY || "";
+  // The API key is critical and should be handled securely, typically loaded directly by the service, not passed around in call config.
+  // For this specific implementation, sessionManager.ts is expected to load it from process.env.OPENAI_API_KEY.
+  // We'll ensure a check for its existence remains globally or within the service.
+  if (!process.env.OPENAI_API_KEY) {
     logger.error("CRITICAL: OPENAI_API_KEY is not set in environment variables. OpenAI connection will fail.");
   }
   return callConfig;
@@ -225,7 +247,24 @@ export class AriClientService implements AriClientInterface {
     call.callLogger.info(`${logPrefix} OpenAI final transcript received: "${transcript}"`);
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
-    this._fullCleanup(callId, false, "FINAL_TRANSCRIPT_RECEIVED");
+
+    // Placeholder: Immediately synthesize and play back the received transcript (or a fixed response)
+    // In a real app, you'd generate a meaningful response based on the transcript.
+    const responseText = `I heard you say: ${transcript}. Thank you.`;
+    this._playTTSToCaller(callId, responseText)
+        .then(() => {
+            call.callLogger.info(`${logPrefix} TTS playback initiated for final transcript response.`);
+            // Decide if the call should end here or wait for more interaction.
+            // For this example, let's assume the call might continue or be cleaned up by other logic.
+            // If TTS marks the end of interaction, then cleanup:
+            // this._fullCleanup(callId, false, "TTS_PLAYBACK_COMPLETED");
+        })
+        .catch(e => call.callLogger.error(`${logPrefix} Error in TTS playback chain: ${e.message}`));
+
+    // The original _fullCleanup might be too soon if TTS is playing.
+    // Comment out the immediate cleanup:
+    // this._fullCleanup(callId, false, "FINAL_TRANSCRIPT_RECEIVED");
+    // Cleanup should happen after TTS or if no TTS is played.
   }
 
   public _onOpenAIError(callId: string, error: any): void {
@@ -650,16 +689,24 @@ export class AriClientService implements AriClientInterface {
         throw err;
       }
 
-      // const externalMediaFormat = callConfig.openAIRealtimeAPI?.inputAudioFormat || DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA; // No longer needed, format is hardcoded to 'ulaw'
-      callLogger.info(`${logPrefix} Attempting to create externalMediaChannel for call ${callId} (app: ${ASTERISK_ARI_APP_NAME}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}, format: 'ulaw', encapsulation: 'rtp').`);
+      let externalMediaFormat = 'ulaw'; // Default
+      const openAIInputFormat = call.config.openAIRealtimeAPI?.inputAudioFormat?.toLowerCase();
+      if (openAIInputFormat === 'pcm_s16le' || openAIInputFormat === 'linear16' || openAIInputFormat === 'slin16') {
+        externalMediaFormat = 'slin16';
+      } else if (openAIInputFormat === 'g711_ulaw' || openAIInputFormat === 'mulaw' || openAIInputFormat === 'ulaw') {
+        externalMediaFormat = 'ulaw';
+      } else {
+        call.callLogger.warn(`${logPrefix} Unknown openAIRealtimeAPI.inputAudioFormat '${openAIInputFormat}', defaulting externalMediaFormat to 'ulaw'.`);
+      }
+      callLogger.info(`${logPrefix} Attempting to create externalMediaChannel for call ${callId} (app: ${ASTERISK_ARI_APP_NAME}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}, format: '${externalMediaFormat}', encapsulation: 'rtp').`);
       try {
         callResources.externalMediaChannel = await this.client.channels.externalMedia({
           app: ASTERISK_ARI_APP_NAME,
           external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
-          format: 'ulaw',
+          format: externalMediaFormat,
           encapsulation: 'rtp'
         });
-        callLogger.info(`${logPrefix} Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId}.`);
+        callLogger.info(`${logPrefix} Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId} with format ${externalMediaFormat}.`);
       } catch (err: any) {
         callLogger.error(`${logPrefix} FAILED to create externalMediaChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
         callLogger.error(`${logPrefix} Full error object for externalMediaChannel creation failure:`, err);
@@ -667,11 +714,11 @@ export class AriClientService implements AriClientInterface {
       }
       this.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
 
-      const snoopDirection = (callConfig.appConfig.appRecognitionConfig.recognitionActivationMode === 'VAD' ? 'in' : 'both') as ('in' | 'out' | 'both');
-      callLogger.info(`${logPrefix} Attempting to create snoopChannel on ${callId} (snoopId: snoop_${callId}, direction: ${snoopDirection}).`);
+      const snoopDirection = 'out' as ('in' | 'out' | 'both');
+      callLogger.info(`${logPrefix} Attempting to create snoopChannel on ${callId} (snoopId: snoop_${callId}, direction: '${snoopDirection}').`);
       try {
         callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
-        callLogger.info(`${logPrefix} Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId}.`);
+        callLogger.info(`${logPrefix} Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId} with direction '${snoopDirection}'.`);
       } catch (err: any) {
         callLogger.error(`${logPrefix} FAILED to create snoopChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
         callLogger.error(`${logPrefix} Full error object for snoopChannel creation failure:`, err);
@@ -1030,6 +1077,31 @@ export class AriClientService implements AriClientInterface {
     const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
     call.callLogger.info(`${logPrefix} endCall invoked. Initiating full cleanup.`);
     await this._fullCleanup(channelId, true, "EXPLICIT_ENDCALL_REQUEST");
+  }
+
+  private async _playTTSToCaller(callId: string, textToSpeak: string): Promise<void> {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) {
+      (call?.callLogger || this.logger).warn(`[${callId}] Cannot play TTS, call not active or cleanup called.`);
+      return;
+    }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+    call.callLogger.info(`${logPrefix} Requesting TTS for text: "${textToSpeak}"`);
+
+    try {
+      // @ts-ignore // sessionManager might not be typed on `this` directly if not explicitly added
+      const audioBuffer = await sessionManager.synthesizeSpeechOpenAI(call.config, textToSpeak, call.callLogger);
+
+      if (audioBuffer && audioBuffer.length > 0) {
+        const audioBase64 = audioBuffer.toString('base64');
+        call.callLogger.info(`${logPrefix} TTS audio received (${audioBuffer.length} bytes). Playing to caller.`);
+        await this.playbackAudio(callId, audioBase64); // playbackAudio is an existing method
+      } else {
+        call.callLogger.error(`${logPrefix} TTS synthesis failed or returned empty audio.`);
+      }
+    } catch (error: any) {
+      call.callLogger.error(`${logPrefix} Error during TTS synthesis or playback: ${error.message}`, error);
+    }
   }
 }
 

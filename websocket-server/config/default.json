@@ -22,9 +22,17 @@
     }
   },
   "openAIRealtimeAPI": {
-    "audioFormat": "PCMU",
+    "sttModel": "whisper-1",
+    "ttsModel": "tts-1",
+    "language": "en",
+    "inputAudioFormat": "pcm_s16le",
+    "inputAudioSampleRate": 16000,
+    "ttsVoice": "alloy",
+    "outputAudioFormat": "mp3",
+    "outputAudioSampleRate": 24000,
     "encoding": "LINEAR16",
-    "sampleRate": 8000
+    "sampleRate": 8000,
+    "audioFormat": "PCMU"
   },
   "logging": {
     "level": "info"
