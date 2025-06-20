@@ -1,0 +1,32 @@
+{
+  "appConfig": {
+    "appRecognitionConfig": {
+      "recognitionActivationMode": "VAD",
+      "noSpeechBeginTimeoutSeconds": 3,
+      "speechCompleteTimeoutSeconds": 5,
+      "vadConfig": {
+        "vadSilenceThresholdMs": 200,
+        "vadRecognitionActivationMs": 20
+      }
+    },
+    "dtmfConfig": {
+      "dtmfEnabled": true,
+      "dtmfInterdigitTimeoutSeconds": 2,
+      "dtmfMaxDigits": 16,
+      "dtmfTerminatorDigit": "#"
+    },
+    "bargeInConfig": {
+      "bargeInModeEnabled": true,
+      "bargeInDelaySeconds": 0.5,
+      "noSpeechBargeInTimeoutSeconds": 5
+    }
+  },
+  "openAIRealtimeAPI": {
+    "audioFormat": "PCMU",
+    "encoding": "LINEAR16",
+    "sampleRate": 8000
+  },
+  "logging": {
+    "level": "info"
+  }
+}
