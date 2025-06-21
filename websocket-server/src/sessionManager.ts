@@ -83,15 +83,13 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
   const baseUrl = "wss://api.openai.com/v1/realtime";
   let wsQueryString = "";
 
-  if (sttConfig?.sttModel && sttConfig.sttModel.trim() !== "") {
-    wsQueryString = `?model=${sttConfig.sttModel}`;
-    // Example of adding language if it were a query param (OpenAI Realtime might take it in-band)
-    // if (sttConfig.language) wsQueryString += `&language=${sttConfig.language}`;
+  if (sttConfig?.model && sttConfig.model.trim() !== "") { // Corrected to use unified 'model'
+    wsQueryString = `?model=${sttConfig.model}`;
   } else if (sttConfig?.transcriptionIntentOnly === true) {
     wsQueryString = `?intent=transcription`;
   } else {
-    localLogger.error('OpenAI STT: sttModel or transcriptionIntentOnly not clearly configured. Defaulting to example model.');
-    wsQueryString = `?model=gpt-4o-realtime-preview-2024-12-17`; // Default if not specified
+    localLogger.error('OpenAI STT: model or transcriptionIntentOnly not clearly configured. Defaulting to example model.');
+    wsQueryString = `?model=gpt-4o-mini-realtime-preview-2024-12-17`; // Default if not specified
   }
   const wsUrl = baseUrl + wsQueryString;
 
@@ -108,29 +106,15 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
 
   ws.on('open', () => {
     console.log(`SessionManager: OpenAI Realtime WebSocket connection established for callId ${callId}.`);
-    // Do not call _onOpenAISpeechStarted here; wait for session.created or actual speech events.
-
-    const sttConfig = config.openAIRealtimeAPI;
+    const currentSTTConfig = newSession.config.openAIRealtimeAPI; // Use config from the newSession instance
     const sessionLoggerForOpen = newSession.ariClient.logger || console;
 
-    // IMPORTANT: The exact structure of this session.update message, especially audio_attributes,
-    // must be verified with the official OpenAI Realtime API documentation.
     const sessionUpdateEvent = {
       type: "session.update",
       session: {
-        input_audio_format: {
-           encoding: sttConfig?.inputAudioFormat || 'pcm_s16le',
-           sample_rate: sttConfig?.inputAudioSampleRate || 16000,
-           channels: 1,
-        },
-        output_audio_format: {
-           encoding: sttConfig?.outputAudioFormat || 'pcm_s16le',
-           sample_rate: sttConfig?.outputAudioSampleRate || 24000,
-           channels: 1,
-        },
-        voice: sttConfig?.ttsVoice || 'alloy',
-        language: sttConfig?.language || "en",
-        // instructions: "Your default system prompt here if any", // Example
+        input_audio_format: currentSTTConfig?.inputAudioFormat || 'pcm_s16le', // String value from config
+        output_audio_format: currentSTTConfig?.outputAudioFormat || 'pcm_s16le', // String value from config
+        voice: currentSTTConfig?.ttsVoice || 'alloy'
       }
     };
 
@@ -149,8 +133,8 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     const session = activeOpenAISessions.get(callId);
     if (!session) return;
 
-    const ariClient = session.ariClient;
-    const sessionLogger = ariClient.logger || console;
+    const currentAriClient = session.ariClient; // Renamed for clarity
+    const sessionLogger = currentAriClient.logger || console;
 
     if (Buffer.isBuffer(data)) {
       messageContent = data.toString('utf8');
@@ -184,14 +168,15 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
         switch (serverEvent.type) {
           case 'session.created':
             sessionLogger.info(`OpenAI session.created for ${callId}: ${JSON.stringify(serverEvent.session)}`);
-            // if (!session.isReady) {
-            //    ariClient._onOpenAISpeechStarted(callId);
-            //    session.isReady = true;
-            // }
+            break;
+          case 'session.updated':
+            sessionLogger.info(`OpenAI session.updated for ${callId}: ${JSON.stringify(serverEvent.session)}`);
+            // Potentially update session.config or other session state based on serverEvent.session
+            // For now, just logging.
             break;
           case 'response.text.delta':
             if (serverEvent.delta && typeof serverEvent.delta.text === 'string') {
-              ariClient._onOpenAIInterimResult(callId, serverEvent.delta.text);
+              currentAriClient._onOpenAIInterimResult(callId, serverEvent.delta.text);
             }
             break;
           case 'response.done':
@@ -206,18 +191,18 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
                         if (textPart) finalTranscriptText = textPart.text;
                     }
                 } else {
-                    const altTextOutput = serverEvent.response.output.find((item:any) => item.transcript); // Check for direct transcript field as fallback
+                    const altTextOutput = serverEvent.response.output.find((item:any) => item.transcript);
                     if (altTextOutput) finalTranscriptText = altTextOutput.transcript;
                 }
             }
             if (finalTranscriptText) {
-              ariClient._onOpenAIFinalResult(callId, finalTranscriptText);
+              currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
             }
             break;
           case 'response.audio.delta':
             if (serverEvent.delta && typeof serverEvent.delta.audio === 'string') {
-              if (typeof ariClient._onOpenAIAudioChunk === 'function') {
-                   ariClient._onOpenAIAudioChunk(callId, serverEvent.delta.audio, false); // isLast is false here
+              if (typeof currentAriClient._onOpenAIAudioChunk === 'function') {
+                   currentAriClient._onOpenAIAudioChunk(callId, serverEvent.delta.audio, false); // isLast is false here
               } else {
                    sessionLogger.warn("ariClient._onOpenAIAudioChunk is not implemented yet.");
               }
@@ -225,27 +210,24 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             break;
           case 'response.audio.done':
             sessionLogger.info(`OpenAI response.audio.done for ${callId}.`);
-            // If _onOpenAIAudioChunk is used, this might be where you send the last chunk or signal completion.
-            // For now, we assume response.done might be the primary end signal for a full turn.
             break;
           case 'input_audio_buffer.speech_started':
                sessionLogger.info(`OpenAI detected speech started for ${callId}`);
-               ariClient._onOpenAISpeechStarted(callId); // Explicitly call on speech_started from OpenAI
+               currentAriClient._onOpenAISpeechStarted(callId);
                break;
           case 'input_audio_buffer.speech_stopped':
                sessionLogger.info(`OpenAI detected speech stopped for ${callId}`);
-               // Potentially trigger requestOpenAIResponse here if auto-responding after user speech.
                break;
           case 'error':
             sessionLogger.error(`OpenAI Server Error for ${callId}:`, serverEvent.error || serverEvent);
-            ariClient._onOpenAIError(callId, serverEvent.error || serverEvent);
+            currentAriClient._onOpenAIError(callId, serverEvent.error || serverEvent);
             break;
           default:
             sessionLogger.debug(`OpenAI: Unhandled event type '${serverEvent.type}' for ${callId}.`);
         }
       } catch (e: any) {
         sessionLogger.error(`OpenAI Realtime WebSocket: Error parsing JSON message for callId ${callId}: ${e.message}. Raw content: "${messageContent}"`);
-        ariClient._onOpenAIError(callId, new Error(`Failed to process STT message: ${e.message}`));
+        currentAriClient._onOpenAIError(callId, new Error(`Failed to process STT message: ${e.message}`));
       }
     } else {
       if (messageContent !== '') {
@@ -256,20 +238,18 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
 
   ws.on('error', (error: Error) => {
     console.error(`SessionManager: OpenAI STT WebSocket error for callId ${callId}:`, error);
-    ariClient._onOpenAIError(callId, error);
+    ariClient._onOpenAIError(callId, error); // ariClient is from outer scope
     if (activeOpenAISessions.has(callId)) {
         activeOpenAISessions.delete(callId);
-        // ws.close() is implicitly handled or will be attempted by the 'error' event itself.
     }
   });
 
   ws.on('close', (code: number, reason: Buffer) => {
     const reasonStr = reason.toString() || "Unknown reason";
     console.log(`SessionManager: OpenAI STT WebSocket closed for callId ${callId}. Code: ${code}, Reason: ${reasonStr}`);
-    // ariClient._onOpenAISessionEnded should be called to inform ari-client,
-    // but only if it wasn't already closed due to an error that also triggered cleanup.
-    if (activeOpenAISessions.has(callId)) { // Check if not already cleaned up by 'error'
-        ariClient._onOpenAISessionEnded(callId, reasonStr);
+    if (activeOpenAISessions.has(callId)) {
+        const closedSession = activeOpenAISessions.get(callId);
+        closedSession?.ariClient._onOpenAISessionEnded(callId, reasonStr); // Use ariClient from the session map
         activeOpenAISessions.delete(callId);
     }
   });
@@ -281,12 +261,10 @@ export function stopOpenAISession(callId: string, reason: string): void {
   if (session) {
     if (session.ws && session.ws.readyState === WebSocket.OPEN) {
       console.log(`SessionManager: Closing OpenAI STT WebSocket for ${callId}.`);
-      session.ws.close(1000, reason); // Normal closure
+      session.ws.close(1000, reason);
     } else {
       console.log(`SessionManager: OpenAI STT WebSocket for ${callId} was already closed or not in OPEN state.`);
     }
-    // The 'close' event handler will call _onOpenAISessionEnded and delete from map.
-    // However, to ensure immediate feedback if ws was not open, call it here if not already cleaned.
     if (activeOpenAISessions.has(callId)) {
         session.ariClient._onOpenAISessionEnded(callId, `Stopped by system: ${reason}`);
         activeOpenAISessions.delete(callId);
@@ -307,9 +285,6 @@ export function sendAudioToOpenAI(callId: string, audioPayload: Buffer): void {
       const sessionLogger = session.ariClient.logger || console;
       sessionLogger.error(`[${callId}] Error sending audio event to OpenAI: ${e.message}`);
     }
-  } else {
-    // const sessionLogger = session?.ariClient?.logger || console;
-    // sessionLogger.warn(`[${callId}] Cannot send audio to OpenAI: session not found or WebSocket not open. State: ${session?.ws?.readyState}`);
   }
 }
 
@@ -337,21 +312,17 @@ export function requestOpenAIResponse(callId: string, transcript: string, config
     const responseCreateEvent = {
       type: "response.create",
       response: {
-        modalities: ["audio", "text"] // Request both audio and text
-        // voice: config.openAIRealtimeAPI?.ttsVoice || 'alloy', // Voice can also be set here or in session.update
-        // output_audio_format: { ... } // Can also be set here or in session.update
+        modalities: config.openAIRealtimeAPI?.responseModalities || ["audio", "text"],
       }
     };
     session.ws.send(JSON.stringify(responseCreateEvent));
-    sessionLogger.info(`[${callId}] Sent response.create requesting audio and text.`);
+    sessionLogger.info(`[${callId}] Sent response.create requesting modalities: ${JSON.stringify(responseCreateEvent.response.modalities)}`);
 
   } catch (e:any) {
     sessionLogger.error(`[${callId}] Error sending request for OpenAI response: ${e.message}`);
   }
 }
 
-// This function might need to be split or adapted if the old activeSessions map is still in use for other things.
-// For now, it will primarily clean up the new activeOpenAISessions.
 export function handleAriCallEnd(callId: string) {
   console.log(`SessionManager: ARI call ${callId} ended. Cleaning up associated OpenAI STT session data.`);
   const openAISession = activeOpenAISessions.get(callId);
@@ -364,7 +335,6 @@ export function handleAriCallEnd(callId: string) {
     console.log(`SessionManager: OpenAI STT session data for callId ${callId} removed.`);
   }
 
-  // Preserve cleanup for the old session type if it's still relevant
   const oldSession = activeSessions.get(callId);
   if (oldSession) {
     if (isOpen(oldSession.modelConn)) {
@@ -376,7 +346,7 @@ export function handleAriCallEnd(callId: string) {
     }
     activeSessions.delete(callId);
     console.log(`SessionManager (Legacy): Old session data for callId ${callId} fully removed.`);
-  } else if (!openAISession) { // Only log warning if neither new nor old session was found
+  } else if (!openAISession) {
     console.warn(`SessionManager: Received ARI call end for callId ${callId}, but no session data was found (already cleaned up or never existed).`);
   }
 }
@@ -393,15 +363,13 @@ export function handleFrontendConnection(ws: WebSocket) {
   });
 }
 
-// This function might need to be aware of whether it's interacting with an old session or a new OpenAISession
 function handleFrontendMessage(callId: string | null, data: RawData) {
   const msg = parseMessage(data);
   if (!msg) return;
   const targetCallId = msg.callId || callId;
 
   if (targetCallId) {
-    const session = getSession(targetCallId, "handleFrontendMessageTargeted"); // getSession currently returns CallSessionData
-    // TODO: Adapt this if it needs to interact with the new activeOpenAISessions or if getSession is updated
+    const session = getSession(targetCallId, "handleFrontendMessageTargeted");
     if (session && isOpen(session.modelConn) && msg.type !== "session.update") {
       jsonSend(session.modelConn, msg);
     } else if (session && msg.type === "session.update") {
@@ -412,10 +380,8 @@ function handleFrontendMessage(callId: string | null, data: RawData) {
   }
 }
 
-// This function is specifically for the old model connection.
-// A new handler for messages from OpenAI STT WebSocket is part of startOpenAISession.
 function handleModelMessage(callId: string, data: RawData) {
-  const session = getSession(callId, "handleModelMessage"); // This refers to the old CallSessionData
+  const session = getSession(callId, "handleModelMessage");
   if (!session) return;
 
   const event = parseMessage(data);
@@ -426,23 +392,13 @@ function handleModelMessage(callId: string, data: RawData) {
   console.debug(`[${callId}] Received message from old OpenAI model: type '${event?.type}'`);
   jsonSend(globalFrontendConn || session.frontendConn, event);
 
-  // This switch is for the old model's message types.
-  // The new STT WebSocket messages are handled in its 'message' handler within startOpenAISession.
   switch (event.type) {
-    case "transcript": // This case might be reused if the new STT also sends "transcript"
+    case "transcript":
       console.info(`[${callId}] Old OpenAI transcript (is_final: ${event.is_final}): ${event.text}`);
-      // session.ariClient._onOpenAISpeechStarted(callId); // This call might be different for new STT
-      // if (event.is_final === true && typeof event.text === 'string') {
-      //   session.ariClient._onOpenAIFinalResult(callId, event.text);
-      // } else if (typeof event.text === 'string') {
-      //   session.ariClient._onOpenAIInterimResult(callId, event.text);
-      // }
       break;
-    // ... other cases for the old model ...
     case "error":
         console.error(`[${callId}] Old OpenAI model error: ${event.message}`);
         console.error(`SessionManager: Received error event from old OpenAI model for callId ${callId}:`, event.message || event);
-        // session.ariClient._onOpenAIError(callId, event.message || event); // This call might be different for new STT
         break;
   }
 }
@@ -470,9 +426,6 @@ function closeModelConnection(callId: string) {
     session.modelConn = undefined;
   }
 }
-
-// Removing the axios-based synthesizeSpeechOpenAI as TTS audio is expected via WebSocket events
-// import axios from 'axios'; // Ensure this is removed if not used elsewhere, already done at top.
 
 function parseMessage(data: RawData): any {
   try { return JSON.parse(data.toString()); }

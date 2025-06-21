@@ -68,5 +68,15 @@
     "dtmfInterDigitTimeoutSeconds": 3.0,
     "dtmfFinalTimeoutSeconds": 5.0,
     "enableDtmfRecognition": true
+  },
+  "openAI": {
+    "apiKey": "",
+    "sttModel": "whisper-1",
+    "ttsModel": "tts-1",
+    "ttsVoice": "alloy",
+    "apiBaseUrl": "https://api.openai.com/v1",
+    "realtimeSttLanguage": "en",
+    "realtimeSttEncoding": "pcm_s16le",
+    "realtimeSttSampleRate": 16000
   }
 }

@@ -86,7 +86,8 @@ async function getCallSpecificConfig(channel, baseConfig, envVars, callLogger) {
     audio: {},
     appRecognitionConfig: {},
     googleSpeech: { diarizationConfig: {}, enableSpokenPunctuation: {}, enableSpokenEmojis: {} },
-    dtmfConfig: {}
+    dtmfConfig: {},
+    openAI: {}
   };
 
   /**
@@ -189,6 +190,7 @@ async function getCallSpecificConfig(channel, baseConfig, envVars, callLogger) {
   // Populate googleSpeech config
   const googleSpeechBaseCfg = baseConfig.googleSpeech || {};
   const dtmfBaseConfig = baseConfig.dtmfConfig || {};
+  const openAIBaseCfg = baseConfig.openAI || {};
 
   callConfig.googleSpeech.model = await getVar('APP_GOOGLESPEECH_MODEL', 'APP_GOOGLESPEECH_MODEL', googleSpeechBaseCfg.model || '', 'string');
   callConfig.googleSpeech.diarizationConfig.minSpeakerCount = await getVar('APP_GOOGLESPEECH_DIARIZATIONCONFIG_MINSPEAKERCOUNT', 'APP_GOOGLESPEECH_DIARIZATIONCONFIG_MINSPEAKERCOUNT', (googleSpeechBaseCfg.diarizationConfig && googleSpeechBaseCfg.diarizationConfig.minSpeakerCount) || 2, 'integer');
@@ -239,6 +241,16 @@ async function getCallSpecificConfig(channel, baseConfig, envVars, callLogger) {
   callConfig.googleSpeech.voiceActivityTimeout = {};
   callConfig.googleSpeech.voiceActivityTimeout.speechStartTimeoutSeconds = await getVar('APP_GOOGLESPEECH_VOICEACTIVITYTIMEOUT_SPEECHSTARTTIMEOUTSECONDS', 'GOOGLE_SPEECH_VOICEACTIVITYTIMEOUT_SPEECHSTARTTIMEOUTSECONDS', (googleSpeechBaseCfg.voiceActivityTimeout && googleSpeechBaseCfg.voiceActivityTimeout.speechStartTimeoutSeconds) || 10.0, 'float');
   callConfig.googleSpeech.voiceActivityTimeout.speechEndTimeoutSeconds = await getVar('APP_GOOGLESPEECH_VOICEACTIVITYTIMEOUT_SPEECHENDTIMEOUTSECONDS', 'GOOGLE_SPEECH_VOICEACTIVITYTIMEOUT_SPEECHENDTIMEOUTSECONDS', (googleSpeechBaseCfg.voiceActivityTimeout && googleSpeechBaseCfg.voiceActivityTimeout.speechEndTimeoutSeconds) || 1.5, 'float');
+
+  // Populate openAI config
+  callConfig.openAI.apiKey = await getVar('APP_OPENAI_API_KEY', 'OPENAI_API_KEY', openAIBaseCfg.apiKey || '', 'string');
+  callConfig.openAI.sttModel = await getVar('APP_OPENAI_STT_MODEL', 'OPENAI_STT_MODEL', openAIBaseCfg.sttModel || 'whisper-1', 'string');
+  callConfig.openAI.ttsModel = await getVar('APP_OPENAI_TTS_MODEL', 'OPENAI_TTS_MODEL', openAIBaseCfg.ttsModel || 'tts-1', 'string');
+  callConfig.openAI.ttsVoice = await getVar('APP_OPENAI_TTS_VOICE', 'OPENAI_TTS_VOICE', openAIBaseCfg.ttsVoice || 'alloy', 'string');
+  callConfig.openAI.apiBaseUrl = await getVar('APP_OPENAI_API_BASE_URL', 'OPENAI_API_BASE_URL', openAIBaseCfg.apiBaseUrl || 'https://api.openai.com/v1', 'string');
+  callConfig.openAI.realtimeSttLanguage = await getVar('APP_OPENAI_STT_LANG', 'OPENAI_STT_LANG', openAIBaseCfg.realtimeSttLanguage || 'en', 'string');
+  callConfig.openAI.realtimeSttEncoding = await getVar('APP_OPENAI_STT_ENCODING', 'OPENAI_STT_ENCODING', openAIBaseCfg.realtimeSttEncoding || 'pcm_s16le', 'string');
+  callConfig.openAI.realtimeSttSampleRate = await getVar('APP_OPENAI_STT_SAMPLERATE', 'OPENAI_STT_SAMPLERATE', openAIBaseCfg.realtimeSttSampleRate || 16000, 'integer');
 
   // Populate dtmfConfig
   callConfig.dtmfConfig.enableDtmfRecognition = await getVar('APP_DTMF_ENABLED', 'DTMF_ENABLED', dtmfBaseConfig.hasOwnProperty('enableDtmfRecognition') ? dtmfBaseConfig.enableDtmfRecognition : true, 'boolean');

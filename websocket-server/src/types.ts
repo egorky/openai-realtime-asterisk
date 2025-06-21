@@ -78,9 +78,7 @@ export interface AppConfig {
 }
 
 export interface OpenAIRealtimeAPIConfig {
-  model?: string;
-  sttModel?: string; // e.g., "whisper-1"
-  ttsModel?: string; // e.g., "tts-1"
+  model?: string; // Unified model for Realtime API sessions
   language?: string; // e.g., "en" or "en-US"
   inputAudioFormat?: string; // e.g., "pcm_s16le", "g711_ulaw"
   inputAudioSampleRate?: number; // e.g., 8000, 16000
@@ -88,6 +86,7 @@ export interface OpenAIRealtimeAPIConfig {
   outputAudioSampleRate?: number; // e.g., 24000, 16000
   ttsVoice?: string; // e.g., "alloy"
   transcriptionIntentOnly?: boolean; // Custom flag if STT is only for intent not full conversation
+  responseModalities?: ("audio" | "text")[]; // Added new property
 
   // Deprecated fields, kept for potential reference or if used by older configs:
   audioFormat?: string;

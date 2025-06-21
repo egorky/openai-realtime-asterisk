@@ -24,6 +24,8 @@ dotenv.config();
 function getVar(logger: any, channel: Channel | undefined, envVarName: string, defaultValue?: string, channelVarName?: string): string | undefined {
   const astVarName = channelVarName || `APP_${envVarName}`;
   let value: string | undefined;
+  // TODO: Implement actual channel variable fetching if channel is provided and astVarName is relevant
+  // For now, it primarily uses env vars and defaults.
   if (value === undefined) { value = process.env[envVarName]; }
   if (value === undefined) { value = defaultValue; }
   return value;
@@ -72,7 +74,7 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
         dtmfConfig: { dtmfEnabled: true, dtmfInterdigitTimeoutSeconds: 2, dtmfMaxDigits: 16, dtmfTerminatorDigit: "#", dtmfFinalTimeoutSeconds: 3 },
         bargeInConfig: { bargeInModeEnabled: true, bargeInDelaySeconds: 0.5, noSpeechBargeInTimeoutSeconds: 5 },
       },
-      openAIRealtimeAPI: { model: "gpt-4o-realtime-preview-2024-12-17", inputAudioFormat: "g711_ulaw", inputAudioSampleRate: 8000, outputAudioFormat: "g711_ulaw", outputAudioSampleRate: 8000 },
+      openAIRealtimeAPI: { model: "gpt-4o-mini-realtime-preview-2024-12-17", inputAudioFormat: "g711_ulaw", inputAudioSampleRate: 8000, outputAudioFormat: "g711_ulaw", outputAudioSampleRate: 8000, responseModalities: ["audio", "text"] },
       logging: { level: "info" },
     };
   }
@@ -97,17 +99,39 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   dtmfConf.dtmfMaxDigits = getVarAsInt(logger, channel, 'DTMF_MAX_DIGITS', dtmfConf.dtmfMaxDigits) ?? 16;
   dtmfConf.dtmfTerminatorDigit = getVar(logger, channel, 'DTMF_TERMINATOR_DIGIT', dtmfConf.dtmfTerminatorDigit) ?? "#";
   dtmfConf.dtmfFinalTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_FINAL_TIMEOUT_SECONDS', dtmfConf.dtmfFinalTimeoutSeconds) ?? 3;
+
   const oaiConf = callConfig.openAIRealtimeAPI = callConfig.openAIRealtimeAPI || {};
-  // oaiConf.model = getVar(logger, channel, 'OPENAI_MODEL', oaiConf.model); // Commented out generic model
-  // Ensure new fields are loaded, matching the structure in default.json
-  oaiConf.sttModel = getVar(logger, channel, 'OPENAI_STT_MODEL', oaiConf.sttModel, 'APP_OPENAI_STT_MODEL');
-  oaiConf.ttsModel = getVar(logger, channel, 'APP_OPENAI_TTS_MODEL', oaiConf.ttsModel) ?? "tts-1";
+  oaiConf.model = getVar(logger, channel, 'OPENAI_REALTIME_MODEL', oaiConf.model, 'APP_OPENAI_REALTIME_MODEL') || "gpt-4o-mini-realtime-preview-2024-12-17";
   oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language) ?? "en";
   oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "pcm_s16le";
   oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 16000;
   oaiConf.ttsVoice = getVar(logger, channel, 'APP_OPENAI_TTS_VOICE', oaiConf.ttsVoice) ?? "alloy";
   oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat) ?? "mp3";
   oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate) ?? 24000;
+
+  // Load responseModalities
+  const defaultModalities = baseConfig.openAIRealtimeAPI?.responseModalities?.join(',') || 'audio,text';
+  const modalitiesStr = getVar(logger, channel, 'OPENAI_RESPONSE_MODALITIES', defaultModalities, 'APP_OPENAI_RESPONSE_MODALITIES');
+
+  if (modalitiesStr) {
+    const validModalitiesSet = new Set(["audio", "text"]);
+    const parsedModalities = modalitiesStr.split(',')
+                                     .map(m => m.trim().toLowerCase())
+                                     .filter(m => validModalitiesSet.has(m)) as ("audio" | "text")[];
+    if (parsedModalities.length > 0) {
+      oaiConf.responseModalities = parsedModalities;
+    } else {
+      logger.warn(`Invalid or empty OPENAI_RESPONSE_MODALITIES string: '${modalitiesStr}'. Defaulting to ${JSON.stringify(baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"])}.`);
+      oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"];
+    }
+  } else {
+    oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"]; // Fallback if getVar returns undefined
+  }
+  // Ensure oaiConf.responseModalities is always set if it was initially undefined from baseConfig.openAIRealtimeAPI
+  if (!oaiConf.responseModalities) {
+      oaiConf.responseModalities = ["audio", "text"]; // Ultimate hardcoded default
+  }
+
 
   // Deprecate old generic fields if specific ones are present, but allow fallback for backward compatibility if new ones are missing
   if (!oaiConf.inputAudioFormat && oaiConf.audioFormat) {
@@ -127,11 +151,6 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
     oaiConf.outputAudioSampleRate = oaiConf.sampleRate;
   }
 
-  // Remove apiKey from here, should be loaded directly by the service needing it if required from env
-  // oaiConf.apiKey = process.env.OPENAI_API_KEY || "";
-  // The API key is critical and should be handled securely, typically loaded directly by the service, not passed around in call config.
-  // For this specific implementation, sessionManager.ts is expected to load it from process.env.OPENAI_API_KEY.
-  // We'll ensure a check for its existence remains globally or within the service.
   if (!process.env.OPENAI_API_KEY) {
     logger.error("CRITICAL: OPENAI_API_KEY is not set in environment variables. OpenAI connection will fail.");
   }
@@ -908,7 +927,28 @@ export class AriClientService implements AriClientInterface {
 
   private onAppOwnedChannelStasisEnd(event: any, channel: Channel): void { /* ... */ }
   private async onStasisEnd(event: any, channel: Channel): Promise<void> { /* ... */ }
-  private _clearCallTimers(call: CallResources): void { /* ... */ }
+  private _clearCallTimers(call: CallResources): void {
+    if (call.bargeInActivationTimer) clearTimeout(call.bargeInActivationTimer);
+    if (call.noSpeechBeginTimer) clearTimeout(call.noSpeechBeginTimer);
+    if (call.initialOpenAIStreamIdleTimer) clearTimeout(call.initialOpenAIStreamIdleTimer);
+    if (call.speechEndSilenceTimer) clearTimeout(call.speechEndSilenceTimer);
+    if (call.maxRecognitionDurationTimer) clearTimeout(call.maxRecognitionDurationTimer);
+    if (call.dtmfInterDigitTimer) clearTimeout(call.dtmfInterDigitTimer);
+    if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
+    if (call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
+    if (call.vadActivationDelayTimer) clearTimeout(call.vadActivationDelayTimer);
+    if (call.vadInitialSilenceDelayTimer) clearTimeout(call.vadInitialSilenceDelayTimer);
+    call.bargeInActivationTimer = null;
+    call.noSpeechBeginTimer = null;
+    call.initialOpenAIStreamIdleTimer = null;
+    call.speechEndSilenceTimer = null;
+    call.maxRecognitionDurationTimer = null;
+    call.dtmfInterDigitTimer = null;
+    call.dtmfFinalTimer = null;
+    call.vadMaxWaitAfterPromptTimer = null;
+    call.vadActivationDelayTimer = null;
+    call.vadInitialSilenceDelayTimer = null;
+  }
   private async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {
     const call = this.activeCalls.get(callId);
     if (call && call.isCleanupCalled) {

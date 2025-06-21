@@ -82,12 +82,13 @@ This file (located at `websocket-server/config/default.json`) defines the defaul
     }
   },
   "openAIRealtimeAPI": {
-    "model": "gpt-4o-realtime-preview-2024-12-17",
+    "model": "gpt-4o-mini-realtime-preview-2024-12-17",
     "language": "en-US", // Optional
     "inputAudioFormat": "g711_ulaw",
     "inputAudioSampleRate": 8000,
     "outputAudioFormat": "g711_ulaw",
-    "outputAudioSampleRate": 8000
+    "outputAudioSampleRate": 8000,
+    "responseModalities": ["audio", "text"]
   },
   "logging": {
     "level": "info" // debug, info, warn, error
@@ -101,16 +102,17 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 
 ### Required
 *   `OPENAI_API_KEY`: Your OpenAI API key.
-*   `OPENAI_STT_MODEL`: The OpenAI Realtime model ID to be used for Speech-to-Text (e.g., `gpt-4o-mini-realtime-preview-2024-12-17`).
+*   `OPENAI_REALTIME_MODEL`: The OpenAI Realtime model ID to be used for both Speech-to-Text and Text-to-Speech within a session (e.g., `gpt-4o-mini-realtime-preview-2024-12-17`).
 
 ### OpenAI Optional (Defaults are provided in `config/default.json`)
-*   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`).
-*   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`).
-*   `OPENAI_LANGUAGE`: Language code for STT (e.g., `en`, `es`).
-*   `OPENAI_INPUT_AUDIO_FORMAT`: Audio format expected by OpenAI STT (e.g., `pcm_s16le`, `g711_ulaw`).
+*   `OPENAI_RESPONSE_MODALITIES`: Optional. Comma-separated list of desired response types from OpenAI. Can include "audio" and/or "text". Defaults to `"audio,text"` if not set. Example: `"text"` for text-only responses.
+*   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`). Primarily used if the Realtime API does not handle TTS as part of the session, or for separate/fallback TTS functionalities.
+*   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`). Used for any TTS audio generation.
+*   `OPENAI_LANGUAGE`: Language code for STT (e.g., `en`, `es`). For the Realtime API, language support is often tied to the specific model capabilities and might be implicitly handled or configured differently.
+*   `OPENAI_INPUT_AUDIO_FORMAT`: Audio format for STT input. This is a string value (e.g., `pcm_s16le`, `mulaw`) and must match OpenAI Realtime API specifications. VERIFY WITH OPENAI DOCS.
 *   `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Sample rate for STT input (e.g., `16000`, `8000`).
-*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Desired audio format from OpenAI TTS (e.g., `mp3`, `pcm`).
-*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Desired sample rate from OpenAI TTS.
+*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Desired audio format for TTS output from OpenAI. This is a string value (e.g., `pcm_s16le`, `mp3`). OpenAI's default for PCM is typically 24kHz. VERIFY WITH OPENAI DOCS.
+*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Desired sample rate for TTS output.
 
 ### Asterisk ARI
 *   `ASTERISK_ARI_URL`: URL for the Asterisk ARI interface (e.g., `http://localhost:8088`).
