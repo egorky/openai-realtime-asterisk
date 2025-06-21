@@ -24,7 +24,7 @@ The server is built using Node.js with Express and `ws` for WebSocket communicat
 
 3.  **`sessionManager.ts`**:
     *   Manages WebSocket connections to the OpenAI Realtime API for each active call.
-    *   Handles the setup of the OpenAI session, including sending configuration parameters (model, audio formats, etc.).
+    *   Handles the setup of the OpenAI session, including sending configuration parameters (model, audio formats, instructions, etc.).
     *   Forwards audio data received from `ari-client.ts` (originating from Asterisk) to OpenAI.
     *   Processes incoming messages (events) from OpenAI and calls appropriate methods in `ari-client.ts` to notify it of speech activity, transcripts, and errors.
     *   Handles function call processing logic.
@@ -54,44 +54,28 @@ This file (located at `websocket-server/config/default.json`) defines the defaul
 {
   "appConfig": {
     "appRecognitionConfig": {
-      "recognitionActivationMode": "VAD", // VAD, IMMEDIATE, FIXED_DELAY
-      "noSpeechBeginTimeoutSeconds": 3,
-      "speechCompleteTimeoutSeconds": 5,
-      "maxRecognitionDurationSeconds": 30,
-      "greetingAudioPath": "sound:hello-world",
-      "bargeInDelaySeconds": 0.5, // Used in FIXED_DELAY mode & VAD barge-in
-      "initialOpenAIStreamIdleTimeoutSeconds": 10,
-      "vadConfig": {
-        "vadSilenceThresholdMs": 250,     // For TALK_DETECT silence
-        "vadRecognitionActivationMs": 40  // For TALK_DETECT talk duration
-      },
-      "vadRecogActivation": "afterPrompt", // 'vadMode' or 'afterPrompt'
-      "vadInitialSilenceDelaySeconds": 0,
-      "vadActivationDelaySeconds": 0,
-      "vadMaxWaitAfterPromptSeconds": 5
+      // ... recognition settings ...
     },
     "dtmfConfig": {
-      "dtmfEnabled": true,
-      "dtmfInterdigitTimeoutSeconds": 2,
-      "dtmfMaxDigits": 16,
-      "dtmfTerminatorDigit": "#",
-      "dtmfFinalTimeoutSeconds": 3
+      // ... DTMF settings ...
     },
-    "bargeInConfig": { // General barge-in settings
-      "bargeInModeEnabled": true
+    "bargeInConfig": {
+      // ... barge-in settings ...
     }
   },
   "openAIRealtimeAPI": {
     "model": "gpt-4o-mini-realtime-preview-2024-12-17",
-    "language": "en-US", // Optional
-    "inputAudioFormat": "g711_ulaw", // Example for u-law passthrough
-    "inputAudioSampleRate": 8000,
-    "outputAudioFormat": "g711_ulaw", // Example for u-law passthrough
-    "outputAudioSampleRate": 8000,
+    "language": "en", // Note: language for OpenAI Realtime API is often model-dependent or set via instructions
+    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa.",
+    "inputAudioFormat": "g711_ulaw", // For u-law passthrough
+    "inputAudioSampleRate": 8000,    // For u-law passthrough
+    "outputAudioFormat": "g711_ulaw",// For u-law passthrough
+    "outputAudioSampleRate": 8000,   // For u-law passthrough
+    "ttsVoice": "alloy",
     "responseModalities": ["audio", "text"]
   },
   "logging": {
-    "level": "info" // debug, info, warn, error
+    "level": "info" // debug, info, warn, error, silly
   }
 }
 ```
@@ -105,6 +89,7 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `OPENAI_REALTIME_MODEL`: The OpenAI Realtime model ID to be used for both Speech-to-Text and Text-to-Speech within a session (e.g., `gpt-4o-mini-realtime-preview-2024-12-17`).
 
 ### OpenAI Optional (Defaults are provided in `config/default.json`)
+*   `OPENAI_INSTRUCTIONS`: Optional. Allows you to set the default system prompt or instructions for the OpenAI model. Defaults to a friendly, concise assistant in Spanish if not set. Example: `"Eres un experto en historia medieval."`
 *   `OPENAI_RESPONSE_MODALITIES`: Optional. Comma-separated list of desired response types from OpenAI. Can include "audio" and/or "text". Defaults to `"audio,text"` if not set. Example: `"text"` for text-only responses.
 *   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`). Primarily used if the Realtime API does not handle TTS as part of the session, or for separate/fallback TTS functionalities.
 *   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`). Used for any TTS audio generation.
@@ -124,7 +109,7 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `RTP_HOST_IP`: The IP address of this server that Asterisk should use for sending RTP media. Defaults to `127.0.0.1`. If Asterisk is on a different host or in a container, set this to an IP reachable by Asterisk.
 *   `PORT`: Port for this WebSocket server (e.g., `8081`).
 *   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
-*   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`).
+*   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`, `warn`, `error`, `silly`). Setting to `debug` or `silly` will enable verbose logging of OpenAI API interactions, including request/response payloads.
 
 ## Audio Handling (G.711 u-law Passthrough)
 
@@ -136,7 +121,7 @@ This application is configured for a G.711 u-law passthrough audio strategy. Thi
 *   This approach simplifies dependencies and processing by avoiding transcoding within this application.
 
 ## Troubleshooting Notes
-**Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `info` as needed and inspect the console output of the `websocket-server`.
+**Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `silly` as needed and inspect the console output of the `websocket-server`.
 
 ## Operational Modes
 

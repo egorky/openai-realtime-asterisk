@@ -28,6 +28,8 @@ dotenv.config();
 function getVar(logger: any, channel: Channel | undefined, envVarName: string, defaultValue?: string, channelVarName?: string): string | undefined {
   const astVarName = channelVarName || `APP_${envVarName}`;
   let value: string | undefined;
+  // TODO: Add channel variable fetching logic here if 'channel' is provided
+  // Example: if (channel && channelVarName) { try { value = await channel.getChannelVar({ variable: channelVarName })).value; } catch(e){} }
   if (value === undefined) { value = process.env[envVarName]; }
   if (value === undefined) { value = defaultValue; }
   return value;
@@ -76,7 +78,7 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
         dtmfConfig: { dtmfEnabled: true, dtmfInterdigitTimeoutSeconds: 2, dtmfMaxDigits: 16, dtmfTerminatorDigit: "#", dtmfFinalTimeoutSeconds: 3 },
         bargeInConfig: { bargeInModeEnabled: true, bargeInDelaySeconds: 0.5, noSpeechBargeInTimeoutSeconds: 5 },
       },
-      openAIRealtimeAPI: { model: "gpt-4o-mini-realtime-preview-2024-12-17", inputAudioFormat: "mulaw_8000hz", inputAudioSampleRate: 8000, outputAudioFormat: "pcm_s16le_24000hz", outputAudioSampleRate: 24000, responseModalities: ["audio", "text"] },
+      openAIRealtimeAPI: { model: "gpt-4o-mini-realtime-preview-2024-12-17", inputAudioFormat: "mulaw_8000hz", inputAudioSampleRate: 8000, outputAudioFormat: "pcm_s16le_24000hz", outputAudioSampleRate: 24000, responseModalities: ["audio", "text"], instructions: "Eres un asistente de IA amigable y servicial. Responde de manera concisa." },
       logging: { level: "info" },
     };
   }
@@ -105,11 +107,16 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   const oaiConf = callConfig.openAIRealtimeAPI = callConfig.openAIRealtimeAPI || {};
   oaiConf.model = getVar(logger, channel, 'OPENAI_REALTIME_MODEL', oaiConf.model, 'APP_OPENAI_REALTIME_MODEL') || "gpt-4o-mini-realtime-preview-2024-12-17";
   oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language) ?? "en";
-  oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "mulaw_8000hz"; // Assuming u-law passthrough
-  oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 8000; // Defaulting to 8kHz for u-law
+  oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "mulaw_8000hz";
+  oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 8000;
   oaiConf.ttsVoice = getVar(logger, channel, 'APP_OPENAI_TTS_VOICE', oaiConf.ttsVoice) ?? "alloy";
   oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat) ?? "pcm_s16le_24000hz";
   oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate) ?? 24000;
+
+  oaiConf.instructions = getVar(logger, channel, 'OPENAI_INSTRUCTIONS', oaiConf.instructions, 'APP_OPENAI_INSTRUCTIONS');
+  if (oaiConf.instructions === undefined) {
+    oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
+  }
 
   const defaultModalities = baseConfig.openAIRealtimeAPI?.responseModalities?.join(',') || 'audio,text';
   const modalitiesStr = getVar(logger, channel, 'OPENAI_RESPONSE_MODALITIES', defaultModalities, 'APP_OPENAI_RESPONSE_MODALITIES');
@@ -144,7 +151,6 @@ const ASTERISK_ARI_PASSWORD = process.env.ASTERISK_ARI_PASSWORD || 'asterisk';
 const ASTERISK_ARI_APP_NAME = process.env.ASTERISK_ARI_APP_NAME || 'openai-ari-app';
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const DEFAULT_RTP_HOST_IP = process.env.RTP_HOST_IP || '127.0.0.1';
-// const DEFAULT_AUDIO_FORMAT_FOR_EXTERNAL_MEDIA = process.env.AUDIO_FORMAT_FOR_EXTERNAL_MEDIA || 'ulaw'; // This will be forced to ulaw
 const MAX_VAD_BUFFER_PACKETS = 200;
 
 if (!OPENAI_API_KEY) { moduleLogger.error("FATAL: OPENAI_API_KEY environment variable is not set. Service will not be able to function."); }
@@ -169,7 +175,6 @@ interface CallResources {
   waitingPlaybackFailedHandler?: ((event: any, playback: Playback) => void) | null;
   ttsAudioChunks?: string[];
   currentTtsResponseId?: string;
-  // actualAsteriskFormat and actualAsteriskSampleRate removed
 }
 
 export class AriClientService implements AriClientInterface {
@@ -1159,3 +1164,5 @@ export async function initializeAriClient(): Promise<AriClientService> {
   }
   return ariClientServiceInstance;
 }
+
+[end of websocket-server/src/ari-client.ts]

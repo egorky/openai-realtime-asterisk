@@ -86,7 +86,8 @@ export interface OpenAIRealtimeAPIConfig {
   outputAudioSampleRate?: number; // e.g., 24000, 16000
   ttsVoice?: string; // e.g., "alloy"
   transcriptionIntentOnly?: boolean; // Custom flag if STT is only for intent not full conversation
-  responseModalities?: ("audio" | "text")[]; // Added new property
+  responseModalities?: ("audio" | "text")[];
+  instructions?: string; // For system prompt/instructions sent in session.update
 
   // Deprecated fields, kept for potential reference or if used by older configs:
   audioFormat?: string;
