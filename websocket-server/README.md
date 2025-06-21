@@ -84,9 +84,9 @@ This file (located at `websocket-server/config/default.json`) defines the defaul
   "openAIRealtimeAPI": {
     "model": "gpt-4o-mini-realtime-preview-2024-12-17",
     "language": "en-US", // Optional
-    "inputAudioFormat": "g711_ulaw",
+    "inputAudioFormat": "g711_ulaw", // Example for u-law passthrough
     "inputAudioSampleRate": 8000,
-    "outputAudioFormat": "g711_ulaw",
+    "outputAudioFormat": "g711_ulaw", // Example for u-law passthrough
     "outputAudioSampleRate": 8000,
     "responseModalities": ["audio", "text"]
   },
@@ -109,10 +109,10 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`). Primarily used if the Realtime API does not handle TTS as part of the session, or for separate/fallback TTS functionalities.
 *   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`). Used for any TTS audio generation.
 *   `OPENAI_LANGUAGE`: Language code for STT (e.g., `en`, `es`). For the Realtime API, language support is often tied to the specific model capabilities and might be implicitly handled or configured differently.
-*   `OPENAI_INPUT_AUDIO_FORMAT`: Audio format for STT input. This is a string value (e.g., `pcm_s16le`, `mulaw`) and must match OpenAI Realtime API specifications. VERIFY WITH OPENAI DOCS.
-*   `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Sample rate for STT input (e.g., `16000`, `8000`).
-*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Desired audio format for TTS output from OpenAI. This is a string value (e.g., `pcm_s16le`, `mp3`). OpenAI's default for PCM is typically 24kHz. VERIFY WITH OPENAI DOCS.
-*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Desired sample rate for TTS output.
+*   `OPENAI_INPUT_AUDIO_FORMAT`: Specifies the exact string format identifier that the OpenAI Realtime API expects for the input audio stream (for STT). For the recommended u-law passthrough strategy (Asterisk sends 8kHz u-law, no in-app transcoding), set this to `"g711_ulaw"` (or the precise equivalent from OpenAI documentation). This value is sent in the `session.update` event to OpenAI.
+*   `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Sample rate for STT input (e.g., `8000`, `16000`). Note: For Realtime API audio formats like `g711_ulaw`, the sample rate (typically 8000 Hz) is often implied by the format string itself. This variable primarily informs internal logic if any, but the string sent to OpenAI in `input_audio_format` is key.
+*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Specifies the exact string format identifier for the desired TTS audio output from OpenAI. For direct playback of 8kHz u-law in Asterisk, set this to `"g711_ulaw"` (or the precise equivalent from OpenAI documentation). This value is sent in the `session.update` event to OpenAI.
+*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Desired sample rate for TTS output (e.g., `8000`, `24000`). Note: For Realtime API audio formats like `g711_ulaw`, the sample rate (typically 8000 Hz) is often implied by the format string itself.
 
 ### Asterisk ARI
 *   `ASTERISK_ARI_URL`: URL for the Asterisk ARI interface (e.g., `http://localhost:8088`).
@@ -125,6 +125,15 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `PORT`: Port for this WebSocket server (e.g., `8081`).
 *   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
 *   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`).
+
+## Audio Handling (G.711 u-law Passthrough)
+
+This application is configured for a G.711 u-law passthrough audio strategy. This means:
+*   Asterisk should be configured to send G.711 u-law audio (typically 8kHz) to this application. The application sets the `externalMediaChannel` format to `ulaw`.
+*   **No in-application audio transcoding** (e.g., u-law to PCM decoding, or sample rate conversion) is performed for the audio sent to OpenAI for STT. The raw u-law audio from Asterisk is forwarded.
+*   OpenAI is configured (via the `OPENAI_INPUT_AUDIO_FORMAT` variable, set to e.g., `"g711_ulaw"` or `"mulaw_8000hz"`) to expect this u-law stream.
+*   For Text-to-Speech (TTS), OpenAI is configured (via `OPENAI_OUTPUT_AUDIO_FORMAT`, e.g., `"g711_ulaw"` or `"mulaw_8000hz"`) to return G.711 u-law audio, which can be directly played back by Asterisk.
+*   This approach simplifies dependencies and processing by avoiding transcoding within this application.
 
 ## Troubleshooting Notes
 **Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `info` as needed and inspect the console output of the `websocket-server`.

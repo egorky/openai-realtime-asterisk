@@ -112,8 +112,18 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     const sessionUpdateEvent = {
       type: "session.update",
       session: {
-        input_audio_format: currentSTTConfig?.inputAudioFormat || 'pcm_s16le', // String value from config
-        output_audio_format: currentSTTConfig?.outputAudioFormat || 'pcm_s16le', // String value from config
+        // IMPORTANT: The string value for 'input_audio_format' MUST precisely match what the
+        // OpenAI Realtime API expects for the audio data being sent. Since transcoding in
+        // ari-client.ts is now removed for passthrough, this should reflect the raw format from Asterisk.
+        // For u-law from Asterisk, OpenAI expects a string like "mulaw_8000hz" or "g711_ulaw".
+        // The value is taken from the configuration (OPENAI_INPUT_AUDIO_FORMAT env var).
+        input_audio_format: currentSTTConfig?.inputAudioFormat || "g711_ulaw", // Expects "g711_ulaw" (8kHz) if Asterisk sends u-law and no transcoding. VERIFY EXACT STRING WITH OPENAI DOCS.
+
+        // IMPORTANT: String value for 'output_audio_format' must match OpenAI specs for desired TTS output.
+        // For u-law TTS output, OpenAI expects a string like "mulaw_8000hz" or "g711_ulaw".
+        // VERIFY EXACT STRING WITH OPENAI DOCS.
+        output_audio_format: currentSTTConfig?.outputAudioFormat || "g711_ulaw", // Requesting "g711_ulaw" (8kHz) for TTS. VERIFY EXACT STRING WITH OPENAI DOCS.
+
         voice: currentSTTConfig?.ttsVoice || 'alloy'
       }
     };
