@@ -24,7 +24,7 @@ The server is built using Node.js with Express and `ws` for WebSocket communicat
 
 3.  **`sessionManager.ts`**:
     *   Manages WebSocket connections to the OpenAI Realtime API for each active call.
-    *   Handles the setup of the OpenAI session, including sending configuration parameters (model, audio formats, etc.).
+    *   Handles the setup of the OpenAI session, including sending configuration parameters (model, audio formats, instructions, etc.).
     *   Forwards audio data received from `ari-client.ts` (originating from Asterisk) to OpenAI.
     *   Processes incoming messages (events) from OpenAI and calls appropriate methods in `ari-client.ts` to notify it of speech activity, transcripts, and errors.
     *   Handles function call processing logic.
@@ -54,103 +54,74 @@ This file (located at `websocket-server/config/default.json`) defines the defaul
 {
   "appConfig": {
     "appRecognitionConfig": {
-      "recognitionActivationMode": "VAD", // VAD, IMMEDIATE, FIXED_DELAY
-      "noSpeechBeginTimeoutSeconds": 3,
-      "speechCompleteTimeoutSeconds": 5,
-      "maxRecognitionDurationSeconds": 30,
-      "greetingAudioPath": "sound:hello-world",
-      "bargeInDelaySeconds": 0.5, // Used in FIXED_DELAY mode & VAD barge-in
-      "initialOpenAIStreamIdleTimeoutSeconds": 10,
-      "vadConfig": {
-        "vadSilenceThresholdMs": 250,     // For TALK_DETECT silence
-        "vadRecognitionActivationMs": 40  // For TALK_DETECT talk duration
-      },
-      "vadRecogActivation": "afterPrompt", // 'vadMode' or 'afterPrompt'
-      "vadInitialSilenceDelaySeconds": 0,
-      "vadActivationDelaySeconds": 0,
-      "vadMaxWaitAfterPromptSeconds": 5
+      // ... recognition settings ...
     },
     "dtmfConfig": {
-      "dtmfEnabled": true,
-      "dtmfInterdigitTimeoutSeconds": 2,
-      "dtmfMaxDigits": 16,
-      "dtmfTerminatorDigit": "#",
-      "dtmfFinalTimeoutSeconds": 3
+      // ... DTMF settings ...
     },
-    "bargeInConfig": { // General barge-in settings
-      "bargeInModeEnabled": true
+    "bargeInConfig": {
+      // ... barge-in settings ...
     }
   },
   "openAIRealtimeAPI": {
-    "model": "gpt-4o-realtime-preview-2024-12-17",
-    "language": "en-US", // Optional
-    "inputAudioFormat": "g711_ulaw",
-    "inputAudioSampleRate": 8000,
-    "outputAudioFormat": "g711_ulaw",
-    "outputAudioSampleRate": 8000
+    "model": "gpt-4o-mini-realtime-preview-2024-12-17",
+    "language": "en", // Note: language for OpenAI Realtime API is often model-dependent or set via instructions
+    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa.",
+    "inputAudioFormat": "g711_ulaw", // For u-law passthrough
+    "inputAudioSampleRate": 8000,    // For u-law passthrough
+    "outputAudioFormat": "g711_ulaw",// For u-law passthrough
+    "outputAudioSampleRate": 8000,   // For u-law passthrough
+    "ttsVoice": "alloy",
+    "responseModalities": ["audio", "text"]
   },
   "logging": {
-    "level": "info" // debug, info, warn, error
+    "level": "info" // debug, info, warn, error, silly
   }
 }
 ```
 
 ### Environment Variables
 
-Refer to `websocket-server/.env.example` for a comprehensive list. Environment variables override the settings in `config/default.json`.
+Create a `.env` file in the root of the `websocket-server` directory by copying `.env.example` (`cp .env.example .env`) and then fill in the values.
 
-**General & Server:**
-*   `PORT`: Port for the WebSocket server. Default: `8081`.
-*   `WEBSOCKET_SERVER_HOST_IP`: The IP address the WebSocket server listens on. Path: N/A (direct use in `server.ts`). Default: `0.0.0.0`. (Purpose: `0.0.0.0` allows access from any network interface).
-*   `PUBLIC_URL`: Publicly accessible URL for this server.
-*   `LOG_LEVEL`: Logging level. Path: `logging.level`. Default: `info`.
-*   `CONFIG_FILE_PATH`: Path to the JSON configuration file. Default: `config/default.json`.
+### Required
+*   `OPENAI_API_KEY`: Your OpenAI API key.
+*   `OPENAI_REALTIME_MODEL`: The OpenAI Realtime model ID to be used for both Speech-to-Text and Text-to-Speech within a session (e.g., `gpt-4o-mini-realtime-preview-2024-12-17`).
 
-**ARI Connection:**
-*   `ASTERISK_ARI_URL`: Full URL to Asterisk ARI. Path: N/A (direct use). Default: `http://localhost:8088/ari`.
-*   `ASTERISK_ARI_USERNAME`: ARI username. Path: N/A (direct use). Default: `asterisk`.
-*   `ASTERISK_ARI_PASSWORD`: ARI password. Path: N/A (direct use). Default: `asterisk`.
-*   `ASTERISK_ARI_APP_NAME`: Stasis application name. Path: N/A (direct use). Default: `openai-realtime-ari`.
+### OpenAI Optional (Defaults are provided in `config/default.json`)
+*   `OPENAI_INSTRUCTIONS`: Optional. Allows you to set the default system prompt or instructions for the OpenAI model. Defaults to a friendly, concise assistant in Spanish if not set. Example: `"Eres un experto en historia medieval."`
+*   `OPENAI_RESPONSE_MODALITIES`: Optional. Comma-separated list of desired response types from OpenAI. Can include "audio" and/or "text". Defaults to `"audio,text"` if not set. Example: `"text"` for text-only responses.
+*   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`). Primarily used if the Realtime API does not handle TTS as part of the session, or for separate/fallback TTS functionalities.
+*   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`). Used for any TTS audio generation.
+*   `OPENAI_LANGUAGE`: Language code for STT (e.g., `en`, `es`). For the Realtime API, language support is often tied to the specific model capabilities and might be implicitly handled or configured differently.
+*   `OPENAI_INPUT_AUDIO_FORMAT`: Specifies the exact string format identifier that the OpenAI Realtime API expects for the input audio stream (for STT). For the recommended u-law passthrough strategy (Asterisk sends 8kHz u-law, no in-app transcoding), set this to `"g711_ulaw"` (or the precise equivalent from OpenAI documentation). This value is sent in the `session.update` event to OpenAI.
+*   `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Sample rate for STT input (e.g., `8000`, `16000`). Note: For Realtime API audio formats like `g711_ulaw`, the sample rate (typically 8000 Hz) is often implied by the format string itself. This variable primarily informs internal logic if any, but the string sent to OpenAI in `input_audio_format` is key.
+*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Specifies the exact string format identifier for the desired TTS audio output from OpenAI. For direct playback of 8kHz u-law in Asterisk, set this to `"g711_ulaw"` (or the precise equivalent from OpenAI documentation). This value is sent in the `session.update` event to OpenAI.
+*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Desired sample rate for TTS output (e.g., `8000`, `24000`). Note: For Realtime API audio formats like `g711_ulaw`, the sample rate (typically 8000 Hz) is often implied by the format string itself.
 
-**RTP Server:**
-*   `RTP_SERVER_HOST_IP`: IP for internal RTP server. Path: N/A (used directly by `rtp-server.ts`, should be mirrored in config if needed centrally). Default: `127.0.0.1`.
-*   `RTP_MIN_PORT`, `RTP_MAX_PORT`: Port range for RTP. Path: N/A. Defaults: `10000`, `10010`.
+### Asterisk ARI
+*   `ASTERISK_ARI_URL`: URL for the Asterisk ARI interface (e.g., `http://localhost:8088`).
+*   `ASTERISK_ARI_USERNAME`: Username for ARI.
+*   `ASTERISK_ARI_PASSWORD`: Password for ARI.
+*   `ASTERISK_ARI_APP_NAME`: The name of your Stasis application in Asterisk (must match dialplan).
 
-**OpenAI Configuration:**
-*   `OPENAI_API_KEY`: Your OpenAI API Key. Path: N/A (direct use). No default.
-*   `OPENAI_MODEL`: OpenAI model to use. Path: `openAIRealtimeAPI.model`. Default: `gpt-4o-realtime-preview-2024-12-17`.
-*   `OPENAI_LANGUAGE`: Language for OpenAI. Path: `openAIRealtimeAPI.language`. Optional.
-*   `OPENAI_INPUT_AUDIO_FORMAT`: Audio format for OpenAI input. Path: `openAIRealtimeAPI.inputAudioFormat`. Default: `g711_ulaw`.
-*   `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Sample rate for OpenAI input. Path: `openAIRealtimeAPI.inputAudioSampleRate`. Default: `8000`.
-*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Audio format for OpenAI output. Path: `openAIRealtimeAPI.outputAudioFormat`. Default: `g711_ulaw`.
-*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Sample rate for OpenAI output. Path: `openAIRealtimeAPI.outputAudioSampleRate`. Default: `8000`.
+### Server & Media
+*   `RTP_HOST_IP`: The IP address of this server that Asterisk should use for sending RTP media. Defaults to `127.0.0.1`. If Asterisk is on a different host or in a container, set this to an IP reachable by Asterisk.
+*   `PORT`: Port for this WebSocket server (e.g., `8081`).
+*   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
+*   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`, `warn`, `error`, `silly`). Setting to `debug` or `silly` will enable verbose logging of OpenAI API interactions, including request/response payloads.
 
-**Recognition Modes & Timers:**
-*   `RECOGNITION_ACTIVATION_MODE`: How recognition starts. Path: `appConfig.appRecognitionConfig.recognitionActivationMode`. Default: `VAD`. Values: `VAD`, `IMMEDIATE`, `FIXED_DELAY`, `MANUAL`.
-*   `GREETING_AUDIO_PATH`: Path to greeting audio (e.g., `sound:hello-world`). Path: `appConfig.appRecognitionConfig.greetingAudioPath`. Default: `sound:hello-world`.
-*   `NO_SPEECH_BEGIN_TIMEOUT_SECONDS`: Timeout if no speech after stream starts. Path: `appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds`. Default: `3`.
-*   `SPEECH_COMPLETE_TIMEOUT_SECONDS`: Silence duration after interim result to consider speech complete. Path: `appConfig.appRecognitionConfig.speechCompleteTimeoutSeconds`. Default: `5`.
-*   `INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS`: Timeout for the initial OpenAI stream to become responsive (e.g. first transcript). Path: `appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds`. Default: `10`.
-*   `MAX_RECOGNITION_DURATION_SECONDS`: Max call duration. Path: `appConfig.appRecognitionConfig.maxRecognitionDurationSeconds`. Default: `30`.
-*   `BARGE_IN_DELAY_SECONDS`: Delay for `FIXED_DELAY` mode. Path: `appConfig.appRecognitionConfig.bargeInDelaySeconds`. Default: `0.5`.
+## Audio Handling (G.711 u-law Passthrough)
 
-**VAD Specific:**
-*   `VAD_RECOG_ACTIVATION_MODE`: VAD sub-mode. Path: `appConfig.appRecognitionConfig.vadRecogActivation`. Default: `afterPrompt`. Values: `vadMode`, `afterPrompt`.
-*   `VAD_SILENCE_THRESHOLD_MS`: Silence duration for `TALK_DETECT`. Path: `appConfig.appRecognitionConfig.vadConfig.vadSilenceThresholdMs`. Default: `250`.
-*   `VAD_TALK_THRESHOLD_MS`: Talk duration for `TALK_DETECT`. Path: `appConfig.appRecognitionConfig.vadConfig.vadRecognitionActivationMs`. Default: `40`.
-*   `VAD_INITIAL_SILENCE_DELAY_SECONDS`: Initial silence delay in `vadMode`. Path: `appConfig.appRecognitionConfig.vadInitialSilenceDelaySeconds`. Default: `0`.
-*   `VAD_ACTIVATION_DELAY_SECONDS`: Activation delay in `vadMode`. Path: `appConfig.appRecognitionConfig.vadActivationDelaySeconds`. Default: `0`.
-*   `VAD_MAX_WAIT_AFTER_PROMPT_SECONDS`: Max wait after prompt in VAD `afterPrompt`. Path: `appConfig.appRecognitionConfig.vadMaxWaitAfterPromptSeconds`. Default: `5`.
-
-**DTMF Specific:**
-*   `DTMF_ENABLED`: Enable DTMF. Path: `appConfig.dtmfConfig.dtmfEnabled`. Default: `true`.
-*   `DTMF_INTERDIGIT_TIMEOUT_SECONDS`: Timeout between DTMF digits. Path: `appConfig.dtmfConfig.dtmfInterdigitTimeoutSeconds`. Default: `2`.
-*   `DTMF_MAX_DIGITS`: Max DTMF digits. Path: `appConfig.dtmfConfig.dtmfMaxDigits`. Default: `16`.
-*   `DTMF_TERMINATOR_DIGIT`: DTMF terminator. Path: `appConfig.dtmfConfig.dtmfTerminatorDigit`. Default: `#`.
-*   `DTMF_FINAL_TIMEOUT_SECONDS`: Final timeout for DTMF input. Path: `appConfig.dtmfConfig.dtmfFinalTimeoutSeconds`. Default: `3`.
+This application is configured for a G.711 u-law passthrough audio strategy. This means:
+*   Asterisk should be configured to send G.711 u-law audio (typically 8kHz) to this application. The application sets the `externalMediaChannel` format to `ulaw`.
+*   **No in-application audio transcoding** (e.g., u-law to PCM decoding, or sample rate conversion) is performed for the audio sent to OpenAI for STT. The raw u-law audio from Asterisk is forwarded.
+*   OpenAI is configured (via the `OPENAI_INPUT_AUDIO_FORMAT` variable, set to e.g., `"g711_ulaw"` or `"mulaw_8000hz"`) to expect this u-law stream.
+*   For Text-to-Speech (TTS), OpenAI is configured (via `OPENAI_OUTPUT_AUDIO_FORMAT`, e.g., `"g711_ulaw"` or `"mulaw_8000hz"`) to return G.711 u-law audio, which can be directly played back by Asterisk.
+*   This approach simplifies dependencies and processing by avoiding transcoding within this application.
 
 ## Troubleshooting Notes
-**Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `info` as needed and inspect the console output of the `websocket-server`.
+**Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `silly` as needed and inspect the console output of the `websocket-server`.
 
 ## Operational Modes
 

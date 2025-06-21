@@ -22,9 +22,18 @@
     }
   },
   "openAIRealtimeAPI": {
-    "audioFormat": "PCMU",
+    "model": "gpt-4o-mini-realtime-preview-2024-12-17",
+    "language": "en",
+    "inputAudioFormat": "g711_ulaw",
+    "inputAudioSampleRate": 8000,
+    "ttsVoice": "alloy",
+    "outputAudioFormat": "g711_ulaw",
+    "outputAudioSampleRate": 8000,
+    "responseModalities": ["audio", "text"],
+    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa.",
     "encoding": "LINEAR16",
-    "sampleRate": 8000
+    "sampleRate": 8000,
+    "audioFormat": "PCMU"
   },
   "logging": {
     "level": "info"
