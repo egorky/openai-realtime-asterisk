@@ -138,5 +138,3 @@ export async function disconnectRedis(): Promise<void> {
 // logConversationToRedis('some-call-id', { actor: 'caller', type: 'transcript', content: 'Hello world' });
 // logConversationToRedis('some-call-id', { actor: 'bot', type: 'tts_prompt', content: 'Hi there, how can I help?' });
 // logConversationToRedis('some-call-id', { actor: 'dtmf', type: 'dtmf_input', content: '1234#' });
-
-[end of websocket-server/src/redis-client.ts]
