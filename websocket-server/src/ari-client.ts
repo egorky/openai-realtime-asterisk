@@ -457,7 +457,6 @@ export class AriClientService implements AriClientInterface {
           audioExtension = '.opus';
         }
 
-        const audioInputBuffer = Buffer.from(fullAudioBase64, 'base64');
         call.callLogger.info(`Decoded base64 audio. Buffer length: ${audioInputBuffer.length} bytes`);
 
         const currentOutputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase(); // Renombrada para claridad
