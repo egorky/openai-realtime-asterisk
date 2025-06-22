@@ -88,6 +88,7 @@ export interface OpenAIRealtimeAPIConfig {
   transcriptionIntentOnly?: boolean; // Custom flag if STT is only for intent not full conversation
   responseModalities?: ("audio" | "text")[];
   instructions?: string; // For system prompt/instructions sent in session.update
+  tools?: any[]; // Añadir propiedad opcional para herramientas
 
   // Deprecated fields, kept for potential reference or if used by older configs:
   audioFormat?: string;

@@ -6,49 +6,51 @@ This WebSocket server acts as the backend engine connecting an Asterisk telephon
 
 ## Architecture
 
-The server is built using Node.js with Express and `ws` for WebSocket communication. Key components include:
+El servidor está construido con Node.js. Los componentes clave incluyen:
 
-1.  **`server.ts`**:
-    *   Sets up the Express application and the main WebSocket server (`/logs` endpoint for frontend communication).
-    *   Initializes and manages the `AriClientService`.
-    *   Provides HTTP endpoints (e.g., `/tools` for function call schemas, `/public-url`).
+1.  **`src/server.ts`**:
+    *   Punto de entrada principal.
+    *   Inicializa el `AriClientService`.
+    *   Configura un servidor WebSocket (usando la librería `ws`) para la comunicación con la `webapp` de frontend (actualmente en el puerto 8080 por defecto).
 
-2.  **`ari-client.ts` (`AriClientService` class)**:
-    *   The core of the application, responsible for all interactions with Asterisk via ARI.
-    *   Manages the state of each active call, including ARI resources (channels, bridges), RTP media setup, and call lifecycle.
-    *   Implements various **operational modes** for speech recognition activation (Immediate, Fixed Delay, VAD).
-    *   Handles DTMF input, interrupting speech recognition if necessary.
-    *   Manages a complex system of **timers** to control call flow, timeouts for speech detection, and other interactions.
-    *   Orchestrates when and how to start and stop the OpenAI speech stream via `sessionManager.ts`.
-    *   Receives events from `sessionManager.ts` (e.g., speech started, interim/final transcripts, errors) and acts upon them to manage call state and timers.
+2.  **`src/ari-client.ts` (Clase `AriClientService`)**:
+    *   El núcleo de la aplicación, responsable de todas las interacciones con Asterisk a través de ARI.
+    *   Gestiona el estado de cada llamada activa, incluyendo recursos ARI (canales, puentes), configuración de medios RTP y ciclo de vida de la llamada.
+    *   Implementa varios **modos operativos** para la activación del reconocimiento de voz (Inmediato, Retardo Fijo, VAD).
+    *   Maneja la entrada DTMF, interrumpiendo el reconocimiento de voz si es necesario.
+    *   Orquesta cuándo y cómo iniciar y detener el flujo de voz de OpenAI a través de `sessionManager.ts`.
+    *   Recibe eventos de `sessionManager.ts` (ej. inicio de habla, transcripciones provisionales/finales, errores de OpenAI) y actúa sobre ellos.
 
-3.  **`sessionManager.ts`**:
-    *   Manages WebSocket connections to the OpenAI Realtime API for each active call.
-    *   Handles the setup of the OpenAI session, including sending configuration parameters (model, audio formats, instructions, etc.).
-    *   Forwards audio data received from `ari-client.ts` (originating from Asterisk) to OpenAI.
-    *   Processes incoming messages (events) from OpenAI and calls appropriate methods in `ari-client.ts` to notify it of speech activity, transcripts, and errors.
-    *   Handles function call processing logic.
+3.  **`src/rtp-server.ts` (Clase `RtpServer`)**:
+    *   Crea un servidor UDP para recibir paquetes RTP de Asterisk.
+    *   Extrae el payload de audio de los paquetes RTP y lo emite para `ari-client.ts`.
 
-**Interaction Flow:**
-*   An incoming call on Asterisk is routed to the Stasis application managed by `ari-client.ts`.
-*   `ari-client.ts` sets up media (RTP server, snoop channels) and determines the operational mode.
-*   Based on the mode, `ari-client.ts` instructs `sessionManager.ts` to start an OpenAI session.
-*   Audio flows from Asterisk -> RTP Server -> `ari-client.ts` -> `sessionManager.ts` -> OpenAI.
-*   OpenAI events flow back OpenAI -> `sessionManager.ts` -> `ari-client.ts`.
-*   `ari-client.ts` plays back audio responses from OpenAI via ARI.
-*   `sessionManager.ts` (or `ari-client.ts` via `sessionManager`) sends logs and transcripts to the connected `webapp`.
+4.  **`src/sessionManager.ts`**:
+    *   Gestiona las conexiones WebSocket con la API Realtime de OpenAI para cada llamada activa.
+    *   Maneja la configuración de la sesión de OpenAI, incluyendo el envío de parámetros de configuración (modelo, formatos de audio, instrucciones, etc.).
+    *   Reenvía los datos de audio recibidos de `ari-client.ts` (originados en Asterisk) a OpenAI.
+    *   Procesa los mensajes entrantes (eventos) de OpenAI y llama a los métodos apropiados en `ari-client.ts` para notificarle de la actividad de voz, transcripciones y errores.
 
-## Configuration
+Para una descripción más detallada de la arquitectura y un diagrama de secuencia, consulta el [Documento de Arquitectura](./docs/architecture.md).
 
-The application uses a layered configuration approach:
+## Documentación Detallada
 
-1.  **`config/default.json`**: Provides the base set of default values for application behavior, timers, and modes.
-2.  **Environment Variables**: Override values from `default.json`. These are the primary way to configure a deployment.
-3.  **Asterisk Channel Variables** (Future TODO): For per-call overrides, specific channel variables set in the Asterisk dialplan could eventually override environment variables or defaults. This is not fully implemented in `ari-client.ts` for all parameters yet.
+Para una comprensión más profunda de cada archivo y las variables de configuración, consulta los siguientes documentos:
 
-### `config/default.json` Structure
+*   **[Explicación de Archivos](./docs/file-explanation.md)**: Describe el propósito y la funcionalidad de cada archivo principal en el proyecto.
+*   **[Variables de Configuración](./docs/variables.md)**: Detalla las variables de entorno y las opciones de configuración en `config/default.json`.
 
-This file (located at `websocket-server/config/default.json`) defines the default operational parameters. Its structure typically includes:
+## Configuración
+
+La aplicación utiliza un enfoque de configuración por capas:
+
+1.  **`config/default.json`**: Proporciona el conjunto base de valores predeterminados.
+2.  **Variables de Entorno**: Sobrescriben los valores de `default.json`. Son la forma principal de configurar una implementación. Consulta [Variables de Configuración](./docs/variables.md) para más detalles.
+3.  **Variables de Canal de Asterisk** (TODO futuro): Para anulaciones por llamada, variables específicas de canal establecidas en el plan de marcado de Asterisk podrían eventualmente anular las variables de entorno o los valores predeterminados.
+
+### Estructura de `config/default.json`
+
+Este archivo (ubicado en `websocket-server/config/default.json`) define los parámetros operativos predeterminados. Su estructura típicamente incluye:
 
 ```json
 {

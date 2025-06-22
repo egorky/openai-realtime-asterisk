@@ -1,7 +1,7 @@
 import Ari, { Channel, Bridge, Playback, PlaybackFinished, ChannelTalkingStarted, ChannelTalkingFinished, ChannelDtmfReceived } from 'ari-client';
 import dotenv from 'dotenv';
-import fs from 'fs';
-import path from 'path';
+import fs from 'node:fs';
+import path from 'node:path';
 import { RtpServer } from './rtp-server';
 import * as sessionManager from './sessionManager';
 import {
@@ -10,16 +10,15 @@ import {
   RuntimeConfig,
   AppRecognitionConfig,
   DtmfConfig,
-  LoggerInstance
+  LoggerInstance,
+  OpenAIRealtimeAPIConfig
 } from './types';
 
 dotenv.config();
 
-// Module-scoped config variables
 let baseConfig: RuntimeConfig;
-let currentCallSpecificConfig: CallSpecificConfig; // Represents the config for the *current* call context
+let currentCallSpecificConfig: CallSpecificConfig;
 
-// Initial load of baseConfig
 try {
   const configFilePath = process.env.CONFIG_FILE_PATH || path.join(__dirname, '../config/default.json');
   const rawConfig = fs.readFileSync(configFilePath, 'utf-8');
@@ -41,45 +40,37 @@ try {
     logging: { level: "info" },
   };
 }
-// Initialize currentCallSpecificConfig with a deep copy of baseConfig. It will be updated per call.
 currentCallSpecificConfig = JSON.parse(JSON.stringify(baseConfig));
 
 
 const moduleLogger: LoggerInstance = (() => {
   const loggerInstance: any = {};
   const levels: { [key: string]: number } = { silly: 0, debug: 1, info: 2, warn: 3, error: 4 };
-
   const getEffectiveLogLevel = (configForLevel?: CallSpecificConfig | RuntimeConfig) => {
     const conf = configForLevel || currentCallSpecificConfig || baseConfig;
     return process.env.LOG_LEVEL?.toLowerCase() || conf?.logging?.level || 'info';
   };
-
   loggerInstance.isLevelEnabled = (level: string, configOverride?: CallSpecificConfig | RuntimeConfig): boolean => {
     const effectiveLogLevel = getEffectiveLogLevel(configOverride);
     const configuredLevelNum = levels[effectiveLogLevel] ?? levels.info;
     return levels[level] >= configuredLevelNum;
   };
-
   (['info', 'error', 'warn', 'debug', 'silly'] as const).forEach(levelKey => {
     loggerInstance[levelKey] = (...args: any[]) => {
-      // For the base moduleLogger, it checks its own configured level (which might use currentCallSpecificConfig if no specific one is passed to isLevelEnabled)
       if (loggerInstance.isLevelEnabled(levelKey)) {
         const logFunction = console[levelKey === 'silly' ? 'log' : levelKey] || console.log;
         logFunction(...args);
       }
     };
   });
-
   loggerInstance.child = (bindings: object, callSpecificLogLevel?: string): LoggerInstance => {
     const childLogger: any = {};
-
     childLogger.isLevelEnabled = (level: string): boolean => {
       const levelsMap: { [key: string]: number } = { silly: 0, debug: 1, info: 2, warn: 3, error: 4 };
-      const effectiveCallLogLevel = callSpecificLogLevel || getEffectiveLogLevel(); // Use call specific if provided, else parent's logic
+      const effectiveCallLogLevel = callSpecificLogLevel || getEffectiveLogLevel();
       const configuredLevelNum = levelsMap[effectiveCallLogLevel] ?? levelsMap.info;
       return levelsMap[level] >= configuredLevelNum;
     };
-
     (['info', 'error', 'warn', 'debug', 'silly'] as const).forEach(levelKey => {
       childLogger[levelKey] = (...args: any[]) => {
         if (childLogger.isLevelEnabled(levelKey)) {
@@ -94,14 +85,12 @@ const moduleLogger: LoggerInstance = (() => {
       };
     });
     childLogger.child = (newBindings: object, newCallSpecificLogLevel?: string) => {
-      // Child of a child inherits bindings and can get a new specific log level
       return loggerInstance.child({...bindings, ...newBindings}, newCallSpecificLogLevel || callSpecificLogLevel);
     };
     return childLogger as LoggerInstance;
   };
   return loggerInstance as LoggerInstance;
 })();
-
 
 function getVar(logger: any, channel: Channel | undefined, envVarName: string, defaultValue?: string, channelVarName?: string): string | undefined {
   const astVarName = channelVarName || `APP_${envVarName}`;
@@ -132,27 +121,15 @@ function getVarAsBoolean(logger: any, channel: Channel | undefined, envVarName: 
 }
 
 function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallSpecificConfig {
-  // currentCallSpecificConfig is already a deep copy of baseConfig
-  // Override with ENV vars or channel vars
+  currentCallSpecificConfig = JSON.parse(JSON.stringify(baseConfig));
   currentCallSpecificConfig.logging.level = getVar(logger, channel, 'LOG_LEVEL', baseConfig.logging.level) as any || baseConfig.logging.level;
-
-  const arc = currentCallSpecificConfig.appConfig.appRecognitionConfig =
-    currentCallSpecificConfig.appConfig.appRecognitionConfig || {} as AppRecognitionConfig;
-
+  const arc = currentCallSpecificConfig.appConfig.appRecognitionConfig = currentCallSpecificConfig.appConfig.appRecognitionConfig || {} as AppRecognitionConfig;
   const initialGreetingEnv = getVar(logger, channel, 'INITIAL_GREETING_AUDIO_PATH', undefined);
   const greetingEnv = getVar(logger, channel, 'GREETING_AUDIO_PATH', undefined);
-
-  if (initialGreetingEnv !== undefined) {
-    arc.greetingAudioPath = initialGreetingEnv;
-  } else if (greetingEnv !== undefined) {
-    arc.greetingAudioPath = greetingEnv;
-  } else if (baseConfig.appConfig.appRecognitionConfig.greetingAudioPath !== undefined) {
-    arc.greetingAudioPath = baseConfig.appConfig.appRecognitionConfig.greetingAudioPath;
-  } else {
-    arc.greetingAudioPath = 'sound:hello-world';
-    logger.info(`No greeting audio path configured, defaulting to ${arc.greetingAudioPath}`);
-  }
-
+  if (initialGreetingEnv !== undefined) { arc.greetingAudioPath = initialGreetingEnv; }
+  else if (greetingEnv !== undefined) { arc.greetingAudioPath = greetingEnv; }
+  else if (baseConfig.appConfig.appRecognitionConfig.greetingAudioPath !== undefined) { arc.greetingAudioPath = baseConfig.appConfig.appRecognitionConfig.greetingAudioPath; }
+  else { arc.greetingAudioPath = 'sound:hello-world'; }
   arc.maxRecognitionDurationSeconds = getVarAsInt(logger, channel, 'MAX_RECOGNITION_DURATION_SECONDS', arc.maxRecognitionDurationSeconds) || 30;
   arc.noSpeechBeginTimeoutSeconds = getVarAsInt(logger, channel, 'NO_SPEECH_BEGIN_TIMEOUT_SECONDS', arc.noSpeechBeginTimeoutSeconds) ?? 3;
   arc.speechCompleteTimeoutSeconds = getVarAsInt(logger, channel, 'SPEECH_COMPLETE_TIMEOUT_SECONDS', arc.speechCompleteTimeoutSeconds) ?? 5;
@@ -161,76 +138,41 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   arc.vadInitialSilenceDelaySeconds = getVarAsInt(logger, channel, 'VAD_INITIAL_SILENCE_DELAY_SECONDS', arc.vadInitialSilenceDelaySeconds) ?? 0;
   arc.vadActivationDelaySeconds = getVarAsInt(logger, channel, 'VAD_ACTIVATION_DELAY_SECONDS', arc.vadActivationDelaySeconds) ?? 0;
   arc.vadMaxWaitAfterPromptSeconds = getVarAsInt(logger, channel, 'VAD_MAX_WAIT_AFTER_PROMPT_SECONDS', arc.vadMaxWaitAfterPromptSeconds) ?? 5;
-
   arc.vadConfig = arc.vadConfig || { vadSilenceThresholdMs: 250, vadRecognitionActivationMs: 40 };
   arc.vadConfig.vadSilenceThresholdMs = getVarAsInt(logger, channel, 'VAD_SILENCE_THRESHOLD_MS', arc.vadConfig.vadSilenceThresholdMs) ?? 250;
   arc.vadConfig.vadRecognitionActivationMs = getVarAsInt(logger, channel, 'VAD_TALK_THRESHOLD_MS', arc.vadConfig.vadRecognitionActivationMs) ?? 40;
-
   const dtmfConf = currentCallSpecificConfig.appConfig.dtmfConfig = currentCallSpecificConfig.appConfig.dtmfConfig || {} as DtmfConfig;
   dtmfConf.dtmfEnabled = getVarAsBoolean(logger, channel, 'DTMF_ENABLED', dtmfConf.dtmfEnabled) ?? true;
   dtmfConf.dtmfInterdigitTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_INTERDIGIT_TIMEOUT_SECONDS', dtmfConf.dtmfInterdigitTimeoutSeconds) ?? 2;
   dtmfConf.dtmfMaxDigits = getVarAsInt(logger, channel, 'DTMF_MAX_DIGITS', dtmfConf.dtmfMaxDigits) ?? 16;
   dtmfConf.dtmfTerminatorDigit = getVar(logger, channel, 'DTMF_TERMINATOR_DIGIT', dtmfConf.dtmfTerminatorDigit) ?? "#";
   dtmfConf.dtmfFinalTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_FINAL_TIMEOUT_SECONDS', dtmfConf.dtmfFinalTimeoutSeconds) ?? 3;
-
-  const oaiConf = currentCallSpecificConfig.openAIRealtimeAPI = currentCallSpecificConfig.openAIRealtimeAPI || {};
+  const oaiConf = currentCallSpecificConfig.openAIRealtimeAPI = currentCallSpecificConfig.openAIRealtimeAPI || {} as OpenAIRealtimeAPIConfig;
   oaiConf.model = getVar(logger, channel, 'OPENAI_REALTIME_MODEL', oaiConf.model, 'APP_OPENAI_REALTIME_MODEL') || "gpt-4o-mini-realtime-preview-2024-12-17";
   oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language) ?? "en";
   oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "mulaw_8000hz";
   oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 8000;
   oaiConf.ttsVoice = getVar(logger, channel, 'APP_OPENAI_TTS_VOICE', oaiConf.ttsVoice) ?? "alloy";
-
   oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat);
-  if (oaiConf.outputAudioFormat === undefined) {
-    oaiConf.outputAudioFormat = baseConfig.openAIRealtimeAPI.outputAudioFormat || "g711_ulaw";
-    if (oaiConf.outputAudioFormat !== baseConfig.openAIRealtimeAPI.outputAudioFormat) { // Log only if it changed from base to hardcoded
-        logger.warn(`Output audio format not configured via ENV or default.json, defaulting to ${oaiConf.outputAudioFormat}`);
-    }
-  }
-
+  if (oaiConf.outputAudioFormat === undefined) { oaiConf.outputAudioFormat = baseConfig.openAIRealtimeAPI.outputAudioFormat || "g711_ulaw"; }
   oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate);
   if (oaiConf.outputAudioFormat === "g711_ulaw" || oaiConf.outputAudioFormat === "mulaw_8000hz") {
-    if (!oaiConf.outputAudioSampleRate || oaiConf.outputAudioSampleRate !== 8000) {
-      logger.warn(`Output audio format is ${oaiConf.outputAudioFormat} but sample rate is ${oaiConf.outputAudioSampleRate}, forcing to 8000Hz.`);
-      oaiConf.outputAudioSampleRate = 8000;
-    }
-  } else if (oaiConf.outputAudioSampleRate === undefined) {
-    oaiConf.outputAudioSampleRate = baseConfig.openAIRealtimeAPI.outputAudioSampleRate || 24000;
-     if (oaiConf.outputAudioSampleRate !== baseConfig.openAIRealtimeAPI.outputAudioSampleRate) {
-        logger.warn(`Output audio sample rate not configured, defaulting to ${oaiConf.outputAudioSampleRate} for format ${oaiConf.outputAudioFormat}`);
-     }
-  }
-
+    if (!oaiConf.outputAudioSampleRate || oaiConf.outputAudioSampleRate !== 8000) { oaiConf.outputAudioSampleRate = 8000; }
+  } else if (oaiConf.outputAudioSampleRate === undefined) { oaiConf.outputAudioSampleRate = baseConfig.openAIRealtimeAPI.outputAudioSampleRate || 24000; }
   oaiConf.instructions = getVar(logger, channel, 'OPENAI_INSTRUCTIONS', oaiConf.instructions, 'APP_OPENAI_INSTRUCTIONS');
-  if (oaiConf.instructions === undefined) {
-    oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
-  }
-
+  if (oaiConf.instructions === undefined) { oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";}
   const baseModalities = baseConfig.openAIRealtimeAPI?.responseModalities?.join(',') || 'audio,text';
   const modalitiesStr = getVar(logger, channel, 'OPENAI_RESPONSE_MODALITIES', baseModalities, 'APP_OPENAI_RESPONSE_MODALITIES');
-
   if (modalitiesStr) {
     const validModalitiesSet = new Set(["audio", "text"]);
-    const parsedModalities = modalitiesStr.split(',')
-                                     .map(m => m.trim().toLowerCase())
-                                     .filter(m => validModalitiesSet.has(m)) as ("audio" | "text")[];
-    if (parsedModalities.length > 0) {
-      oaiConf.responseModalities = parsedModalities;
-    } else {
-      logger.warn(`Invalid or empty OPENAI_RESPONSE_MODALITIES string: '${modalitiesStr}'. Defaulting to ${JSON.stringify(baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"])}.`);
-      oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"];
-    }
-  } else {
-    oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"];
-  }
-  if (!oaiConf.responseModalities) {
-      oaiConf.responseModalities = ["audio", "text"];
-  }
-
-  if (!process.env.OPENAI_API_KEY) {
-    logger.error("CRITICAL: OPENAI_API_KEY is not set in environment variables. OpenAI connection will fail.");
-  }
-  return currentCallSpecificConfig; // Return the modified global config object for this call
+    const parsedModalities = modalitiesStr.split(',').map(m => m.trim().toLowerCase()).filter(m => validModalitiesSet.has(m)) as ("audio" | "text")[];
+    if (parsedModalities.length > 0) { oaiConf.responseModalities = parsedModalities; }
+    else { oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"]; }
+  } else { oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"]; }
+  if (!oaiConf.responseModalities) { oaiConf.responseModalities = ["audio", "text"]; }
+  if (oaiConf.tools === undefined) { oaiConf.tools = []; }
+  if (!process.env.OPENAI_API_KEY) { logger.error("CRITICAL: OPENAI_API_KEY is not set."); }
+  return currentCallSpecificConfig;
 }
 
 const ASTERISK_ARI_URL = process.env.ASTERISK_ARI_URL || 'http://localhost:8088';
@@ -241,10 +183,10 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const DEFAULT_RTP_HOST_IP = process.env.RTP_HOST_IP || '127.0.0.1';
 const MAX_VAD_BUFFER_PACKETS = 200;
 
-if (!OPENAI_API_KEY) { moduleLogger.error("FATAL: OPENAI_API_KEY environment variable is not set. Service will not be able to function."); }
+if (!OPENAI_API_KEY) { moduleLogger.error("FATAL: OPENAI_API_KEY environment variable is not set."); }
 
 interface CallResources {
-  channel: Channel; config: CallSpecificConfig; callLogger: LoggerInstance; userBridge?: Bridge; snoopBridge?: Bridge; // Ensure callLogger is LoggerInstance
+  channel: Channel; config: CallSpecificConfig; callLogger: LoggerInstance; userBridge?: Bridge; snoopBridge?: Bridge;
   rtpServer?: RtpServer; externalMediaChannel?: Channel; snoopChannel?: Channel;
   mainPlayback?: Playback; waitingPlayback?: Playback; postRecognitionWaitingPlayback?: Playback;
   isCleanupCalled: boolean; promptPlaybackStoppedForInterim: boolean; fallbackAttempted: boolean;
@@ -261,7 +203,7 @@ interface CallResources {
   vadActivationDelayTimer: NodeJS.Timeout | null; vadInitialSilenceDelayTimer: NodeJS.Timeout | null;
   playbackFailedHandler?: ((event: any, failedPlayback: Playback) => void) | null;
   waitingPlaybackFailedHandler?: ((event: any, playback: Playback) => void) | null;
-  ttsAudioChunks?: string[];
+  ttsAudioChunks: string[];
   currentTtsResponseId?: string;
 }
 
@@ -270,12 +212,50 @@ export class AriClientService implements AriClientInterface {
   private activeCalls = new Map<string, CallResources>();
   private appOwnedChannelIds = new Set<string>();
   public logger: LoggerInstance = moduleLogger;
+  private currentPrimaryCallId: string | null = null;
 
   constructor() {
     this.logger = moduleLogger.child({ service: 'AriClientService' });
-     // Ensure baseConfig is loaded (it's loaded at module level now)
-    if (!baseConfig) {
-        throw new Error("Base configuration was not loaded. This should not happen.");
+    if (!baseConfig) { throw new Error("Base configuration was not loaded."); }
+  }
+
+  public getCurrentPrimaryCallId(): string | null { return this.currentPrimaryCallId; }
+
+  public async updateActiveCallConfig(callId: string, newConfigData: { instructions?: string, ttsVoice?: string, tools?: any[] }) {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) {
+      this.logger.warn(`updateActiveCallConfig: Call ${callId} not active or cleanup called.`);
+      return;
+    }
+    call.callLogger.info(`Updating active call config for ${callId} with new data.`);
+    let configChanged = false;
+    if (newConfigData.instructions && call.config.openAIRealtimeAPI.instructions !== newConfigData.instructions) {
+      call.config.openAIRealtimeAPI.instructions = newConfigData.instructions;
+      configChanged = true;
+      call.callLogger.info(`Instructions updated for call ${callId}.`);
+    }
+    if (newConfigData.ttsVoice && call.config.openAIRealtimeAPI.ttsVoice !== newConfigData.ttsVoice) {
+      call.config.openAIRealtimeAPI.ttsVoice = newConfigData.ttsVoice;
+      configChanged = true;
+      call.callLogger.info(`TTS Voice updated to "${newConfigData.ttsVoice}" for call ${callId}.`);
+    }
+    if (newConfigData.tools) {
+      if (JSON.stringify(call.config.openAIRealtimeAPI.tools) !== JSON.stringify(newConfigData.tools)) {
+        call.config.openAIRealtimeAPI.tools = newConfigData.tools;
+        configChanged = true;
+        call.callLogger.info(`Tools configuration updated locally for call ${callId}.`);
+      }
+    }
+    if (configChanged) {
+      call.callLogger.info(`Configuration for call ${callId} has been updated. New relevant values -> Instructions: "${call.config.openAIRealtimeAPI.instructions}", Voice: "${call.config.openAIRealtimeAPI.ttsVoice}"`);
+      try {
+        const sessionManagerModule = await import('./sessionManager');
+        sessionManagerModule.sendSessionUpdateToOpenAI(callId, call.config.openAIRealtimeAPI);
+      } catch (e: any) {
+        call.callLogger.error(`Error trying to send session.update to OpenAI for call ${callId} after config change: ${e.message}`);
+      }
+    } else {
+      call.callLogger.info(`No effective changes applied to call ${callId} configuration.`);
     }
   }
 
@@ -283,22 +263,16 @@ export class AriClientService implements AriClientInterface {
     try {
       this.client = await Ari.connect(ASTERISK_ARI_URL, ASTERISK_ARI_USERNAME, ASTERISK_ARI_PASSWORD);
       this.logger.info('Successfully connected to Asterisk ARI.');
-
       this.client.on('StasisStart', this.onStasisStart.bind(this));
       this.client.on('ChannelDtmfReceived', this._onDtmfReceived.bind(this));
       this.client.on('ChannelTalkingStarted', this._onChannelTalkingStarted.bind(this));
       this.client.on('ChannelTalkingFinished', this._onChannelTalkingFinished.bind(this));
       this.client.on('error' as any, (err: any) => { this.onAriError(err); });
       this.client.on('close' as any, () => { this.onAriClose(); });
-
       await this.client.start(ASTERISK_ARI_APP_NAME);
       this.logger.info(`ARI Stasis application '${ASTERISK_ARI_APP_NAME}' started and listening for calls.`);
     } catch (err: any) {
-      if (err instanceof Error) {
-        this.logger.error('FATAL: Failed to connect to Asterisk ARI or start Stasis app:', err.message, err.stack);
-      } else {
-        this.logger.error('FATAL: Failed to connect to Asterisk ARI or start Stasis app with unknown error object:', err);
-      }
+      this.logger.error('FATAL: Failed to connect/start Stasis app:', err instanceof Error ? err.message : String(err), err instanceof Error ? err.stack : '');
       throw err;
     }
   }
@@ -306,8 +280,7 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAISpeechStarted(callId: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`; // Maintained for context in this method
-    call.callLogger.info(`OpenAI speech recognition started (or first transcript received).`); // Removed logPrefix as child logger adds it
+    call.callLogger.info(`OpenAI speech recognition started (or first transcript received).`);
     if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
     if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
     call.speechHasBegun = true;
@@ -340,13 +313,14 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAIFinalResult(callId: string, transcript: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
+
+    call.callLogger.info(`_onOpenAIFinalResult CALLED for callId: ${callId}. Current ttsAudioChunks.length: ${call.ttsAudioChunks?.length ?? 'N/A'}`);
     call.callLogger.info(`OpenAI final transcript received: "${transcript}"`);
+
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
     call.callLogger.info(`Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
-    if (call.ttsAudioChunks) {
-        call.ttsAudioChunks = [];
-    }
+
     try {
       sessionManager.requestOpenAIResponse(callId, transcript, call.config);
     } catch (e: any) {
@@ -355,39 +329,123 @@ export class AriClientService implements AriClientInterface {
     call.callLogger.info(`Waiting for OpenAI to generate response (including potential audio).`);
   }
 
-  public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): void { // isLastChunk is deprecated here, triggered by _onOpenAIAudioStreamEnd
+  public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): void {
     const call = this.activeCalls.get(callId);
+    const loggerToUse = call?.callLogger || this.logger;
+
+    loggerToUse.info(
+      `_onOpenAIAudioChunk CALLED for callId: ${callId}. ` +
+      `Call object exists: ${!!call}. ` +
+      `Chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}. ` +
+      `ttsAudioChunks exists on call: ${!!call?.ttsAudioChunks}. ` +
+      `Initial ttsAudioChunks length: ${call?.ttsAudioChunks?.length ?? 'N/A'}.`
+    );
+
     if (!call || call.isCleanupCalled) {
-      (call?.callLogger || this.logger).warn(`_onOpenAIAudioChunk: Call not active or cleanup called. Ignoring audio chunk.`);
+      loggerToUse.warn(`_onOpenAIAudioChunk: Call object not found or cleanup called for ${callId}. Ignoring audio chunk.`);
       return;
     }
+
     if (!call.ttsAudioChunks) {
+      call.callLogger.error('_onOpenAIAudioChunk: CRITICAL - ttsAudioChunks was undefined. This indicates a prior initialization issue.');
       call.ttsAudioChunks = [];
     }
+
     if (audioChunkBase64 && audioChunkBase64.length > 0) {
-       call.callLogger.debug(`Received TTS audio chunk, length: ${audioChunkBase64.length}.`);
+       call.callLogger.debug(`Received TTS audio chunk, length: ${audioChunkBase64.length}. Accumulating. Previous #chunks: ${call.ttsAudioChunks.length}`);
        call.ttsAudioChunks.push(audioChunkBase64);
+       call.callLogger.info(`_onOpenAIAudioChunk: AFTER PUSH for call ${callId}, ttsAudioChunks.length: ${call.ttsAudioChunks.length}`);
+    } else {
+       call.callLogger.warn('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
     }
   }
 
-  public _onOpenAIAudioStreamEnd(callId: string): void {
+  public async _onOpenAIAudioStreamEnd(callId: string): Promise<void> {
     const call = this.activeCalls.get(callId);
+    const loggerToUse = call?.callLogger || this.logger;
+
     if (!call || call.isCleanupCalled) {
-      (call?.callLogger || this.logger).warn(`_onOpenAIAudioStreamEnd: Call not active or cleanup called.`);
+      loggerToUse.warn(`_onOpenAIAudioStreamEnd: Call ${callId} not active or cleanup called.`);
       return;
     }
-    if (call.ttsAudioChunks && call.ttsAudioChunks.length > 0) {
+
+    if (!call.ttsAudioChunks) {
+        call.callLogger.error(`_onOpenAIAudioStreamEnd: CRITICAL - ttsAudioChunks is undefined for call ${callId}. This should have been initialized in onStasisStart.`);
+        return;
+    }
+
+    call.callLogger.info(`_onOpenAIAudioStreamEnd: Checking ttsAudioChunks for call ${callId}. Length: ${call.ttsAudioChunks.length}`);
+    if (call.ttsAudioChunks.length > 0) {
+      call.callLogger.debug(`_onOpenAIAudioStreamEnd: First chunk content (first 50 chars): ${call.ttsAudioChunks[0]?.substring(0,50)}`);
+    }
+
+    if (call.ttsAudioChunks.length > 0) {
       const fullAudioBase64 = call.ttsAudioChunks.join('');
-      call.callLogger.info(`TTS audio stream ended. Total base64 length: ${fullAudioBase64.length}. Playing audio.`);
-      this.playbackAudio(callId, fullAudioBase64)
-        .then(() => {
-          call.callLogger.info(`TTS audio playback initiated by stream end.`);
-        })
-        .catch(e => {
-          call.callLogger.error(`Error initiating TTS audio playback by stream end: ${e.message}`, e);
-        });
+      call.callLogger.info(`TTS audio stream ended for call ${callId}. Total base64 length: ${fullAudioBase64.length}.`);
+      call.callLogger.debug(`First 100 chars of base64 audio: ${fullAudioBase64.substring(0,100)}`);
+
+      if (fullAudioBase64.trim() === "") {
+          call.callLogger.warn(`Combined audio data for call ${callId} is empty or whitespace. Skipping playback and saving.`);
+          call.ttsAudioChunks = [];
+          return;
+      }
+
+      let soundPathForPlayback: string | null = null;
+      try {
+        const recordingsBaseDir = '/var/lib/asterisk/sounds';
+        const openaiRecordingsDir = path.join(recordingsBaseDir, 'openai');
+
+        if (!fs.existsSync(openaiRecordingsDir)){
+            fs.mkdirSync(openaiRecordingsDir, { recursive: true });
+            call.callLogger.info(`Created recordings directory: ${openaiRecordingsDir}`);
+        }
+
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        let audioExtension = '.raw';
+        const outputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase();
+        if (outputFormat === 'g711_ulaw' || outputFormat === 'mulaw_8000hz' || outputFormat === 'ulaw') {
+          audioExtension = '.ulaw';
+        } else if (outputFormat?.startsWith('pcm')) {
+          audioExtension = '.pcm';
+        } else if (outputFormat === 'mp3') {
+          audioExtension = '.mp3';
+        } else if (outputFormat === 'opus') {
+          audioExtension = '.opus';
+        }
+
+        const filenameOnly = `openai_tts_${callId}_${timestamp}`;
+        const filenameWithExt = `${filenameOnly}${audioExtension}`;
+        const absoluteFilepath = path.join(openaiRecordingsDir, filenameWithExt);
+
+        const audioBuffer = Buffer.from(fullAudioBase64, 'base64');
+        fs.writeFileSync(absoluteFilepath, audioBuffer);
+        call.callLogger.info(`TTS audio for call ${callId} saved to ${absoluteFilepath} (${audioBuffer.length} bytes)`);
+
+        soundPathForPlayback = `openai/${filenameOnly}`;
+      } catch (saveError: any) {
+        call.callLogger.error(`Failed to save TTS audio for call ${callId}: ${saveError.message}`, saveError);
+      }
+
+      if (soundPathForPlayback) {
+        call.callLogger.info(`Playing accumulated TTS audio for call ${callId} from sound path: sound:${soundPathForPlayback}`);
+        try {
+          await this.playbackAudio(callId, null, `sound:${soundPathForPlayback}`);
+          call.callLogger.info(`TTS audio playback initiated for call ${callId} using file: sound:${soundPathForPlayback}.`);
+        } catch (e: any) {
+          call.callLogger.error(`Error initiating TTS audio playback from file for call ${callId}: ${e.message}`, e);
+        }
+      } else {
+        call.callLogger.error(`TTS audio for call ${callId} was not saved correctly, cannot play from file. Attempting base64 playback as fallback.`);
+        // Fallback to base64 playback if file saving/pathing failed
+        try {
+            await this.playbackAudio(callId, fullAudioBase64, null);
+            call.callLogger.info(`TTS audio playback (fallback base64) initiated for call ${callId}.`);
+        } catch (e: any) {
+            call.callLogger.error(`Error initiating TTS audio playback (fallback base64) for call ${callId}: ${e.message}`, e);
+        }
+      }
     } else {
-      call.callLogger.info(`TTS audio stream ended, but no audio chunks were accumulated to play.`);
+      call.callLogger.info(`TTS audio stream ended for call ${callId}, but no audio chunks were accumulated to play (length is 0).`);
     }
     call.ttsAudioChunks = [];
   }
@@ -696,17 +754,8 @@ export class AriClientService implements AriClientInterface {
 
   private async onStasisStart(event: any, incomingChannel: Channel): Promise<void> {
     const callId = incomingChannel.id;
-    // Initialize call-specific config first. This will also set the global currentCallSpecificConfig.logging.level
     const localCallConfig = getCallSpecificConfig(moduleLogger.child({ callId, channelName: incomingChannel.name, context: 'configLoad' }), incomingChannel);
-    // Create callLogger using the log level from the now-updated currentCallSpecificConfig
-    // The second argument to child() was incorrect based on LoggerInstance interface.
-    // The child logger will use the effective log level determined by its parent (moduleLogger)
-    // which considers currentCallSpecificConfig.logging.level.
     const callLogger = moduleLogger.child({ callId, channelName: incomingChannel.name });
-
-    const channelId = incomingChannel.id; // Already have callId
-    const callerIdNum = incomingChannel.caller?.number || 'N/A';
-    // logPrefix is now part of callLogger bindings
 
     if (incomingChannel.name.startsWith('UnicastRTP/') || incomingChannel.name.startsWith('Snoop/')) {
       callLogger.info(`StasisStart for utility channel ${incomingChannel.name} (${incomingChannel.id}). Answering if needed and ignoring further setup.`);
@@ -727,7 +776,6 @@ export class AriClientService implements AriClientInterface {
     if (this.appOwnedChannelIds.has(callId)) {
       callLogger.info(`Channel ${callId} is app-owned. Ignoring StasisStart.`); return;
     }
-    // localCallConfig is already determined
 
     const callResources: CallResources = {
       channel: incomingChannel, config: localCallConfig, callLogger, isCleanupCalled: false,
@@ -742,9 +790,12 @@ export class AriClientService implements AriClientInterface {
       speechEndSilenceTimer: null, maxRecognitionDurationTimer: null,
       dtmfInterDigitTimer: null, dtmfFinalTimer: null,
       vadMaxWaitAfterPromptTimer: null, vadActivationDelayTimer: null, vadInitialSilenceDelayTimer: null,
+      ttsAudioChunks: [],
+      currentTtsResponseId: undefined,
     };
     this.activeCalls.set(callId, callResources);
-    callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}`);
+    this.currentPrimaryCallId = callId;
+    callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}. Set as current primary call.`);
 
     try {
       callLogger.info(`Attempting to answer incoming channel ${callId}.`);
@@ -753,7 +804,6 @@ export class AriClientService implements AriClientInterface {
         callLogger.info(`Successfully answered incoming channel ${callId}.`);
       } catch (err: any) {
         callLogger.error(`FAILED to answer incoming channel ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for answer failure:`, err);
         throw err;
       }
       incomingChannel.once('StasisEnd', () => {
@@ -763,109 +813,45 @@ export class AriClientService implements AriClientInterface {
 
       if (!this.client) { throw new Error("ARI client not connected."); }
 
-      callLogger.info(`Attempting to create userBridge for call ${callId}.`);
-      try {
-        callResources.userBridge = await this.client.bridges.create({ type: 'mixing', name: `user_b_${callId}` });
-        callLogger.info(`Successfully created userBridge ${callResources.userBridge.id} for call ${callId}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to create userBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for userBridge creation failure:`, err);
-        throw err;
-      }
+      callResources.userBridge = await this.client.bridges.create({ type: 'mixing', name: `user_b_${callId}` });
+      callLogger.info(`Successfully created userBridge ${callResources.userBridge.id} for call ${callId}.`);
+      await callResources.userBridge.addChannel({ channel: callId });
+      callLogger.info(`Successfully added channel ${callId} to userBridge ${callResources.userBridge.id}.`);
 
-      callLogger.info(`Attempting to add channel ${callId} to userBridge ${callResources.userBridge.id}.`);
-      try {
-        await callResources.userBridge.addChannel({ channel: callId });
-        callLogger.info(`Successfully added channel ${callId} to userBridge ${callResources.userBridge.id}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to add channel ${callId} to userBridge ${callResources.userBridge.id}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for addChannel to userBridge failure:`, err);
-        throw err;
-      }
+      callResources.snoopBridge = await this.client.bridges.create({ type: 'mixing', name: `snoop_b_${callId}` });
+      callLogger.info(`Successfully created snoopBridge ${callResources.snoopBridge.id} for call ${callId}.`);
 
-      callLogger.info(`Attempting to create snoopBridge for call ${callId}.`);
-      try {
-        callResources.snoopBridge = await this.client.bridges.create({ type: 'mixing', name: `snoop_b_${callId}` });
-        callLogger.info(`Successfully created snoopBridge ${callResources.snoopBridge.id} for call ${callId}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to create snoopBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for snoopBridge creation failure:`, err);
-        throw err;
-      }
-      callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'})); // Child logger will use its parent's (callLogger) effective log level
-      callLogger.info(`Attempting to start RTP server for call ${callId}.`);
-      let rtpServerAddress: { host: string, port: number };
-      try {
-        rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
-        callLogger.info(`RTP Server started for call ${callId}, listening on ${rtpServerAddress.host}:${rtpServerAddress.port}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to start RTP server for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for RTP server start failure:`, err);
-        throw err;
-      }
+      callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'}));
+      const rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
+      callLogger.info(`RTP Server started for call ${callId}, listening on ${rtpServerAddress.host}:${rtpServerAddress.port}.`);
 
       const externalMediaFormat = 'ulaw';
-      callLogger.info(`Setting Asterisk externalMediaFormat to 'ulaw' for OpenAI G.711 passthrough.`);
-
-      callLogger.info(`Attempting to create externalMediaChannel for call ${callId} (app: ${ASTERISK_ARI_APP_NAME}, host: ${rtpServerAddress.host}:${rtpServerAddress.port}, format: '${externalMediaFormat}', encapsulation: 'rtp').`);
-      try {
-        callResources.externalMediaChannel = await this.client.channels.externalMedia({
-          app: ASTERISK_ARI_APP_NAME,
-          external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
-          format: externalMediaFormat,
-          encapsulation: 'rtp'
-        });
-        callLogger.info(`Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId} with format ${externalMediaFormat}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to create externalMediaChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for externalMediaChannel creation failure:`, err);
-        throw err;
-      }
+      callResources.externalMediaChannel = await this.client.channels.externalMedia({
+        app: ASTERISK_ARI_APP_NAME,
+        external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
+        format: externalMediaFormat,
+        encapsulation: 'rtp'
+      });
+      callLogger.info(`Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId} with format ${externalMediaFormat}.`);
       this.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
 
       const snoopDirection = 'in' as ('in' | 'out' | 'both');
-      callLogger.info(`Attempting to create snoopChannel on ${callId} (snoopId: snoop_${callId}, direction: '${snoopDirection}').`);
-      try {
-        callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
-        callLogger.info(`Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId} with direction '${snoopDirection}'.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to create snoopChannel for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for snoopChannel creation failure:`, err);
-        throw err;
-      }
+      callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
+      callLogger.info(`Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId} with direction '${snoopDirection}'.`);
       this.appOwnedChannelIds.add(callResources.snoopChannel.id);
 
-      callLogger.info(`Attempting to add externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
-      try {
-        await callResources.snoopBridge.addChannel({ channel: callResources.externalMediaChannel.id });
-        callLogger.info(`Successfully added externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to add externalMediaChannel to snoopBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for addChannel (externalMediaChannel) to snoopBridge failure:`, err);
-        throw err;
-      }
-
-      callLogger.info(`Attempting to add snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
-      try {
-        await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });
-        callLogger.info(`Successfully added snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
-      } catch (err: any) {
-        callLogger.error(`FAILED to add snoopChannel to snoopBridge for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-        callLogger.error(`Full error object for addChannel (snoopChannel) to snoopBridge failure:`, err);
-        throw err;
-      }
+      await callResources.snoopBridge.addChannel({ channel: callResources.externalMediaChannel.id });
+      callLogger.info(`Successfully added externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+      await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });
+      callLogger.info(`Successfully added snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
 
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = this.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
-          // Use call.callLogger directly as it's guaranteed to be initialized for an active call
-          // Use optional chaining for .silly as it's an optional method in LoggerInstance
           call.callLogger.silly?.(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
-
           if (call.openAIStreamingActive && !call.pendingVADBufferFlush) {
             sessionManager.sendAudioToOpenAI(callId, audioPayload);
           }
-
           if (call.isVADBufferingActive) {
             if (call.vadAudioBuffer.length < MAX_VAD_BUFFER_PACKETS) {
               call.vadAudioBuffer.push(audioPayload);
@@ -878,7 +864,7 @@ export class AriClientService implements AriClientInterface {
         }
       });
 
-      sessionManager.handleCallConnection(callId, this); // 'this' (AriClientService) is passed, its logger is already child of moduleLogger
+      sessionManager.handleCallConnection(callId, this);
       callLogger.info(`Call connection details passed to SessionManager.`);
 
       const appRecogConf = localCallConfig.appConfig.appRecognitionConfig;
@@ -893,14 +879,9 @@ export class AriClientService implements AriClientInterface {
         const vadConfig = appRecogConf.vadConfig;
         const talkDetectValue = `${vadConfig.vadRecognitionActivationMs},${vadConfig.vadSilenceThresholdMs}`;
         callLogger.info(`Attempting to set TALK_DETECT on channel ${callId} with value: ${talkDetectValue}.`);
-        try {
-          await incomingChannel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
-          callLogger.info(`Successfully set TALK_DETECT on channel ${callId}.`);
-        } catch (err:any) {
-          callLogger.error(`FAILED to set TALK_DETECT for call ${callId}. Error: ${err.message || JSON.stringify(err)}`);
-          callLogger.error(`Full error object for TALK_DETECT set failure:`, err);
-          throw err;
-        }
+        await incomingChannel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+        callLogger.info(`Successfully set TALK_DETECT on channel ${callId}.`);
+
         if (appRecogConf.vadRecogActivation === 'vadMode') {
           callResources.vadInitialSilenceDelayCompleted = (appRecogConf.vadInitialSilenceDelaySeconds ?? 0) <= 0;
           callResources.vadActivationDelayCompleted = (appRecogConf.vadActivationDelaySeconds ?? 0) <= 0;
@@ -915,51 +896,39 @@ export class AriClientService implements AriClientInterface {
       }
 
       const greetingAudio = appRecogConf.greetingAudioPath;
-      const call = callResources;
       if (greetingAudio && this.client) {
         callLogger.info(`Playing greeting audio: ${greetingAudio}`);
         callResources.mainPlayback = this.client.Playback();
-
         if (callResources.mainPlayback) {
           const mainPlaybackId = callResources.mainPlayback.id;
-
           const playbackFailedHandler = (event: any, failedPlayback: Playback) => {
             if (this.client && failedPlayback.id === mainPlaybackId) {
               const currentCall = this.activeCalls.get(callId);
-              if (currentCall && currentCall.mainPlayback && currentCall.mainPlayback.id === mainPlaybackId) {
-                currentCall.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED (client event). Reason: ${event.playback && event.playback.state === 'failed' ? (event.playback.reason || 'Unknown') : (event.reason || 'Unknown')}`);
+              if (currentCall?.mainPlayback?.id === mainPlaybackId) {
+                currentCall.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED.`);
                 this._handlePlaybackFinished(callId, 'main_greeting_failed');
               }
-              if (currentCall && currentCall.playbackFailedHandler) {
+              if (currentCall?.playbackFailedHandler) {
                 this.client?.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
                 currentCall.playbackFailedHandler = null;
               }
             }
           };
-
           callResources.playbackFailedHandler = playbackFailedHandler;
           this.client.on('PlaybackFailed' as any, callResources.playbackFailedHandler);
-
           callResources.mainPlayback.once('PlaybackFinished', (evt: any, instance: Playback) => {
             const currentCall = this.activeCalls.get(callId);
-            if (currentCall && currentCall.playbackFailedHandler && this.client && instance.id === currentCall.mainPlayback?.id) {
+            if (currentCall?.playbackFailedHandler && this.client && instance.id === currentCall.mainPlayback?.id) {
               this.client.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
               currentCall.playbackFailedHandler = null;
             }
-            if (currentCall && instance.id === currentCall.mainPlayback?.id) {
-              currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED for call ${callId}.`);
+            if (currentCall?.mainPlayback?.id === instance.id) {
+              currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED.`);
               this._handlePlaybackFinished(callId, 'main_greeting_finished');
             }
           });
-          try {
-            callLogger.info(`Attempting to play greeting audio '${greetingAudio}' on channel ${callId} using playback ID ${callResources.mainPlayback.id}.`);
-            await callResources.channel.play({ media: greetingAudio }, callResources.mainPlayback);
-            callLogger.info(`Successfully started main greeting playback ${callResources.mainPlayback.id} on channel ${callId}.`);
-          } catch (playError: any) {
-            callLogger.error(`FAILED to start main greeting playback for call ${callId}. Error: ${(playError instanceof Error ? playError.message : String(playError))}`);
-            callLogger.error(`Full error object for greeting playback failure:`, playError);
-            this._handlePlaybackFinished(callId, 'main_greeting_playback_start_error');
-          }
+          await callResources.channel.play({ media: greetingAudio }, callResources.mainPlayback);
+          callLogger.info(`Successfully started main greeting playback ${callResources.mainPlayback.id}.`);
         } else {
            callLogger.error(`Failed to create mainPlayback object.`);
            this._handlePlaybackFinished(callId, 'main_greeting_creation_failed');
@@ -1013,6 +982,11 @@ export class AriClientService implements AriClientInterface {
     if (call) {
       call.isCleanupCalled = true;
       call.callLogger.info(`Full cleanup initiated. Reason: ${reason}. Hangup main: ${hangupMainChannel}`);
+
+      if (this.currentPrimaryCallId === callId) {
+        this.currentPrimaryCallId = null;
+        call.callLogger.info(`Cleared as current primary call.`);
+      }
 
       if (call.playbackFailedHandler && this.client) {
         this.client.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
@@ -1102,7 +1076,7 @@ export class AriClientService implements AriClientInterface {
 
     if (call) {
         this.activeCalls.delete(channelId);
-        sessionManager.handleAriCallEnd(channelId); // Ensure sessionManager also cleans up its state for this callId
+        sessionManager.handleAriCallEnd(channelId);
         resolvedLogger.info(`Call resources fully cleaned up and removed from active sessions.`);
     } else if (!isAriClosing) {
         resolvedLogger.warn(`cleanupCallResources: No call object found for channelId ${channelId} during cleanup.`);
@@ -1124,32 +1098,43 @@ export class AriClientService implements AriClientInterface {
     this.activeCalls.clear();
     this.appOwnedChannelIds.clear();
    }
-  public async playbackAudio(channelId: string, audioPayloadB64: string): Promise<void> {
+  public async playbackAudio(channelId: string, audioPayloadB64?: string | null, mediaUri?: string | null): Promise<void> {
     const call = this.activeCalls.get(channelId);
     if (!call || call.isCleanupCalled || !this.client) {
-      (call?.callLogger || this.logger).warn(`Cannot playback audio, call not active or client missing.`);
+      (call?.callLogger || this.logger).warn(`Cannot playback audio for call ${channelId}, call not active or client missing.`);
       return;
     }
-    call.callLogger.debug(`Attempting to play audio chunk of length ${audioPayloadB64.length}.`);
+
+    let mediaToPlay: string;
+    if (mediaUri) {
+      mediaToPlay = mediaUri;
+      call.callLogger.info(`Attempting to play audio from media URI: ${mediaUri}`);
+    } else if (audioPayloadB64) {
+      call.callLogger.warn(`Playing audio via base64 for call ${channelId}. Length: ${audioPayloadB64.length}. This might fail for long audio strings if not using file playback.`);
+      mediaToPlay = `sound:base64:${audioPayloadB64}`;
+    } else {
+      call.callLogger.error(`playbackAudio called for ${channelId} without audioPayloadB64 or mediaUri.`);
+      return;
+    }
+
     try {
       if (call.waitingPlayback) {
         try {
           await call.waitingPlayback.stop();
-          call.callLogger.debug(`Stopped previous waiting playback.`);
+          call.callLogger.debug(`Stopped previous waiting playback for ${channelId}.`);
         }
-        catch(e:any) { call.callLogger.warn(`Error stopping previous waiting playback: ${e.message}`);}
+        catch(e:any) { call.callLogger.warn(`Error stopping previous waiting playback for ${channelId}: ${e.message}`);}
         call.waitingPlayback = undefined;
       }
 
       call.waitingPlayback = this.client.Playback();
       const playbackId = call.waitingPlayback.id;
-      const currentCallId = call.channel.id; // Use consistent callId
-      call.callLogger.debug(`Created playback object ${playbackId}.`);
+      call.callLogger.debug(`Created playback object ${playbackId} for ${channelId}. Media: ${mediaToPlay.substring(0,60)}...`);
 
       const waitingPlaybackFinishedCb = () => {
-        const currentCall = this.activeCalls.get(currentCallId); // Use currentCallId
+        const currentCall = this.activeCalls.get(channelId);
         if (!currentCall) return;
-        currentCall.callLogger.debug(`Playback ${playbackId} finished.`);
+        currentCall.callLogger.debug(`Playback ${playbackId} finished for ${channelId}.`);
         if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
           currentCall.waitingPlayback = undefined;
         }
@@ -1164,13 +1149,13 @@ export class AriClientService implements AriClientInterface {
 
       const waitingPlaybackFailedCb = (event: any, failedPlayback: Playback) => {
         if (this.client && failedPlayback.id === playbackId) {
-          const currentCall = this.activeCalls.get(currentCallId); // Use currentCallId
+          const currentCall = this.activeCalls.get(channelId);
           if (!currentCall) return;
-          currentCall.callLogger.error(`Playback ${playbackId} failed: ${failedPlayback?.state}, ${event?.message || (event?.playback?.reason || 'Unknown')}`);
+          currentCall.callLogger.error(`Playback ${playbackId} FAILED for ${channelId}: ${failedPlayback?.state}, Reason: ${event?.message || (event?.playback?.reason || 'Unknown')}`);
           if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
             currentCall.waitingPlayback = undefined;
           }
-          if (this.client && currentCall.waitingPlaybackFailedHandler === waitingPlaybackFailedCb) { // Check if it's the correct handler
+          if (this.client && currentCall.waitingPlaybackFailedHandler === waitingPlaybackFailedCb) {
             this.client.removeListener('PlaybackFailed' as any, waitingPlaybackFailedCb);
             currentCall.waitingPlaybackFailedHandler = null;
           }
@@ -1179,10 +1164,10 @@ export class AriClientService implements AriClientInterface {
       call.waitingPlaybackFailedHandler = waitingPlaybackFailedCb;
       this.client.on('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
 
-      await call.channel.play({ media: `sound:base64:${audioPayloadB64}` }, call.waitingPlayback);
-      call.callLogger.debug(`Playback ${playbackId} started.`);
+      await call.channel.play({ media: mediaToPlay }, call.waitingPlayback);
+      call.callLogger.info(`Playback ${playbackId} started for ${channelId}.`);
     } catch (err: any) {
-      call.callLogger.error(`Error playing audio: ${err.message || JSON.stringify(err)}`);
+      call.callLogger.error(`Error playing audio for ${channelId}: ${err.message || JSON.stringify(err)}`);
       if (call.waitingPlayback) {
         if (call.waitingPlaybackFailedHandler && this.client) {
             this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
@@ -1211,13 +1196,19 @@ export class AriClientService implements AriClientInterface {
     call.callLogger.info(`Requesting TTS for text: "${textToSpeak}"`);
 
     try {
-      // @ts-ignore // Assuming synthesizeSpeechOpenAI is correctly defined in sessionManager
+      // @ts-ignore
       const audioBuffer = await sessionManager.synthesizeSpeechOpenAI(call.config, textToSpeak, call.callLogger);
 
       if (audioBuffer && audioBuffer.length > 0) {
         const audioBase64 = audioBuffer.toString('base64');
         call.callLogger.info(`TTS audio received (${audioBuffer.length} bytes). Playing to caller.`);
-        await this.playbackAudio(callId, audioBase64);
+        // Esta función ahora guardará y reproducirá desde archivo si es posible.
+        // await this.playbackAudio(callId, audioBase64);
+        // _onOpenAIAudioStreamEnd se encargará de esto si el audio viene de la API Realtime.
+        // Esta función _playTTSToCaller parece ser para un flujo de TTS diferente/síncrono.
+        // Si es para TTS síncrono, se debe decidir si guardar y reproducir o usar base64.
+        // Por ahora, se asume que el flujo principal es a través de _onOpenAIAudioStreamEnd.
+         call.callLogger.warn("_playTTSToCaller is likely deprecated if using Realtime API audio streaming. Audio should come via _onOpenAIAudioChunk.");
       } else {
         call.callLogger.error(`TTS synthesis failed or returned empty audio.`);
       }
@@ -1228,6 +1219,7 @@ export class AriClientService implements AriClientInterface {
 }
 
 let ariClientServiceInstance: AriClientService | null = null;
+
 export async function initializeAriClient(): Promise<AriClientService> {
   if (!OPENAI_API_KEY) {
       moduleLogger.error("FATAL: Cannot initialize AriClientService - OPENAI_API_KEY is not set.");
@@ -1239,3 +1231,5 @@ export async function initializeAriClient(): Promise<AriClientService> {
   }
   return ariClientServiceInstance;
 }
+
+export { ariClientServiceInstance };
