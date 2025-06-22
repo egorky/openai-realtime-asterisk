@@ -499,3 +499,51 @@ export function handleFrontendDisconnection() {
     globalFrontendConn = undefined;
     console.log("SessionManager: Global frontend WebSocket connection has been reset/cleared.");
 }
+
+export function sendSessionUpdateToOpenAI(callId: string, currentOpenAIConfig: OpenAIRealtimeAPIConfig) {
+  const session = activeOpenAISessions.get(callId);
+  const loggerToUse = session?.ariClient?.logger || console;
+
+  if (!session || !session.ws || !isOpen(session.ws)) {
+    loggerToUse.warn(`[${callId}] SessionManager: Cannot send session.update to OpenAI, session not found or WebSocket not open.`);
+    return;
+  }
+
+  // Construir el payload para session.update solo con los campos que OpenAI espera
+  const sessionUpdatePayload: any = {
+    // input_audio_format y output_audio_format no se suelen cambiar dinámicamente,
+    // pero se incluyen si la API los permitiera/requiriera en cada update.
+    // Por lo general, se establecen al inicio de la sesión.
+    // input_audio_format: currentOpenAIConfig.inputAudioFormat || "g711_ulaw",
+    // output_audio_format: currentOpenAIConfig.outputAudioFormat || "g711_ulaw",
+  };
+
+  if (currentOpenAIConfig.ttsVoice) {
+    sessionUpdatePayload.voice = currentOpenAIConfig.ttsVoice; // OpenAI espera 'voice' para ttsVoice
+  }
+  if (currentOpenAIConfig.instructions) {
+    sessionUpdatePayload.instructions = currentOpenAIConfig.instructions;
+  }
+  // 'tools' no es parte del evento session.update de la API Realtime.
+  // 'model' tampoco se cambia dinámicamente en una sesión activa.
+
+  if (Object.keys(sessionUpdatePayload).length === 0) {
+    loggerToUse.info(`[${callId}] SessionManager: No relevant config changes to send to OpenAI via session.update.`);
+    return;
+  }
+
+  const sessionUpdateEvent = {
+    type: "session.update",
+    session: sessionUpdatePayload
+  };
+
+  loggerToUse.info(`[${callId}] SessionManager: Sending session.update to OpenAI with new config:`, sessionUpdatePayload);
+  try {
+    session.ws.send(JSON.stringify(sessionUpdateEvent));
+    loggerToUse.info(`[${callId}] SessionManager: Successfully sent session.update to OpenAI.`);
+    // También podrías querer enviar una confirmación al frontend a través del logger de ariClient
+    // session.ariClient.logger.info(`OpenAI session configuration update sent for call ${callId}.`);
+  } catch (e: any) {
+    loggerToUse.error(`[${callId}] SessionManager: Error sending session.update to OpenAI: ${e.message}`);
+  }
+}

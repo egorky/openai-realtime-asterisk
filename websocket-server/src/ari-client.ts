@@ -270,6 +270,7 @@ export class AriClientService implements AriClientInterface {
   private activeCalls = new Map<string, CallResources>();
   private appOwnedChannelIds = new Set<string>();
   public logger: LoggerInstance = moduleLogger;
+  private currentPrimaryCallId: string | null = null; // Para rastrear la llamada "principal"
 
   constructor() {
     this.logger = moduleLogger.child({ service: 'AriClientService' });
@@ -278,6 +279,58 @@ export class AriClientService implements AriClientInterface {
         throw new Error("Base configuration was not loaded. This should not happen.");
     }
   }
+
+  public getCurrentPrimaryCallId(): string | null {
+    return this.currentPrimaryCallId;
+  }
+
+  public async updateActiveCallConfig(callId: string, newConfigData: { instructions?: string, ttsVoice?: string, tools?: any[] }) {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) {
+      this.logger.warn(`updateActiveCallConfig: Call ${callId} not active or cleanup called.`);
+      // Informar al frontend también podría ser útil aquí.
+      return;
+    }
+
+    call.callLogger.info(`Updating active call config for ${callId} with new data.`);
+
+    let configChanged = false;
+    if (newConfigData.instructions && call.config.openAIRealtimeAPI.instructions !== newConfigData.instructions) {
+      call.config.openAIRealtimeAPI.instructions = newConfigData.instructions;
+      configChanged = true;
+      call.callLogger.info(`Instructions updated for call ${callId}.`);
+    }
+    if (newConfigData.ttsVoice && call.config.openAIRealtimeAPI.ttsVoice !== newConfigData.ttsVoice) {
+      call.config.openAIRealtimeAPI.ttsVoice = newConfigData.ttsVoice;
+      configChanged = true;
+      call.callLogger.info(`TTS Voice updated to "${newConfigData.ttsVoice}" for call ${callId}.`);
+    }
+    if (newConfigData.tools) {
+      // Aquí simplemente almacenamos las herramientas. La lógica de cómo se usan (ej. en el prompt inicial o tool_choice)
+      // es más compleja y no se activa directamente por un session.update a OpenAI Realtime.
+      // Comparamos si realmente cambiaron para el log.
+      if (JSON.stringify(call.config.openAIRealtimeAPI.tools) !== JSON.stringify(newConfigData.tools)) {
+        call.config.openAIRealtimeAPI.tools = newConfigData.tools; // Asumiendo que 'tools' existe en OpenAIRealtimeAPIConfig type
+        configChanged = true; // Consideramos un cambio si las herramientas se modifican
+        call.callLogger.info(`Tools configuration updated locally for call ${callId}.`);
+      }
+    }
+
+    if (configChanged) {
+      call.callLogger.info(`Configuration for call ${callId} has been updated. New relevant values -> Instructions: "${call.config.openAIRealtimeAPI.instructions}", Voice: "${call.config.openAIRealtimeAPI.ttsVoice}"`);
+      // Intentar enviar la actualización a la sesión de OpenAI activa.
+      try {
+        // Usamos import() dinámico para evitar problemas de dependencia circular en tiempo de carga inicial.
+        const sessionManagerModule = await import('./sessionManager');
+        sessionManagerModule.sendSessionUpdateToOpenAI(callId, call.config.openAIRealtimeAPI);
+      } catch (e: any) {
+        call.callLogger.error(`Error trying to send session.update to OpenAI for call ${callId} after config change: ${e.message}`);
+      }
+    } else {
+      call.callLogger.info(`No effective changes applied to call ${callId} configuration.`);
+    }
+  }
+
 
   public async connect(): Promise<void> {
     try {
@@ -378,7 +431,12 @@ export class AriClientService implements AriClientInterface {
     }
     if (call.ttsAudioChunks && call.ttsAudioChunks.length > 0) {
       const fullAudioBase64 = call.ttsAudioChunks.join('');
-      call.callLogger.info(`TTS audio stream ended. Total base64 length: ${fullAudioBase64.length}. Playing audio.`);
+      call.callLogger.info(`TTS audio stream ended. Total base64 length: ${fullAudioBase64.length}. First 100 chars: ${fullAudioBase64.substring(0,100)}. Playing audio.`);
+      if (fullAudioBase64.trim() === "") {
+          call.callLogger.warn("Combined audio data is empty or whitespace. Skipping playback.");
+          call.ttsAudioChunks = [];
+          return;
+      }
       this.playbackAudio(callId, fullAudioBase64)
         .then(() => {
           call.callLogger.info(`TTS audio playback initiated by stream end.`);
@@ -744,7 +802,8 @@ export class AriClientService implements AriClientInterface {
       vadMaxWaitAfterPromptTimer: null, vadActivationDelayTimer: null, vadInitialSilenceDelayTimer: null,
     };
     this.activeCalls.set(callId, callResources);
-    callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}`);
+    this.currentPrimaryCallId = callId; // Establecer como llamada primaria actual
+    callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}. Set as current primary call.`);
 
     try {
       callLogger.info(`Attempting to answer incoming channel ${callId}.`);
@@ -1014,6 +1073,11 @@ export class AriClientService implements AriClientInterface {
       call.isCleanupCalled = true;
       call.callLogger.info(`Full cleanup initiated. Reason: ${reason}. Hangup main: ${hangupMainChannel}`);
 
+      if (this.currentPrimaryCallId === callId) {
+        this.currentPrimaryCallId = null;
+        call.callLogger.info(`Cleared as current primary call.`);
+      }
+
       if (call.playbackFailedHandler && this.client) {
         this.client.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
         call.playbackFailedHandler = null;
@@ -1228,6 +1292,7 @@ export class AriClientService implements AriClientInterface {
 }
 
 let ariClientServiceInstance: AriClientService | null = null;
+
 export async function initializeAriClient(): Promise<AriClientService> {
   if (!OPENAI_API_KEY) {
       moduleLogger.error("FATAL: Cannot initialize AriClientService - OPENAI_API_KEY is not set.");
@@ -1239,3 +1304,69 @@ export async function initializeAriClient(): Promise<AriClientService> {
   }
   return ariClientServiceInstance;
 }
+
+// Export la instancia para que otros módulos (como server.ts) puedan acceder a ella.
+export { ariClientServiceInstance };
+
+// Añadir currentPrimaryCallId y métodos relacionados a la clase AriClientService
+// Esta es una adición a la clase AriClientService existente.
+// Se asume que el resto de la clase está arriba.
+
+// Dentro de la clase AriClientService:
+// private currentPrimaryCallId: string | null = null; // Declarar al inicio de la clase
+
+// En onStasisStart, después de this.activeCalls.set(callId, callResources);
+// this.currentPrimaryCallId = callId;
+
+// En _fullCleanup, antes de this.activeCalls.delete(callId);
+// if (this.currentPrimaryCallId === callId) {
+//   this.currentPrimaryCallId = null;
+// }
+
+// public getCurrentPrimaryCallId(): string | null {
+//   return this.currentPrimaryCallId;
+// }
+
+// public async updateActiveCallConfig(callId: string, newConfigData: { instructions?: string, ttsVoice?: string, tools?: any[] }) {
+//   const call = this.activeCalls.get(callId);
+//   if (!call || call.isCleanupCalled) {
+//     this.logger.warn(`updateActiveCallConfig: Call ${callId} not active or cleanup called.`);
+//     return;
+//   }
+
+//   call.callLogger.info(`Updating active call config for ${callId} with:`, newConfigData);
+
+//   if (newConfigData.instructions) {
+//     call.config.openAIRealtimeAPI.instructions = newConfigData.instructions;
+//   }
+//   if (newConfigData.ttsVoice) {
+//     call.config.openAIRealtimeAPI.ttsVoice = newConfigData.ttsVoice;
+//   }
+//   if (newConfigData.tools) {
+//     // La API Realtime de OpenAI no toma 'tools' directamente en session.update.
+//     // Se almacenan en la configuración local para ser usadas al construir prompts/respuestas si es necesario.
+//     // O si la API evoluciona para soportar esto en session.update.
+//     // Por ahora, esto es más para mantener la consistencia con lo que la webapp envía.
+//     call.config.openAIRealtimeAPI.tools = newConfigData.tools; // Asumiendo que 'tools' existe en OpenAIRealtimeAPIConfig
+//     call.callLogger.info(`Tools configuration updated locally for call ${callId}. Note: OpenAI Realtime API might not use this via session.update.`);
+//   }
+
+//   // Notificar a sessionManager para que envíe el session.update a OpenAI si la sesión está activa.
+//   // Esto requiere que sessionManager tenga una función para ello.
+//   try {
+//     // sessionManager.sendSessionUpdateToOpenAI(callId, call.config.openAIRealtimeAPI); // Necesita definirse en sessionManager
+//     // Para evitar dependencias circulares o un acoplamiento demasiado fuerte,
+//     // el sessionManager podría obtener la config actualizada de alguna manera, o ari-client podría empujarla.
+//     // Por ahora, vamos a asumir que sessionManager puede ser llamado aquí.
+//     // Esta llamada es conceptual y su implementación exacta se hará en sessionManager.ts
+//     const { sendSessionUpdateToOpenAI } = await import('./sessionManager'); // Carga dinámica para evitar problemas de arranque
+//     sendSessionUpdateToOpenAI(callId, call.config.openAIRealtimeAPI);
+
+//     call.callLogger.info(`Config update for call ${callId} processed. Instructions: "${call.config.openAIRealtimeAPI.instructions}", Voice: "${call.config.openAIRealtimeAPI.ttsVoice}"`);
+//   } catch (e: any) {
+//     call.callLogger.error(`Error trying to send session update to OpenAI for call ${callId}: ${e.message}`);
+//   }
+// }
+// NOTA: El código comentado arriba es una guía. Se integrará correctamente en la clase.
+// La forma correcta de hacerlo es añadir los miembros y métodos a la clase AriClientService.
+// El siguiente bloque de replace_with_git_merge_diff lo hará.

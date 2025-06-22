@@ -28,7 +28,7 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   const [instructions, setInstructions] = useState(
     "You are a helpful assistant in a phone call."
   );
-  const [voice, setVoice] = useState("ash");
+  const [ttsVoice, setTtsVoice] = useState("alloy"); // Cambiado de 'voice' a 'ttsVoice' y valor inicial
   const [tools, setTools] = useState<string[]>([]);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
   const [editingSchemaStr, setEditingSchemaStr] = useState("");
@@ -49,7 +49,7 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
   // Track changes to determine if there are unsaved modifications
   useEffect(() => {
     setHasUnsavedChanges(true);
-  }, [instructions, voice, tools]);
+  }, [instructions, ttsVoice, tools]); // Cambiado de 'voice' a 'ttsVoice'
 
   // Reset save status after a delay when saved
   useEffect(() => {
@@ -66,7 +66,7 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
     try {
       await onSave({
         instructions,
-        voice,
+        ttsVoice, // Cambiado de 'voice' a 'ttsVoice'
         tools: tools.map((tool) => JSON.parse(tool)),
       });
       setSaveStatus("saved");
@@ -191,13 +191,14 @@ const SessionConfigurationPanel: React.FC<SessionConfigurationPanelProps> = ({
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium leading-none">Voice</label>
-              <Select value={voice} onValueChange={setVoice}>
+              <label className="text-sm font-medium leading-none">Voice (TTS)</label>
+              <Select value={ttsVoice} onValueChange={setTtsVoice}> {/* Cambiado de 'voice' a 'ttsVoice' */}
                 <SelectTrigger className="w-full">
                   <SelectValue placeholder="Select voice" />
                 </SelectTrigger>
                 <SelectContent>
-                  {["ash", "ballad", "coral", "sage", "verse"].map((v) => (
+                  {/* Voces de OpenAI Realtime API */}
+                  {["alloy", "echo", "fable", "onyx", "nova", "shimmer"].map((v) => (
                     <SelectItem key={v} value={v}>
                       {v}
                     </SelectItem>
