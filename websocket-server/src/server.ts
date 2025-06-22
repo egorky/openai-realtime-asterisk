@@ -9,7 +9,7 @@ import {
   handleFrontendConnection,
 } from "./sessionManager";
 import functions from "./functionHandlers";
-import { initializeAriClient } from "./ari-client";
+import { initializeAriClient, ariClientServiceInstance } from "./ari-client"; // Importar ariClientServiceInstance
 
 dotenv.config();
 
