@@ -123,10 +123,11 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       try {
         const eventString = JSON.stringify(sessionUpdateEvent);
         ws.send(eventString);
-        if (sessionLogger.isLevelEnabled?.('debug')) {
+        // Check if sessionLogger has isLevelEnabled (i.e., it's our custom logger)
+        if (typeof (sessionLogger as any).isLevelEnabled === 'function' && (sessionLogger as any).isLevelEnabled('debug')) {
           sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent initial session.update: ${eventString}`);
         } else {
-          sessionLogger.info(`[${callId}] OpenAI Realtime: Sent initial session.update event (details in debug log).`);
+          sessionLogger.info(`[${callId}] OpenAI Realtime: Sent initial session.update event (details in debug log if enabled). Event: ${JSON.stringify(sessionUpdateEvent.session)}`);
         }
       } catch (e: any) {
         sessionLogger.error(`[${callId}] OpenAI Realtime: Failed to send initial session.update event: ${e.message}`);
@@ -322,10 +323,10 @@ export function requestOpenAIResponse(callId: string, transcript: string, config
     };
     const convEventString = JSON.stringify(conversationItemCreateEvent);
     session.ws.send(convEventString);
-    if (sessionLogger.isLevelEnabled?.('debug')) {
+    if (typeof (sessionLogger as any).isLevelEnabled === 'function' && (sessionLogger as any).isLevelEnabled('debug')) {
       sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent conversation.item.create: ${convEventString}`);
     } else {
-      sessionLogger.info(`[${callId}] OpenAI Realtime: Sent conversation.item.create (details in debug log).`);
+      sessionLogger.info(`[${callId}] OpenAI Realtime: Sent conversation.item.create (content details in debug log if enabled).`);
     }
 
 
@@ -335,10 +336,10 @@ export function requestOpenAIResponse(callId: string, transcript: string, config
     };
     const respEventString = JSON.stringify(responseCreateEvent);
     session.ws.send(respEventString);
-    if (sessionLogger.isLevelEnabled?.('debug')) {
+    if (typeof (sessionLogger as any).isLevelEnabled === 'function' && (sessionLogger as any).isLevelEnabled('debug')) {
       sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent response.create: ${respEventString}`);
     } else {
-      sessionLogger.info(`[${callId}] OpenAI Realtime: Sent response.create (details in debug log). Modalities: ${responseCreateEvent.response.modalities.join(', ')}`);
+      sessionLogger.info(`[${callId}] OpenAI Realtime: Sent response.create (details in debug log if enabled). Modalities: ${responseCreateEvent.response.modalities.join(', ')}`);
     }
 
   } catch (e:any) {
