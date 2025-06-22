@@ -696,9 +696,10 @@ export class AriClientService implements AriClientInterface {
 
   private async onStasisStart(event: any, incomingChannel: Channel): Promise<void> {
     const callId = incomingChannel.id;
-    // Initialize call-specific config first to determine its log level
+    // Initialize call-specific config first. This will also set the global currentCallSpecificConfig.logging.level
     const localCallConfig = getCallSpecificConfig(moduleLogger.child({ callId, channelName: incomingChannel.name, context: 'configLoad' }), incomingChannel);
-    const callLogger = moduleLogger.child({ callId, channelName: incomingChannel.name }, localCallConfig.logging.level);
+    // Create callLogger using the log level from the now-updated currentCallSpecificConfig
+    const callLogger = moduleLogger.child({ callId, channelName: incomingChannel.name }, currentCallSpecificConfig.logging.level);
 
     const channelId = incomingChannel.id; // Already have callId
     const callerIdNum = incomingChannel.caller?.number || 'N/A';
@@ -788,7 +789,7 @@ export class AriClientService implements AriClientInterface {
         callLogger.error(`Full error object for snoopBridge creation failure:`, err);
         throw err;
       }
-      callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'}, localCallConfig.logging.level)); // Pass call-specific log level
+      callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'})); // Child logger will use its parent's (callLogger) effective log level
       callLogger.info(`Attempting to start RTP server for call ${callId}.`);
       let rtpServerAddress: { host: string, port: number };
       try {
