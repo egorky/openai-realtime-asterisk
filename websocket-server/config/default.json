@@ -1,19 +1,26 @@
 {
   "appConfig": {
     "appRecognitionConfig": {
-      "recognitionActivationMode": "VAD",
-      "noSpeechBeginTimeoutSeconds": 3,
-      "speechCompleteTimeoutSeconds": 5,
+      "recognitionActivationMode": "fixedDelay",
+      "bargeInDelaySeconds": 0.2,
+      "noSpeechBeginTimeoutSeconds": 5.0,
+      "speechEndSilenceTimeoutSeconds": 1.5,
+      "maxRecognitionDurationSeconds": 30.0,
+      "vadSilenceThresholdMs": 2500,
+      "vadTalkThreshold": 256,
+      "vadRecogActivation": "vadMode",
+      "vadMaxWaitAfterPromptSeconds": 10.0,
+      "vadInitialSilenceDelaySeconds": 0.0,
       "vadConfig": {
-        "vadSilenceThresholdMs": 250,
+        "vadSilenceThresholdMs": 2500,
         "vadRecognitionActivationMs": 40
       },
-      "initialOpenAIStreamIdleTimeoutSeconds": 10,
-      "bargeInDelaySeconds": 0.5
+      "initialOpenAIStreamIdleTimeoutSeconds": 10
     },
     "dtmfConfig": {
       "dtmfEnabled": true,
-      "dtmfInterdigitTimeoutSeconds": 2,
+      "dtmfInterdigitTimeoutSeconds": 3.0,
+      "dtmfFinalTimeoutSeconds": 5.0,
       "dtmfMaxDigits": 16,
       "dtmfTerminatorDigit": "#"
     },

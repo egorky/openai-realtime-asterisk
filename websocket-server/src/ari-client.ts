@@ -29,13 +29,30 @@ try {
   baseConfig = {
     appConfig: {
       appRecognitionConfig: {
-        recognitionActivationMode: "VAD", noSpeechBeginTimeoutSeconds: 3, speechCompleteTimeoutSeconds: 5,
-        vadConfig: { vadSilenceThresholdMs: 250, vadRecognitionActivationMs: 40 },
-        maxRecognitionDurationSeconds: 30, greetingAudioPath: 'sound:hello-world', bargeInDelaySeconds: 0.5,
-        vadRecogActivation: 'afterPrompt', vadInitialSilenceDelaySeconds: 0, vadActivationDelaySeconds: 0, vadMaxWaitAfterPromptSeconds: 5,
+        recognitionActivationMode: "fixedDelay",
+        bargeInDelaySeconds: 0.2,
+        noSpeechBeginTimeoutSeconds: 5.0,
+        speechEndSilenceTimeoutSeconds: 1.5,
+        maxRecognitionDurationSeconds: 30.0,
+        vadSilenceThresholdMs: 2500,
+        vadTalkThreshold: 256,
+        vadRecogActivation: "vadMode",
+        vadMaxWaitAfterPromptSeconds: 10.0,
+        vadInitialSilenceDelaySeconds: 0.0,
+        // vadConfig is nested, ensure it's included if used by getCallSpecificConfig or other logic
+        vadConfig: { vadSilenceThresholdMs: 2500, vadRecognitionActivationMs: 40 }, // Default from old structure, might need adjustment
+        greetingAudioPath: 'sound:hello-world', // Keep or make optional
       },
-      dtmfConfig: { dtmfEnabled: true, dtmfInterdigitTimeoutSeconds: 2, dtmfMaxDigits: 16, dtmfTerminatorDigit: "#", dtmfFinalTimeoutSeconds: 3 },
-      bargeInConfig: { bargeInModeEnabled: true, bargeInDelaySeconds: 0.5, noSpeechBargeInTimeoutSeconds: 5 },
+      dtmfConfig: {
+        enableDtmfRecognition: true,
+        dtmfInterDigitTimeoutSeconds: 3.0,
+        dtmfFinalTimeoutSeconds: 5.0,
+        // Fields from old DtmfConfig that might be expected by getCallSpecificConfig
+        dtmfMaxDigits: 16,
+        dtmfTerminatorDigit: "#"
+      },
+      // bargeInConfig might be obsolete or its properties merged into appRecognitionConfig
+      bargeInConfig: { bargeInModeEnabled: true, bargeInDelaySeconds: 0.2, noSpeechBargeInTimeoutSeconds: 5.0 }, // Retain structure if getCallSpecificConfig expects it
     },
     openAIRealtimeAPI: { model: "gpt-4o-mini-realtime-preview-2024-12-17", inputAudioFormat: "g711_ulaw", inputAudioSampleRate: 8000, outputAudioFormat: "g711_ulaw", outputAudioSampleRate: 8000, responseModalities: ["audio", "text"], instructions: "Eres un asistente de IA amigable y servicial. Responde de manera concisa." },
     logging: { level: "info" },
@@ -124,30 +141,57 @@ function getVarAsBoolean(logger: any, channel: Channel | undefined, envVarName: 
 function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallSpecificConfig {
   currentCallSpecificConfig = JSON.parse(JSON.stringify(baseConfig));
   currentCallSpecificConfig.logging.level = getVar(logger, channel, 'LOG_LEVEL', baseConfig.logging.level) as any || baseConfig.logging.level;
+
   const arc = currentCallSpecificConfig.appConfig.appRecognitionConfig = currentCallSpecificConfig.appConfig.appRecognitionConfig || {} as AppRecognitionConfig;
+
+  // Update arc with new/renamed environment variables
+  arc.recognitionActivationMode = getVar(logger, channel, 'RECOGNITION_ACTIVATION_MODE', arc.recognitionActivationMode) as "fixedDelay" | "Immediate" | "vad" || "fixedDelay";
+  arc.bargeInDelaySeconds = getVarAsFloat(logger, channel, 'BARGE_IN_DELAY_SECONDS', arc.bargeInDelaySeconds) ?? 0.2;
+  arc.noSpeechBeginTimeoutSeconds = getVarAsFloat(logger, channel, 'NO_SPEECH_BEGIN_TIMEOUT_SECONDS', arc.noSpeechBeginTimeoutSeconds) ?? 5.0;
+  // SPEECH_END_SILENCE_TIMEOUT_SECONDS maps to speechEndSilenceTimeoutSeconds
+  arc.speechEndSilenceTimeoutSeconds = getVarAsFloat(logger, channel, 'SPEECH_END_SILENCE_TIMEOUT_SECONDS', arc.speechEndSilenceTimeoutSeconds) ?? 1.5;
+  arc.maxRecognitionDurationSeconds = getVarAsFloat(logger, channel, 'MAX_RECOGNITION_DURATION_SECONDS', arc.maxRecognitionDurationSeconds) ?? 30.0;
+
+  // VAD specific variables
+  arc.vadSilenceThresholdMs = getVarAsInt(logger, channel, 'APP_APPRECOGNITION_VADSILENCETHRESHOLDMS', arc.vadSilenceThresholdMs) ?? 2500;
+  arc.vadTalkThreshold = getVarAsInt(logger, channel, 'APP_APPRECOGNITION_VADTALKTHRESHOLD', arc.vadTalkThreshold) ?? 256;
+  arc.vadRecogActivation = getVar(logger, channel, 'APP_APPRECOGNITION_VADRECOGACTIVATION', arc.vadRecogActivation) as "vadMode" | "afterPrompt" || "vadMode";
+  arc.vadMaxWaitAfterPromptSeconds = getVarAsFloat(logger, channel, 'APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS', arc.vadMaxWaitAfterPromptSeconds) ?? 10.0;
+  arc.vadInitialSilenceDelaySeconds = getVarAsFloat(logger, channel, 'APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS', arc.vadInitialSilenceDelaySeconds) ?? 0.0;
+
+  // Keep existing greeting audio logic
   const initialGreetingEnv = getVar(logger, channel, 'INITIAL_GREETING_AUDIO_PATH', undefined);
   const greetingEnv = getVar(logger, channel, 'GREETING_AUDIO_PATH', undefined);
   if (initialGreetingEnv !== undefined) { arc.greetingAudioPath = initialGreetingEnv; }
   else if (greetingEnv !== undefined) { arc.greetingAudioPath = greetingEnv; }
   else if (baseConfig.appConfig.appRecognitionConfig.greetingAudioPath !== undefined) { arc.greetingAudioPath = baseConfig.appConfig.appRecognitionConfig.greetingAudioPath; }
   else { arc.greetingAudioPath = 'sound:hello-world'; }
-  arc.maxRecognitionDurationSeconds = getVarAsInt(logger, channel, 'MAX_RECOGNITION_DURATION_SECONDS', arc.maxRecognitionDurationSeconds) || 30;
-  arc.noSpeechBeginTimeoutSeconds = getVarAsInt(logger, channel, 'NO_SPEECH_BEGIN_TIMEOUT_SECONDS', arc.noSpeechBeginTimeoutSeconds) ?? 3;
-  arc.speechCompleteTimeoutSeconds = getVarAsInt(logger, channel, 'SPEECH_COMPLETE_TIMEOUT_SECONDS', arc.speechCompleteTimeoutSeconds) ?? 5;
-  arc.bargeInDelaySeconds = getVarAsFloat(logger, channel, 'BARGE_IN_DELAY_SECONDS', arc.bargeInDelaySeconds ?? baseConfig.appConfig.bargeInConfig?.bargeInDelaySeconds) ?? 0.5;
-  arc.vadRecogActivation = getVar(logger, channel, 'VAD_RECOG_ACTIVATION_MODE', arc.vadRecogActivation) as 'vadMode' | 'afterPrompt' || 'afterPrompt';
-  arc.vadInitialSilenceDelaySeconds = getVarAsInt(logger, channel, 'VAD_INITIAL_SILENCE_DELAY_SECONDS', arc.vadInitialSilenceDelaySeconds) ?? 0;
-  arc.vadActivationDelaySeconds = getVarAsInt(logger, channel, 'VAD_ACTIVATION_DELAY_SECONDS', arc.vadActivationDelaySeconds) ?? 0;
-  arc.vadMaxWaitAfterPromptSeconds = getVarAsInt(logger, channel, 'VAD_MAX_WAIT_AFTER_PROMPT_SECONDS', arc.vadMaxWaitAfterPromptSeconds) ?? 5;
-  arc.vadConfig = arc.vadConfig || { vadSilenceThresholdMs: 250, vadRecognitionActivationMs: 40 };
-  arc.vadConfig.vadSilenceThresholdMs = getVarAsInt(logger, channel, 'VAD_SILENCE_THRESHOLD_MS', arc.vadConfig.vadSilenceThresholdMs) ?? 250;
-  arc.vadConfig.vadRecognitionActivationMs = getVarAsInt(logger, channel, 'VAD_TALK_THRESHOLD_MS', arc.vadConfig.vadRecognitionActivationMs) ?? 40;
+
+  // Ensure vadConfig (nested) is populated for TALK_DETECT, using new parent values
+  arc.vadConfig = arc.vadConfig || { vadSilenceThresholdMs: 2500, vadRecognitionActivationMs: 40 }; // Default values if not set
+  // APP_APPRECOGNITION_VADSILENCETHRESHOLDMS maps to vadConfig.vadSilenceThresholdMs for TALK_DETECT
+  arc.vadConfig.vadSilenceThresholdMs = arc.vadSilenceThresholdMs; // Use the value from the parent arc
+  // APP_APPRECOGNITION_VADTALKTHRESHOLD might map to vadConfig.vadRecognitionActivationMs if it represents the energy threshold for Asterisk's TALK_DETECT activation
+  // For now, we'll use a default or an existing env var if one was intended for vadRecognitionActivationMs
+  // VAD_TALK_THRESHOLD_MS was used for vadRecognitionActivationMs. Let's check if APP_APPRECOGNITION_VADTALKTHRESHOLD should be used instead.
+  // The problem description maps APP_APPRECOGNITION_VADTALKTHRESHOLD to "Asterisk TALK_DETECT energy level threshold".
+  // The existing code used VAD_TALK_THRESHOLD_MS for vadConfig.vadRecognitionActivationMs.
+  // It seems vadRecognitionActivationMs in VadConfig was more about the *duration* of speech to trigger, not energy.
+  // The new vadTalkThreshold is an energy level. TALK_DETECT uses {talk_threshold},{silence_threshold[,direction]}
+  // So, vadConfig.vadRecognitionActivationMs should probably be a duration, and vadTalkThreshold is the energy level.
+  // Let's assume vadConfig.vadRecognitionActivationMs is a fixed duration or another env var if needed.
+  // For now, keep the old logic for vadRecognitionActivationMs if no new direct mapping.
+  arc.vadConfig.vadRecognitionActivationMs = getVarAsInt(logger, channel, 'VAD_TALK_DURATION_THRESHOLD_MS', arc.vadConfig.vadRecognitionActivationMs) ?? 40; // Example, assuming a duration.
+
   const dtmfConf = currentCallSpecificConfig.appConfig.dtmfConfig = currentCallSpecificConfig.appConfig.dtmfConfig || {} as DtmfConfig;
-  dtmfConf.dtmfEnabled = getVarAsBoolean(logger, channel, 'DTMF_ENABLED', dtmfConf.dtmfEnabled) ?? true;
-  dtmfConf.dtmfInterdigitTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_INTERDIGIT_TIMEOUT_SECONDS', dtmfConf.dtmfInterdigitTimeoutSeconds) ?? 2;
+  // Update dtmfConf with new/renamed environment variables
+  dtmfConf.enableDtmfRecognition = getVarAsBoolean(logger, channel, 'DTMF_ENABLED', dtmfConf.enableDtmfRecognition) ?? true;
+  dtmfConf.dtmfInterDigitTimeoutSeconds = getVarAsFloat(logger, channel, 'DTMF_INTERDIGIT_TIMEOUT_SECONDS', dtmfConf.dtmfInterDigitTimeoutSeconds) ?? 3.0;
+  dtmfConf.dtmfFinalTimeoutSeconds = getVarAsFloat(logger, channel, 'DTMF_FINAL_TIMEOUT_SECONDS', dtmfConf.dtmfFinalTimeoutSeconds) ?? 5.0;
+  // Keep existing DTMF properties if they are still used
   dtmfConf.dtmfMaxDigits = getVarAsInt(logger, channel, 'DTMF_MAX_DIGITS', dtmfConf.dtmfMaxDigits) ?? 16;
   dtmfConf.dtmfTerminatorDigit = getVar(logger, channel, 'DTMF_TERMINATOR_DIGIT', dtmfConf.dtmfTerminatorDigit) ?? "#";
-  dtmfConf.dtmfFinalTimeoutSeconds = getVarAsInt(logger, channel, 'DTMF_FINAL_TIMEOUT_SECONDS', dtmfConf.dtmfFinalTimeoutSeconds) ?? 3;
+
   const oaiConf = currentCallSpecificConfig.openAIRealtimeAPI = currentCallSpecificConfig.openAIRealtimeAPI || {} as OpenAIRealtimeAPIConfig;
   oaiConf.model = getVar(logger, channel, 'OPENAI_REALTIME_MODEL', oaiConf.model, 'APP_OPENAI_REALTIME_MODEL') || "gpt-4o-mini-realtime-preview-2024-12-17";
   oaiConf.language = getVar(logger, channel, 'OPENAI_LANGUAGE', oaiConf.language) ?? "en";
@@ -300,28 +344,41 @@ export class AriClientService implements AriClientInterface {
     if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
     if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
     call.speechHasBegun = true;
+    // For 'fixedDelay' and 'Immediate' modes, OpenAI dictates speech end.
+    // For 'vad' mode, local VAD (TALK_DETECT) might have already stopped the stream if Asterisk detected silence.
+    // The speechEndSilenceTimer here is primarily for OpenAI's own speech detection.
   }
 
   public _onOpenAIInterimResult(callId: string, transcript: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.debug(`OpenAI interim transcript: "${transcript}"`);
+
     if (!call.speechHasBegun) {
         if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
         if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
         call.speechHasBegun = true;
         call.callLogger.info(`Speech implicitly started with first interim transcript.`);
     }
-    if (call.mainPlayback && !call.promptPlaybackStoppedForInterim && call.config.appConfig.bargeInConfig.bargeInModeEnabled) {
-      call.callLogger.info(`Stopping main prompt due to interim transcript (barge-in).`);
-      this._stopAllPlaybacks(call).catch(e => call.callLogger.error(`Error stopping playback on interim: ` + (e instanceof Error ? e.message : String(e))));
-      call.promptPlaybackStoppedForInterim = true;
+
+    // Barge-in logic: If prompt is playing and we get an interim result, stop the prompt.
+    // This applies to all modes if a prompt is active.
+    // The fixedDelay mode already has a specific bargeInDelaySeconds before starting OpenAI.
+    // If barge-in happens *during* the prompt before that delay, this handles it.
+    if (call.mainPlayback && !call.promptPlaybackStoppedForInterim) {
+        // Check if barge-in is generally enabled (e.g. via a new top-level config or implied by mode)
+        // For now, assume barge-in is desirable if a prompt is playing and speech is detected by OpenAI.
+        call.callLogger.info(`Stopping main prompt due to OpenAI interim transcript (barge-in).`);
+        this._stopAllPlaybacks(call).catch(e => call.callLogger.error(`Error stopping playback on interim: ` + (e instanceof Error ? e.message : String(e))));
+        call.promptPlaybackStoppedForInterim = true;
     }
+
     if (call.speechEndSilenceTimer) clearTimeout(call.speechEndSilenceTimer);
-    const silenceTimeout = (call.config.appConfig.appRecognitionConfig.speechCompleteTimeoutSeconds ?? 5) * 1000;
+    // Use the new speechEndSilenceTimeoutSeconds
+    const silenceTimeout = (call.config.appConfig.appRecognitionConfig.speechEndSilenceTimeoutSeconds ?? 1.5) * 1000;
     call.speechEndSilenceTimer = setTimeout(() => {
       if (call.isCleanupCalled || !call.openAIStreamingActive) return;
-      call.callLogger.warn(`Silence detected for ${silenceTimeout}ms after interim transcript. Stopping OpenAI session for this turn.`);
+      call.callLogger.warn(`OpenAI: Silence detected for ${silenceTimeout}ms after interim transcript. Stopping OpenAI session for this turn.`);
       sessionManager.stopOpenAISession(callId, 'interim_result_silence_timeout');
     }, silenceTimeout);
   }
@@ -554,6 +611,10 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled) return;
     call.callLogger.error(`OpenAI stream error reported by sessionManager:`, error);
     call.openAIStreamError = error;
+    // Ensure timers related to OpenAI stream are cleared on error
+    if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+    if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+    if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     this._fullCleanup(callId, true, "OPENAI_STREAM_ERROR");
   }
 
@@ -562,8 +623,18 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled) return;
     call.callLogger.info(`OpenAI session ended event from sessionManager. Reason: ${reason}`);
     call.openAIStreamingActive = false;
+
+    // Clear timers that are contingent on an active OpenAI stream, regardless of mode
+    if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+    if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+    if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
+
     if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive) {
-        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout.`);
+        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout, or new turn logic might apply.`);
+        // Depending on the mode, we might need to re-evaluate or start listening again if the call is not ending.
+        // For now, this function primarily handles the direct fallout of the session ending.
+        // If the call is to continue (e.g. waiting for user to speak again in a VAD mode after a misfire),
+        // that logic would typically be handled by the state machine managing turns, not directly here.
     } else {
         call.callLogger.info(`OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result, DTMF, error, or explicit stop).`);
     }
@@ -587,67 +658,133 @@ export class AriClientService implements AriClientInterface {
   private async _onDtmfReceived(event: ChannelDtmfReceived, channel: Channel): Promise<void> {
     const call = this.activeCalls.get(channel.id);
     if (!call || call.isCleanupCalled) { return; }
-    if (call.channel.id !== channel.id) { return; }
-    call.callLogger.info(`DTMF digit '${event.digit}' received.`);
-    if (!call.config.appConfig.dtmfConfig.dtmfEnabled) {
-      call.callLogger.info(`DTMF disabled by config. Ignoring.`);
+    if (call.channel.id !== channel.id) {
+      call.callLogger.warn(`DTMF event for channel ${channel.id} but current call channel is ${call.channel.id}. Ignoring.`);
       return;
     }
-    call.callLogger.info(`Entering DTMF mode: interrupting speech/VAD activities.`);
-    call.dtmfModeActive = true;
-    call.speechRecognitionDisabledDueToDtmf = true;
+
+    call.callLogger.info(`DTMF digit '${event.digit}' received on channel ${channel.id}.`);
+    const dtmfConfig = call.config.appConfig.dtmfConfig;
+
+    if (!dtmfConfig.enableDtmfRecognition) {
+      call.callLogger.info(`DTMF recognition is disabled by configuration. Ignoring digit '${event.digit}'.`);
+      return;
+    }
+
+    call.callLogger.info(`DTMF mode activated by digit '${event.digit}'. Interrupting other recognition activities.`);
+    call.dtmfModeActive = true; // Mark that DTMF is now the primary input mode
+    call.speechRecognitionDisabledDueToDtmf = true; // Disable speech recognition
+
+    // Stop any ongoing VAD buffering or pending flushes
     call.isVADBufferingActive = false;
     call.vadAudioBuffer = [];
     call.pendingVADBufferFlush = false;
-    await this._stopAllPlaybacks(call);
+    call.isFlushingVADBuffer = false;
 
+    // Stop all current audio playbacks (prompts, TTS)
+    await this._stopAllPlaybacks(call);
+    call.promptPlaybackStoppedForInterim = true; // Consider prompt stopped due to DTMF
+
+    // Stop any active OpenAI streaming session
     if (call.openAIStreamingActive) {
-      call.callLogger.info(`DTMF interrupting active OpenAI stream.`);
-      call.dtmfInterruptedSpeech = true;
+      call.callLogger.info(`DTMF: Interrupting active OpenAI stream for call ${call.channel.id}.`);
+      call.dtmfInterruptedSpeech = true; // Mark that DTMF interrupted an ongoing speech session
       sessionManager.stopOpenAISession(call.channel.id, 'dtmf_interrupt');
       call.openAIStreamingActive = false;
-      if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
-      if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
-      if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
-      call.speechHasBegun = false;
     }
-    if(call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
-    if(call.vadActivationDelayTimer) { clearTimeout(call.vadActivationDelayTimer); call.vadActivationDelayTimer = null; }
-    if(call.vadInitialSilenceDelayTimer) { clearTimeout(call.vadInitialSilenceDelayTimer); call.vadInitialSilenceDelayTimer = null; }
 
+    // Clear all recognition-related timers (speech, VAD, barge-in)
+    // Explicitly clear timers that DTMF should override.
+    if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+    if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+    if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
+    call.speechHasBegun = false; // Reset speech detection flag
+
+    if (call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
+    // vadActivationDelayTimer was removed, but if similar logic exists, clear it.
+    if (call.vadInitialSilenceDelayTimer) { clearTimeout(call.vadInitialSilenceDelayTimer); call.vadInitialSilenceDelayTimer = null; }
+    if (call.bargeInActivationTimer) { clearTimeout(call.bargeInActivationTimer); call.bargeInActivationTimer = null; }
+
+    // If VAD mode was active, remove TALK_DETECT as DTMF takes precedence
+    if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode === 'vad') {
+        try {
+            call.callLogger.info(`DTMF: Removing TALK_DETECT from channel ${channel.id} as DTMF is now active.`);
+            await channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' });
+        } catch (e: any) {
+            call.callLogger.warn(`DTMF: Error removing TALK_DETECT from channel ${channel.id}: ${e.message}`);
+        }
+    }
+
+    // Append the received digit
     call.collectedDtmfDigits += event.digit;
-    call.callLogger.info(`Collected DTMF: ${call.collectedDtmfDigits}`);
+    call.callLogger.info(`Collected DTMF for call ${call.channel.id}: ${call.collectedDtmfDigits}`);
 
+    // (Re)start the inter-digit timer
     if (call.dtmfInterDigitTimer) clearTimeout(call.dtmfInterDigitTimer);
-    const interDigitTimeout = (call.config.appConfig.dtmfConfig.dtmfInterdigitTimeoutSeconds ?? 2) * 1000;
-    call.dtmfInterDigitTimer = setTimeout(() => { call.callLogger.info(`DTMF inter-digit timer expired.`); }, interDigitTimeout);
+    const interDigitTimeoutMs = (dtmfConfig.dtmfInterDigitTimeoutSeconds) * 1000;
+    call.dtmfInterDigitTimer = setTimeout(() => {
+      if (call.isCleanupCalled || !call.dtmfModeActive) return;
+      call.callLogger.info(`DTMF inter-digit timeout for call ${call.channel.id}. Digits: '${call.collectedDtmfDigits}'. Finalizing.`);
+      this._finalizeDtmfInput(call.channel.id, "DTMF_INTERDIGIT_TIMEOUT");
+    }, interDigitTimeoutMs);
 
+    // (Re)start the final DTMF timeout (if it's different or used as an overall max)
+    // The problem description has dtmfFinalTimeoutSeconds. This should be the timeout after the *last* digit if no new digit comes.
+    // The interDigitTimeout handles time between digits. If interDigit expires, it's considered final.
+    // Let's use dtmfFinalTimeoutSeconds as the one that triggers if interDigitTimeout keeps getting reset by new digits,
+    // but then a longer pause occurs.
     if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
-    const finalTimeout = (call.config.appConfig.dtmfConfig.dtmfFinalTimeoutSeconds ?? 3) * 1000;
-    call.dtmfFinalTimer = setTimeout(async () => {
-      if (call.isCleanupCalled) return;
-      call.callLogger.info(`DTMF final timeout. Digits: ${call.collectedDtmfDigits}`);
-      if (call.dtmfModeActive && call.collectedDtmfDigits.length > 0) {
-        try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
-        catch (e: any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
-        this._fullCleanup(call.channel.id, false, "DTMF_FINAL_TIMEOUT");
-      } else { this._fullCleanup(call.channel.id, false, "DTMF_FINAL_TIMEOUT_NO_DIGITS"); }
-    }, finalTimeout);
+    const finalTimeoutMs = (dtmfConfig.dtmfFinalTimeoutSeconds) * 1000;
+    call.dtmfFinalTimer = setTimeout(() => {
+      if (call.isCleanupCalled || !call.dtmfModeActive) return;
+      call.callLogger.info(`DTMF final timeout for call ${call.channel.id}. Digits: '${call.collectedDtmfDigits}'. Finalizing.`);
+      this._finalizeDtmfInput(call.channel.id, "DTMF_FINAL_TIMEOUT");
+    }, finalTimeoutMs);
 
-    const dtmfConfig = call.config.appConfig.dtmfConfig;
-    if (event.digit === dtmfConfig.dtmfTerminatorDigit) {
-      call.callLogger.info(`DTMF terminator digit received.`);
-      if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
-      try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
-      catch (e:any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
-      this._fullCleanup(call.channel.id, false, "DTMF_TERMINATOR_RECEIVED");
-    } else if (call.collectedDtmfDigits.length >= (dtmfConfig.dtmfMaxDigits ?? 16)) {
-      call.callLogger.info(`Max DTMF digits reached.`);
-      if (call.dtmfFinalTimer) clearTimeout(call.dtmfFinalTimer);
-      try { await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits }); }
-      catch (e:any) { call.callLogger.error(`Error setting DTMF_RESULT: ${(e instanceof Error ? e.message : String(e))}`); }
-      this._fullCleanup(call.channel.id, false, "DTMF_MAX_DIGITS_REACHED");
+    // Check for terminator digit or max digits
+    const maxDigits = dtmfConfig.dtmfMaxDigits ?? 16; // Default if not in new config, but it was in old.
+    const terminatorDigit = dtmfConfig.dtmfTerminatorDigit ?? "#"; // Default if not in new config.
+
+    if (event.digit === terminatorDigit) {
+      call.callLogger.info(`DTMF terminator digit '${terminatorDigit}' received for call ${call.channel.id}. Finalizing.`);
+      this._finalizeDtmfInput(call.channel.id, "DTMF_TERMINATOR_RECEIVED");
+    } else if (call.collectedDtmfDigits.length >= maxDigits) {
+      call.callLogger.info(`Max DTMF digits (${maxDigits}) reached for call ${call.channel.id}. Finalizing.`);
+      this._finalizeDtmfInput(call.channel.id, "DTMF_MAX_DIGITS_REACHED");
     }
+  }
+
+  private async _finalizeDtmfInput(callId: string, reason: string): Promise<void> {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled || !call.dtmfModeActive) {
+      // If not in DTMF mode anymore or call cleaned up, do nothing.
+      if (call && !call.dtmfModeActive) {
+        call.callLogger.debug(`_finalizeDtmfInput called for ${callId} but DTMF mode no longer active. Reason: ${reason}. Ignoring.`);
+      }
+      return;
+    }
+
+    call.callLogger.info(`Finalizing DTMF input for call ${callId}. Reason: ${reason}. Collected digits: '${call.collectedDtmfDigits}'`);
+
+    // Clear DTMF timers
+    if (call.dtmfInterDigitTimer) { clearTimeout(call.dtmfInterDigitTimer); call.dtmfInterDigitTimer = null; }
+    if (call.dtmfFinalTimer) { clearTimeout(call.dtmfFinalTimer); call.dtmfFinalTimer = null; }
+
+    // Set DTMF_RESULT channel variable
+    if (call.collectedDtmfDigits.length > 0) {
+      try {
+        await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits });
+        call.callLogger.info(`DTMF_RESULT set to '${call.collectedDtmfDigits}' for channel ${call.channel.id}.`);
+      } catch (e: any) {
+        call.callLogger.error(`Error setting DTMF_RESULT for channel ${call.channel.id}: ${(e instanceof Error ? e.message : String(e))}`);
+      }
+    } else {
+      call.callLogger.info(`No DTMF digits collected for channel ${call.channel.id} to set in DTMF_RESULT.`);
+    }
+
+    // End the call or current interaction phase.
+    // The problem implies DTMF finalization leads to ending the interaction for now.
+    this._fullCleanup(call.channel.id, false, reason); // false for hangupMainChannel, assuming dialplan continues.
   }
 
   private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
@@ -828,26 +965,62 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled) {
       return;
     }
+    // This function is primarily for when the main greeting/prompt finishes.
     if (reason.startsWith('main_greeting_')) {
-      call.callLogger.info(`Handling post-greeting logic for call ${callId}. Reason: ${reason}`);
-      call.mainPlayback = undefined;
+      call.callLogger.info(`Main greeting/prompt finished or failed. Reason: ${reason}. Handling post-prompt logic.`);
+      call.mainPlayback = undefined; // Clear the main playback reference
 
-      const activationMode = call.config.appConfig.appRecognitionConfig.recognitionActivationMode;
-      if (activationMode === 'VAD') {
-        this._handlePostPromptVADLogic(callId);
-      } else if (activationMode === 'FIXED_DELAY') {
-        const delaySeconds = call.config.appConfig.appRecognitionConfig.bargeInDelaySeconds ?? 0.5;
-        call.callLogger.info(`FixedDelay mode: Greeting finished/failed. Barge-in delay: ${delaySeconds}s.`);
-        if (delaySeconds > 0) {
-          if (call.bargeInActivationTimer) clearTimeout(call.bargeInActivationTimer);
-          call.bargeInActivationTimer = setTimeout(() => {
-            if (call.isCleanupCalled) return;
-            this._activateOpenAIStreaming(callId, "fixedDelay_barge_in_timer_expired_post_greeting");
-          }, delaySeconds * 1000);
-        } else {
-          this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation_post_greeting");
-        }
+      const appRecogConf = call.config.appConfig.appRecognitionConfig;
+      const activationMode = appRecogConf.recognitionActivationMode;
+
+      switch (activationMode) {
+        case 'fixedDelay':
+          // In fixedDelay, OpenAI stream starts after bargeInDelaySeconds, *regardless of prompt finishing*.
+          // This logic here is a fallback or secondary trigger if the initial timer in onStasisStart didn't fire
+          // or if the prompt finishes *before* the bargeInDelaySeconds.
+          // The primary activation for fixedDelay should be in onStasisStart's timer.
+          // If prompt finishes and bargeInActivationTimer is still pending, let it fire.
+          // If it already fired or bargeInDelay is 0, stream should be active or activating.
+          call.callLogger.info(`fixedDelay mode: Prompt finished. Barge-in logic should have been handled by timer in onStasisStart or direct activation if delay was 0.`);
+          if (!call.openAIStreamingActive && !call.bargeInActivationTimer) {
+            // This case implies bargeInDelay was >0, timer hasn't fired, and prompt ended.
+            // This shouldn't happen if timer was set correctly. Or bargeInDelay was 0 and activation failed.
+            // As a safeguard, try to activate if not already.
+            call.callLogger.warn(`fixedDelay mode: Prompt finished, stream not active, no pending barge-in timer. Attempting activation (safeguard).`);
+            this._activateOpenAIStreaming(callId, "fixedDelay_safeguard_post_prompt");
+          }
+          break;
+
+        case 'Immediate':
+          // In Immediate mode, OpenAI stream starts right away. Prompt finishing doesn't change that.
+          call.callLogger.info(`Immediate mode: Prompt finished. OpenAI stream should already be active.`);
+          if (!call.openAIStreamingActive) {
+            call.callLogger.warn(`Immediate mode: Prompt finished, but stream is not active. This is unexpected. Attempting activation (safeguard).`);
+            this._activateOpenAIStreaming(callId, "Immediate_safeguard_post_prompt");
+          }
+          break;
+
+        case 'vad':
+          // In 'vad' mode, what happens after prompt depends on 'vadRecogActivation'.
+          if (appRecogConf.vadRecogActivation === 'afterPrompt') {
+            call.callLogger.info(`VAD mode (afterPrompt): Prompt finished. Activating TALK_DETECT based logic now.`);
+            this._handlePostPromptVADLogic(callId); // This will manage TALK_DETECT and vadMaxWaitAfterPromptSeconds
+          } else if (appRecogConf.vadRecogActivation === 'vadMode') {
+            // In 'vadMode', TALK_DETECT is active from the start (after initial delays).
+            // Prompt finishing doesn't change the VAD listening state directly, but vadMaxWait might apply from now.
+            call.callLogger.info(`VAD mode (vadMode): Prompt finished. VAD logic (initial delays, TALK_DETECT) should already be in effect.`);
+            this._handleVADDelaysCompleted(callId); // Re-check delay completion status and subsequent logic
+            // If delays are complete, _handlePostPromptVADLogic might set a max wait if no speech yet.
+             if (call.vadInitialSilenceDelayCompleted && !call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay) {
+                 this._handlePostPromptVADLogic(callId);
+             }
+          }
+          break;
+        default:
+          call.callLogger.warn(`Unhandled recognitionActivationMode: ${activationMode} in _handlePlaybackFinished.`);
       }
+    } else {
+      call.callLogger.debug(`_handlePlaybackFinished called for non-greeting playback or unknown reason: ${reason}`);
     }
   }
 
@@ -884,7 +1057,8 @@ export class AriClientService implements AriClientInterface {
       collectedDtmfDigits: "", dtmfModeActive: false, speechRecognitionDisabledDueToDtmf: false, dtmfInterruptedSpeech: false,
       vadSpeechDetected: false, vadAudioBuffer: [], isVADBufferingActive: false, isFlushingVADBuffer: false,
       pendingVADBufferFlush: false, vadRecognitionTriggeredAfterInitialDelay: false, vadSpeechActiveDuringDelay: false,
-      vadInitialSilenceDelayCompleted: false, vadActivationDelayCompleted: false,
+      vadInitialSilenceDelayCompleted: false,
+      vadActivationDelayCompleted: true, // vadActivationDelaySeconds is removed, so consider it completed.
       bargeInActivationTimer: null, noSpeechBeginTimer: null, initialOpenAIStreamIdleTimer: null,
       speechEndSilenceTimer: null, maxRecognitionDurationTimer: null,
       dtmfInterDigitTimer: null, dtmfFinalTimer: null,
@@ -924,17 +1098,17 @@ export class AriClientService implements AriClientInterface {
       const rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
       callLogger.info(`RTP Server started for call ${callId}, listening on ${rtpServerAddress.host}:${rtpServerAddress.port}.`);
 
-      const externalMediaFormat = 'ulaw';
+      const externalMediaFormat = 'ulaw'; // Assuming ulaw for OpenAI compatibility based on config
       callResources.externalMediaChannel = await this.client.channels.externalMedia({
         app: ASTERISK_ARI_APP_NAME,
         external_host: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
-        format: externalMediaFormat,
+        format: externalMediaFormat, // Ensure this matches what OpenAI expects if direct sending
         encapsulation: 'rtp'
       });
       callLogger.info(`Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId} with format ${externalMediaFormat}.`);
       this.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
 
-      const snoopDirection = 'in' as ('in' | 'out' | 'both');
+      const snoopDirection = 'in' as ('in' | 'out' | 'both'); // Snoop incoming audio from caller to send to OpenAI
       callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
       callLogger.info(`Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId} with direction '${snoopDirection}'.`);
       this.appOwnedChannelIds.add(callResources.snoopChannel.id);
@@ -948,14 +1122,18 @@ export class AriClientService implements AriClientInterface {
         const call = this.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
           call.callLogger.silly?.(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
-          if (call.openAIStreamingActive && !call.pendingVADBufferFlush) {
+          // Audio is sent to OpenAI only if the stream is active AND not in a VAD buffering phase waiting for flush confirmation.
+          if (call.openAIStreamingActive && !call.isVADBufferingActive && !call.pendingVADBufferFlush && !call.isFlushingVADBuffer) {
             sessionManager.sendAudioToOpenAI(callId, audioPayload);
           }
-          if (call.isVADBufferingActive) {
+          // VAD buffering logic: buffer if VAD mode is active, initial silence delay hasn't passed, or stream hasn't started yet for VAD.
+          if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode === 'vad' &&
+              call.isVADBufferingActive && // This flag is set true initially for VAD mode
+              !call.openAIStreamingActive) { // Buffer only if stream is not yet active
             if (call.vadAudioBuffer.length < MAX_VAD_BUFFER_PACKETS) {
               call.vadAudioBuffer.push(audioPayload);
             } else {
-              call.callLogger.warn(`VAD buffer limit. Shift.`);
+              call.callLogger.warn(`VAD audio buffer limit reached for call ${callId}. Oldest packet discarded.`);
               call.vadAudioBuffer.shift();
               call.vadAudioBuffer.push(audioPayload);
             }
@@ -967,47 +1145,98 @@ export class AriClientService implements AriClientInterface {
       callLogger.info(`Call connection details passed to SessionManager.`);
 
       const appRecogConf = localCallConfig.appConfig.appRecognitionConfig;
+      // Global max recognition timer for the turn/attempt
       if (appRecogConf.maxRecognitionDurationSeconds && appRecogConf.maxRecognitionDurationSeconds > 0) {
-        callResources.maxRecognitionDurationTimer = setTimeout(() => { this._fullCleanup(callId, true, "MAX_RECOGNITION_DURATION_TIMEOUT"); }, appRecogConf.maxRecognitionDurationSeconds * 1000);
+        callResources.maxRecognitionDurationTimer = setTimeout(() => {
+            callLogger.warn(`Max recognition duration ${appRecogConf.maxRecognitionDurationSeconds}s reached.`);
+            this._fullCleanup(callId, true, "MAX_RECOGNITION_DURATION_TIMEOUT");
+        }, appRecogConf.maxRecognitionDurationSeconds * 1000);
       }
 
       const activationMode = appRecogConf.recognitionActivationMode;
-      if (activationMode === 'IMMEDIATE') { this._activateOpenAIStreaming(callId, "immediate_mode_on_start"); }
-      else if (activationMode === 'VAD') {
-        callResources.isVADBufferingActive = true;
-        const vadConfig = appRecogConf.vadConfig;
-        const talkDetectValue = `${vadConfig.vadRecognitionActivationMs},${vadConfig.vadSilenceThresholdMs}`;
-        callLogger.info(`Attempting to set TALK_DETECT on channel ${callId} with value: ${talkDetectValue}.`);
-        await incomingChannel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
-        callLogger.info(`Successfully set TALK_DETECT on channel ${callId}.`);
+      callLogger.info(`Recognition Activation Mode: ${activationMode}`);
+
+      if (activationMode === 'Immediate') {
+        this._activateOpenAIStreaming(callId, "Immediate_mode_on_start");
+      } else if (activationMode === 'fixedDelay') {
+        const delaySeconds = appRecogConf.bargeInDelaySeconds;
+        callLogger.info(`fixedDelay mode: bargeInDelaySeconds = ${delaySeconds}s.`);
+        if (delaySeconds > 0) {
+          callResources.bargeInActivationTimer = setTimeout(() => {
+            if (callResources.isCleanupCalled || callResources.openAIStreamingActive) return;
+            callLogger.info(`fixedDelay: bargeInDelaySeconds (${delaySeconds}s) elapsed. Activating OpenAI stream.`);
+            this._activateOpenAIStreaming(callId, "fixedDelay_barge_in_timer_expired");
+          }, delaySeconds * 1000);
+        } else {
+          // If delay is 0, activate immediately.
+          this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation (delay is 0)");
+        }
+      } else if (activationMode === 'vad') {
+        callResources.isVADBufferingActive = true; // Start buffering audio immediately in VAD mode
+        // Use vadSilenceThresholdMs for TALK_DETECT silence part.
+        // Use vadTalkThreshold for TALK_DETECT energy part. TALK_DETECT format: {talk_thresh},{silence_thresh[,direction]}
+        // vadConfig.vadRecognitionActivationMs (duration) is not directly used in TALK_DETECT(set) string.
+        // TALK_DETECT itself implies a duration by how long talking must persist above threshold.
+        // The problem description's vadTalkThreshold is an energy level.
+        const talkThresholdForAri = appRecogConf.vadTalkThreshold; // Energy level
+        const silenceThresholdMsForAri = appRecogConf.vadSilenceThresholdMs; // Silence duration in ms
+
+        // TALK_DETECT params: talk_threshold,silence_threshold[,direction]
+        // talk_threshold: "Energy level above which audio is considered speech"
+        // silence_threshold: "Time of silence after speech to trigger ChannelTalkingFinished"
+        // We need a value for talk_threshold (energy) and silence_threshold (ms).
+        // vadConfig.vadRecognitionActivationMs was a duration, not directly used here.
+        // Let's use vadTalkThreshold for the energy level.
+        const talkDetectValue = `${talkThresholdForAri},${silenceThresholdMsForAri}`;
+
+        callLogger.info(`VAD mode: Attempting to set TALK_DETECT on channel ${callId} with value: '${talkDetectValue}' (EnergyThreshold,SilenceMs)`);
+        try {
+            await incomingChannel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+            callLogger.info(`VAD mode: Successfully set TALK_DETECT on channel ${callId}.`);
+        } catch (e:any) {
+            callLogger.error(`VAD mode: FAILED to set TALK_DETECT on channel ${callId}: ${e.message}. Proceeding without local VAD events.`);
+            // If TALK_DETECT fails, VAD mode might not work as expected. Consider fallback or error.
+            // For now, log error and continue. Speech might not be detected by Asterisk.
+        }
+
 
         if (appRecogConf.vadRecogActivation === 'vadMode') {
-          callResources.vadInitialSilenceDelayCompleted = (appRecogConf.vadInitialSilenceDelaySeconds ?? 0) <= 0;
-          callResources.vadActivationDelayCompleted = (appRecogConf.vadActivationDelaySeconds ?? 0) <= 0;
+          const initialSilenceDelayS = appRecogConf.vadInitialSilenceDelaySeconds;
+          callResources.vadInitialSilenceDelayCompleted = (initialSilenceDelayS <= 0);
+
           if (!callResources.vadInitialSilenceDelayCompleted) {
-            callResources.vadInitialSilenceDelayTimer = setTimeout(() => { if(callResources.isCleanupCalled) return; callResources.vadInitialSilenceDelayCompleted = true; this._handleVADDelaysCompleted(callId); }, (appRecogConf.vadInitialSilenceDelaySeconds ?? 0) * 1000);
+            callLogger.info(`VAD (vadMode): Starting vadInitialSilenceDelaySeconds: ${initialSilenceDelayS}s.`);
+            callResources.vadInitialSilenceDelayTimer = setTimeout(() => {
+              if(callResources.isCleanupCalled) return;
+              callResources.vadInitialSilenceDelayCompleted = true;
+              callLogger.info(`VAD (vadMode): vadInitialSilenceDelaySeconds completed.`);
+              this._handleVADDelaysCompleted(callId);
+            }, initialSilenceDelayS * 1000);
+          } else {
+            // If delay is 0, handle completion immediately.
+            this._handleVADDelaysCompleted(callId);
           }
-          if (!callResources.vadActivationDelayCompleted) {
-            callResources.vadActivationDelayTimer = setTimeout(() => { if(callResources.isCleanupCalled) return; callResources.vadActivationDelayCompleted = true; this._handleVADDelaysCompleted(callId); }, (appRecogConf.vadActivationDelaySeconds ?? 0) * 1000);
-          }
-          if (callResources.vadInitialSilenceDelayCompleted && callResources.vadActivationDelayCompleted) { this._handleVADDelaysCompleted(callId); }
         }
+        // For 'afterPrompt' in VAD mode, TALK_DETECT is set, but action is deferred until after prompt.
+        // Buffering is active.
       }
 
+      // Play greeting/prompt if specified - this happens for all modes that have a prompt.
       const greetingAudio = appRecogConf.greetingAudioPath;
       if (greetingAudio && this.client) {
-        callLogger.info(`Playing greeting audio: ${greetingAudio}`);
+        callLogger.info(`Playing greeting/prompt audio: ${greetingAudio}`);
         callResources.mainPlayback = this.client.Playback();
         if (callResources.mainPlayback) {
           const mainPlaybackId = callResources.mainPlayback.id;
+          // PlaybackFailed event handler
           const playbackFailedHandler = (event: any, failedPlayback: Playback) => {
             if (this.client && failedPlayback.id === mainPlaybackId) {
               const currentCall = this.activeCalls.get(callId);
               if (currentCall?.mainPlayback?.id === mainPlaybackId) {
-                currentCall.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED.`);
+                currentCall.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED. State: ${failedPlayback.state}`);
                 this._handlePlaybackFinished(callId, 'main_greeting_failed');
               }
-              if (currentCall?.playbackFailedHandler) {
+              if (currentCall?.playbackFailedHandler) { // Remove listener
                 this.client?.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
                 currentCall.playbackFailedHandler = null;
               }
@@ -1015,8 +1244,11 @@ export class AriClientService implements AriClientInterface {
           };
           callResources.playbackFailedHandler = playbackFailedHandler;
           this.client.on('PlaybackFailed' as any, callResources.playbackFailedHandler);
-          callResources.mainPlayback.once('PlaybackFinished', (evt: any, instance: Playback) => {
+
+          // PlaybackFinished event handler
+          callResources.mainPlayback.once('PlaybackFinished', (evt: PlaybackFinished, instance: Playback) => {
             const currentCall = this.activeCalls.get(callId);
+            // Remove PlaybackFailed listener if playback finishes successfully
             if (currentCall?.playbackFailedHandler && this.client && instance.id === currentCall.mainPlayback?.id) {
               this.client.removeListener('PlaybackFailed' as any, currentCall.playbackFailedHandler);
               currentCall.playbackFailedHandler = null;
@@ -1029,18 +1261,14 @@ export class AriClientService implements AriClientInterface {
           await callResources.channel.play({ media: greetingAudio }, callResources.mainPlayback);
           callLogger.info(`Successfully started main greeting playback ${callResources.mainPlayback.id}.`);
         } else {
-           callLogger.error(`Failed to create mainPlayback object.`);
-           this._handlePlaybackFinished(callId, 'main_greeting_creation_failed');
+           callLogger.error(`Failed to create mainPlayback object for greeting.`);
+           this._handlePlaybackFinished(callId, 'main_greeting_creation_failed'); // Trigger post-prompt logic even if playback object fails
         }
       } else {
-        callLogger.info(greetingAudio ? `Client not available for greeting playback.` : `No greeting audio specified.`);
-        if (activationMode === 'FIXED_DELAY') {
-            const delaySeconds = appRecogConf.bargeInDelaySeconds ?? 0.5;
-            if(delaySeconds > 0) { callResources.bargeInActivationTimer = setTimeout(() => { if(!callResources.isCleanupCalled) this._activateOpenAIStreaming(callId, "fixedDelay_no_greeting_timer"); }, delaySeconds * 1000); }
-            else { this._activateOpenAIStreaming(callId, "fixedDelay_no_greeting_immediate");}
-        } else if (activationMode === 'VAD') {
-            this._handlePostPromptVADLogic(callId);
-        }
+        // No greeting audio, or client not available.
+        callLogger.info(greetingAudio ? `ARI client not available for greeting playback.` : `No greeting audio specified. Proceeding to post-prompt logic directly.`);
+        // Directly trigger post-prompt logic as if an empty prompt finished.
+        this._handlePlaybackFinished(callId, 'main_greeting_skipped_or_no_client');
       }
       callLogger.info(`StasisStart setup complete for call ${callId}.`);
 

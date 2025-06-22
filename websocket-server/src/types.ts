@@ -37,32 +37,39 @@ export interface FunctionHandler {
 // Configuration Types based on default.json structure
 
 export interface VadConfig {
-  vadSilenceThresholdMs: number; // For TALK_DETECT silence duration
-  vadRecognitionActivationMs: number; // For TALK_DETECT talk duration (previously vadTalkThresholdMs)
+  vadSilenceThresholdMs: number;
+  vadRecognitionActivationMs: number;
 }
 
 export interface AppRecognitionConfig {
-  recognitionActivationMode: "VAD" | "MANUAL" | "IMMEDIATE" | "FIXED_DELAY"; // Expanded modes
+  recognitionActivationMode: "fixedDelay" | "Immediate" | "vad";
+  bargeInDelaySeconds: number;
   noSpeechBeginTimeoutSeconds: number;
-  speechCompleteTimeoutSeconds: number;
-  initialOpenAIStreamIdleTimeoutSeconds?: number;
-  vadConfig: VadConfig;
-  maxRecognitionDurationSeconds?: number;
-  greetingAudioPath?: string;
-  bargeInDelaySeconds?: number; // For FIXED_DELAY mode, moved here for consistency from direct usage
+  speechEndSilenceTimeoutSeconds: number;
+  maxRecognitionDurationSeconds: number;
+  vadSilenceThresholdMs: number;
+  vadTalkThreshold: number;
+  vadRecogActivation: "vadMode" | "afterPrompt";
+  vadMaxWaitAfterPromptSeconds: number;
+  vadInitialSilenceDelaySeconds: number;
 
-  vadRecogActivation?: 'vadMode' | 'afterPrompt'; // How VAD initiates recognition stream
-  vadInitialSilenceDelaySeconds?: number; // Delay before VAD becomes active (for vadMode)
-  vadActivationDelaySeconds?: number; // Additional delay after prompt before VAD becomes active (for vadMode)
-  vadMaxWaitAfterPromptSeconds?: number; // Max time to wait for speech after a prompt in VAD mode
+  // Fields from the old structure that might still be used internally or need mapping
+  vadConfig: VadConfig; // Contains vadSilenceThresholdMs, vadRecognitionActivationMs
+  initialOpenAIStreamIdleTimeoutSeconds?: number; // May need to be re-evaluated or removed
+  greetingAudioPath?: string; // Still relevant
+  speechCompleteTimeoutSeconds?: number; // Replaced by speechEndSilenceTimeoutSeconds
+  vadActivationDelaySeconds?: number; // This seems specific and might not be directly in new .env, review usage
 }
 
 export interface DtmfConfig {
-  dtmfEnabled: boolean;
-  dtmfInterdigitTimeoutSeconds: number;
-  dtmfMaxDigits: number;
-  dtmfTerminatorDigit: string;
-  dtmfFinalTimeoutSeconds?: number; // Timeout after the last DTMF digit before finalizing input
+  enableDtmfRecognition: boolean; // Changed from dtmfEnabled
+  dtmfInterDigitTimeoutSeconds: number; // Changed from dtmfInterdigitTimeoutSeconds
+  dtmfFinalTimeoutSeconds: number;
+
+  // Fields from the old structure that might still be used internally or need mapping
+  dtmfEnabled?: boolean; // Old field
+  dtmfMaxDigits?: number; // Retained if still used
+  dtmfTerminatorDigit?: string; // Retained if still used
 }
 
 export interface BargeInConfig {
