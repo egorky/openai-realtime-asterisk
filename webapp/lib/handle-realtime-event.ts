@@ -1,42 +1,127 @@
 import { Item } from "@/components/types";
 
+// Definir el tipo para la información de la llamada ARI
+export interface AriCallInfo {
+  status: "idle" | "active" | "ended" | "error"; // Added 'error' status
+  callId: string | null;
+  callerId: string | null;
+  errorMessage?: string; // Optional error message
+  reason?: string; // Optional reason for ending
+}
+
 export default function handleRealtimeEvent(
   ev: any,
-  setItems: React.Dispatch<React.SetStateAction<Item[]>>
+  setItems: React.Dispatch<React.SetStateAction<Item[]>>,
+  setAriCallInfo: React.Dispatch<React.SetStateAction<AriCallInfo>> // Nuevo setter
 ) {
   // Helper function to create a new item with default fields
   function createNewItem(base: Partial<Item>): Item {
     return {
-      object: "realtime.item",
+      object: "realtime.item", // Default object type, can be overridden by base
       timestamp: new Date().toLocaleTimeString(),
       ...base,
-    } as Item;
+    } as Item; // Cast to Item, ensure all required fields are covered or optional
   }
 
   // Helper function to update an existing item if found by id, or add a new one if not.
-  // We can also pass partial updates to reduce repetitive code.
   function updateOrAddItem(id: string, updates: Partial<Item>): void {
     setItems((prev) => {
       const idx = prev.findIndex((m) => m.id === id);
       if (idx >= 0) {
         const updated = [...prev];
-        updated[idx] = { ...updated[idx], ...updates };
+        // Ensure crucial fields like 'role' and 'type' are preserved if not in updates
+        updated[idx] = {
+            object: updated[idx].object, // Preserve original object type
+            type: updated[idx].type,     // Preserve original item type
+            role: updated[idx].role,     // Preserve original role
+            ...updated[idx],
+            ...updates,
+            timestamp: updated[idx].timestamp || new Date().toLocaleTimeString(), // Preserve or set timestamp
+        };
         return updated;
       } else {
+        // For new items, ensure 'id' is part of the base for createNewItem
         return [...prev, createNewItem({ id, ...updates })];
       }
     });
   }
 
-  const { type } = ev;
 
-  switch (type) {
-    case "session.created": {
-      // Starting a new session, clear all items
-      setItems([]);
+  // Try to determine event structure (new with payload vs. old direct structure)
+  const eventType = ev.type;
+  const payload = ev.payload;
+
+  // Log all events for easier debugging
+  // console.log("Handling Realtime Event:", ev);
+
+
+  switch (eventType) {
+    case "ari_call_status_update": {
+      if (payload) {
+        console.log("ARI Call Status Update:", payload);
+        setAriCallInfo({
+          status: payload.status,
+          callId: payload.callId,
+          callerId: payload.callerId,
+          errorMessage: payload.errorMessage,
+          reason: payload.reason,
+        });
+        // If call ended or errored, maybe clear transcription items or add a system message
+        if (payload.status === "ended" || payload.status === "error") {
+          setItems((prev) => [
+            ...prev,
+            createNewItem({
+              id: `call_status_${Date.now()}`,
+              type: "system_message", // Custom type for system messages
+              role: "system",
+              content: [{ type: "text", text: `Call ${payload.status}. ${payload.reason ? `Reason: ${payload.reason}` : ''} ${payload.errorMessage ? `Error: ${payload.errorMessage}`: ''}`.trim() }],
+              status: "completed",
+            }),
+          ]);
+        }
+      }
       break;
     }
+    case "session.created": {
+      setItems([]);
+      // Reset ARI call info as well, as a new OpenAI session implies a new context
+      setAriCallInfo({ status: "idle", callId: null, callerId: null });
+      break;
+    }
+    case "config_update_ack": {
+        console.log("Config update acknowledged by backend:", ev);
+        // Optionally, add a system message to the transcript
+        setItems((prev) => [
+            ...prev,
+            createNewItem({
+                id: `config_ack_${Date.now()}`,
+                type: "system_message",
+                role: "system",
+                content: [{ type: "text", text: `Configuration update processed for call ${ev.callId}.` }],
+                status: "completed",
+            }),
+        ]);
+        break;
+    }
+    case "error": { // Generic error from backend
+        console.error("Received error event from backend:", ev.message);
+        setItems((prev) => [
+            ...prev,
+            createNewItem({
+                id: `backend_error_${Date.now()}`,
+                type: "system_message",
+                role: "system",
+                content: [{ type: "text", text: `Backend Error: ${ev.message}` }],
+                status: "completed",
+            }),
+        ]);
+        // Potentially update ARI status if it's a critical error
+        // setAriCallInfo(prev => ({ ...prev, status: "error", errorMessage: ev.message }));
+        break;
+    }
 
+    // Cases from the original switch, assuming they don't use a nested 'payload'
+    // and their 'type' is directly ev.type
     case "input_audio_buffer.speech_started": {
       // Create a user message item with running status and placeholder content
       const { item_id } = ev;

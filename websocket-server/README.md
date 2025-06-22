@@ -6,39 +6,49 @@ This WebSocket server acts as the backend engine connecting an Asterisk telephon
 
 ## Architecture
 
-El servidor está construido con Node.js. Los componentes clave incluyen:
+El servidor está construido con Node.js y TypeScript. Los componentes clave incluyen:
 
 1.  **`src/server.ts`**:
-    *   Punto de entrada principal.
-    *   Inicializa el `AriClientService`.
-    *   Configura un servidor WebSocket (usando la librería `ws`) para la comunicación con la `webapp` de frontend (actualmente en el puerto 8080 por defecto).
+    *   Punto de entrada principal de la aplicación.
+    *   Configura un servidor HTTP `express` y un servidor WebSocket (`ws`) sobre él.
+    *   Maneja las conexiones WebSocket desde la `webapp` (frontend) para:
+        *   Enviar logs y eventos del sistema en tiempo real.
+        *   Recibir actualizaciones de configuración para la llamada activa (ej. cambio de prompt de IA, voz TTS).
+    *   Inicializa y arranca el `AriClientService`.
 
 2.  **`src/ari-client.ts` (Clase `AriClientService`)**:
     *   El núcleo de la aplicación, responsable de todas las interacciones con Asterisk a través de ARI.
-    *   Gestiona el estado de cada llamada activa, incluyendo recursos ARI (canales, puentes), configuración de medios RTP y ciclo de vida de la llamada.
+    *   Gestiona el estado de cada llamada activa: recursos ARI (canales, puentes), configuración de medios RTP, ciclo de vida de la llamada.
     *   Implementa varios **modos operativos** para la activación del reconocimiento de voz (Inmediato, Retardo Fijo, VAD).
     *   Maneja la entrada DTMF, interrumpiendo el reconocimiento de voz si es necesario.
-    *   Orquesta cuándo y cómo iniciar y detener el flujo de voz de OpenAI a través de `sessionManager.ts`.
-    *   Recibe eventos de `sessionManager.ts` (ej. inicio de habla, transcripciones provisionales/finales, errores de OpenAI) y actúa sobre ellos.
+    *   Orquesta cuándo y cómo iniciar y detener el flujo de voz hacia y desde OpenAI a través de `sessionManager.ts`.
+    *   Recibe eventos de `sessionManager.ts` (ej. inicio de habla, transcripciones, audio TTS, errores) y actúa sobre ellos.
+    *   **Manejo de Audio TTS**: Cuando recibe el stream de audio TTS de OpenAI, si el formato es PCM, lo **convierte a un archivo WAV con el encabezado apropiado** antes de guardarlo y solicitar a Asterisk su reproducción. Si es uLaw, lo guarda como `.ulaw`.
 
 3.  **`src/rtp-server.ts` (Clase `RtpServer`)**:
-    *   Crea un servidor UDP para recibir paquetes RTP de Asterisk.
-    *   Extrae el payload de audio de los paquetes RTP y lo emite para `ari-client.ts`.
+    *   Crea un servidor UDP para recibir paquetes RTP (audio del llamante) desde Asterisk.
+    *   Extrae el payload de audio de los paquetes RTP y lo emite para que `ari-client.ts` lo procese.
 
 4.  **`src/sessionManager.ts`**:
     *   Gestiona las conexiones WebSocket con la API Realtime de OpenAI para cada llamada activa.
-    *   Maneja la configuración de la sesión de OpenAI, incluyendo el envío de parámetros de configuración (modelo, formatos de audio, instrucciones, etc.).
-    *   Reenvía los datos de audio recibidos de `ari-client.ts` (originados en Asterisk) a OpenAI.
-    *   Procesa los mensajes entrantes (eventos) de OpenAI y llama a los métodos apropiados en `ari-client.ts` para notificarle de la actividad de voz, transcripciones y errores.
+    *   Envía la configuración de la sesión a OpenAI (modelo, formatos de audio, instrucciones, etc.).
+    *   Reenvía los datos de audio del llamante (recibidos de `ari-client.ts`) a OpenAI.
+    *   Procesa los mensajes entrantes (eventos) de OpenAI y llama a los métodos de callback en `ari-client.ts`.
 
-Para una descripción más detallada de la arquitectura y un diagrama de secuencia, consulta el [Documento de Arquitectura](./docs/architecture.md).
+5.  **`webapp/` (Directorio Separado)**:
+    *   Una aplicación de frontend (Next.js) que actúa como interfaz de monitoreo y configuración.
+    *   Se conecta al WebSocket expuesto por `src/server.ts`.
+    *   Permite visualizar el estado de la llamada y modificar parámetros de la IA en tiempo real.
+
+Para una descripción más detallada de la arquitectura, el flujo de llamadas y un diagrama, consulta el [Documento de Arquitectura](./docs/architecture.md).
 
 ## Documentación Detallada
 
-Para una comprensión más profunda de cada archivo y las variables de configuración, consulta los siguientes documentos:
+Para una comprensión más profunda de cada archivo y las variables de configuración, consulta los siguientes documentos en el directorio `docs/`:
 
-*   **[Explicación de Archivos](./docs/file-explanation.md)**: Describe el propósito y la funcionalidad de cada archivo principal en el proyecto.
-*   **[Variables de Configuración](./docs/variables.md)**: Detalla las variables de entorno y las opciones de configuración en `config/default.json`.
+*   **[architecture.md](./docs/architecture.md)**: Visión general de la arquitectura del sistema.
+*   **[file-explanation.md](./docs/file-explanation.md)**: Describe el propósito y la funcionalidad de cada archivo principal.
+*   **[variables.md](./docs/variables.md)**: Detalla las variables de entorno y las opciones de configuración en `config/default.json`.
 
 ## Configuración
 
@@ -113,17 +123,34 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
 *   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`, `warn`, `error`, `silly`). Setting to `debug` or `silly` will enable verbose logging of OpenAI API interactions, including request/response payloads.
 
-## Audio Handling (G.711 u-law Passthrough)
+## Audio Handling
 
-This application is configured for a G.711 u-law passthrough audio strategy. This means:
-*   Asterisk should be configured to send G.711 u-law audio (typically 8kHz) to this application. The application sets the `externalMediaChannel` format to `ulaw`.
-*   **No in-application audio transcoding** (e.g., u-law to PCM decoding, or sample rate conversion) is performed for the audio sent to OpenAI for STT. The raw u-law audio from Asterisk is forwarded.
-*   OpenAI is configured (via the `OPENAI_INPUT_AUDIO_FORMAT` variable, set to e.g., `"g711_ulaw"` or `"mulaw_8000hz"`) to expect this u-law stream.
-*   For Text-to-Speech (TTS), OpenAI is configured (via `OPENAI_OUTPUT_AUDIO_FORMAT`, e.g., `"g711_ulaw"` or `"mulaw_8000hz"`) to return G.711 u-law audio, which can be directly played back by Asterisk.
-*   This approach simplifies dependencies and processing by avoiding transcoding within this application.
+La aplicación maneja el audio de la siguiente manera:
+
+*   **Entrada (Llamante -> OpenAI STT)**:
+    *   Asterisk envía el audio del llamante (generalmente G.711 u-law 8kHz) al `RtpServer`.
+    *   Este audio crudo (u-law) se reenvía a OpenAI.
+    *   Se debe configurar `OPENAI_INPUT_AUDIO_FORMAT` (ej. `"g711_ulaw"` o `"mulaw_8000hz"`) y `OPENAI_INPUT_AUDIO_SAMPLE_RATE` (ej. `"8000"`) para que OpenAI espere este formato.
+    *   Esta estrategia de "passthrough" evita la transcodificación en la aplicación Node.js para el audio de entrada.
+
+*   **Salida (OpenAI TTS -> Llamante)**:
+    *   Se solicita a OpenAI que genere audio TTS en un formato específico a través de `OPENAI_OUTPUT_AUDIO_FORMAT` y `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`.
+    *   **Si `OPENAI_OUTPUT_AUDIO_FORMAT` es un tipo PCM (ej. `"pcm_s16le_8000hz"`, `"pcm_s16le_16000hz"`):**
+        *   `ari-client.ts` recibe los fragmentos de audio PCM de OpenAI.
+        *   Al finalizar el stream de audio, se **genera un encabezado WAV estándar** y se antepone al buffer de audio PCM.
+        *   El archivo resultante se guarda como `.wav` en el directorio de sonidos de Asterisk (ej. `/var/lib/asterisk/sounds/openai/`).
+        *   Asterisk reproduce este archivo `.wav`. Es crucial que `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE` coincida con la tasa de muestreo real del audio PCM enviado por OpenAI para que el encabezado WAV sea correcto.
+    *   **Si `OPENAI_OUTPUT_AUDIO_FORMAT` es `"g711_ulaw"` (o `"mulaw_8000hz"`):**
+        *   El audio se guarda como un archivo `.ulaw` crudo.
+        *   Asterisk reproduce este archivo `.ulaw`.
+    *   Otros formatos (MP3, Opus) se guardan con sus extensiones respectivas y Asterisk intenta reproducirlos.
+    *   **Recomendación para TTS**: Usar `OPENAI_OUTPUT_AUDIO_FORMAT="pcm_s16le_8000hz"` y `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE="8000"` para la mejor compatibilidad con Asterisk a través de archivos WAV.
 
 ## Troubleshooting Notes
-**Enhanced Logging:** The server includes detailed logging for server startup, WebSocket connections, ARI call flow, resource creation, and OpenAI interactions. To leverage this for troubleshooting, set the `LOG_LEVEL` environment variable to `debug` or `silly` as needed and inspect the console output of the `websocket-server`.
+**Enhanced Logging:** El servidor incluye logging detallado. Para depurar, establece la variable de entorno `LOG_LEVEL` a `debug` o `silly` e inspecciona la salida de la consola.
+Esto mostrará el flujo de llamadas ARI, interacciones con OpenAI (incluyendo tipos de eventos y errores), y el manejo de audio.
+Verifica la configuración de `OPENAI_OUTPUT_AUDIO_FORMAT` y `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE` para asegurar que coincidan con lo que OpenAI envía, especialmente si usas formatos PCM.
+Revisa los logs de Asterisk (`/var/log/asterisk/full` o similar) para errores de reproducción de audio si los problemas persisten.
 
 ## Operational Modes
 
