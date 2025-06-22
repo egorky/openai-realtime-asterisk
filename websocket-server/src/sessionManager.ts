@@ -371,12 +371,18 @@ export function sendSessionUpdateToOpenAI(callId: string, currentOpenAIConfig: O
   if (currentOpenAIConfig.instructions) {
     sessionUpdatePayload.instructions = currentOpenAIConfig.instructions;
   }
+  // Incluir tools en la actualización de sesión si están definidos
+  // OpenAI espera un array de tool schemas. Si está vacío, se puede enviar un array vacío.
+  if (typeof currentOpenAIConfig.tools !== 'undefined') {
+    sessionUpdatePayload.tools = currentOpenAIConfig.tools;
+  }
+
   if (Object.keys(sessionUpdatePayload).length === 0) {
     loggerToUse.info(`[${callId}] SessionManager: No relevant config changes to send to OpenAI via session.update.`);
     return;
   }
   const sessionUpdateEvent = { type: "session.update", session: sessionUpdatePayload };
-  loggerToUse.info(`[${callId}] SessionManager: Sending session.update to OpenAI with new config:`, sessionUpdatePayload);
+  loggerToUse.info(`[${callId}] SessionManager: Sending session.update to OpenAI with new config:`, JSON.stringify(sessionUpdatePayload, null, 2));
   try {
     session.ws.send(JSON.stringify(sessionUpdateEvent));
     loggerToUse.info(`[${callId}] SessionManager: Successfully sent session.update to OpenAI.`);

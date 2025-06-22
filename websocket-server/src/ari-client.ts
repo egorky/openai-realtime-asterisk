@@ -13,6 +13,7 @@ import {
   LoggerInstance,
   OpenAIRealtimeAPIConfig
 } from './types';
+import { sendGenericEventToFrontend } from './server';
 
 dotenv.config();
 
@@ -219,6 +220,21 @@ export class AriClientService implements AriClientInterface {
     if (!baseConfig) { throw new Error("Base configuration was not loaded."); }
   }
 
+  private sendEventToFrontend(event: any) {
+    // Add callId to all events sent from AriClientService for easier tracking, if not already present
+    const eventToSend = { ...event };
+    if (event.payload && !event.payload.callId && this.currentPrimaryCallId) {
+      // Prefer callId from payload if it exists, otherwise use currentPrimaryCallId
+      // This is a bit heuristic; ideally events should be constructed with callId where relevant.
+      eventToSend.payload.callId = event.payload.callId || this.currentPrimaryCallId;
+    } else if (!event.payload && this.currentPrimaryCallId) {
+      // If no payload, but we have a primary callId, create a payload for it.
+      // This might not be ideal for all event types.
+      // eventToSend.payload = { callId: this.currentPrimaryCallId };
+    }
+    sendGenericEventToFrontend(eventToSend);
+  }
+
   public getCurrentPrimaryCallId(): string | null { return this.currentPrimaryCallId; }
 
   public async updateActiveCallConfig(callId: string, newConfigData: { instructions?: string, ttsVoice?: string, tools?: any[] }) {
@@ -413,41 +429,97 @@ export class AriClientService implements AriClientInterface {
           audioExtension = '.opus';
         }
 
-        const filenameOnly = `openai_tts_${callId}_${timestamp}`;
-        const filenameWithExt = `${filenameOnly}${audioExtension}`;
+        const audioInputBuffer = Buffer.from(fullAudioBase64, 'base64');
+        call.callLogger.info(`Decoded base64 audio. Buffer length: ${audioInputBuffer.length} bytes`);
+
+        const outputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase();
+        const outputSampleRate = call.config.openAIRealtimeAPI.outputAudioSampleRate || 8000; // Default a 8kHz si no está especificado
+        call.callLogger.info(`OpenAI outputAudioFormat configured: ${outputFormat}, SampleRate: ${outputSampleRate}Hz`);
+
+        let filenameOnly = `openai_tts_${callId}_${timestamp}`;
+        let filenameWithExt: string;
+        let finalAudioBuffer = audioInputBuffer; // Buffer que se guardará
+
+        if (outputFormat?.startsWith('pcm')) {
+          call.callLogger.info(`Output format is PCM. Attempting to wrap with WAV header.`);
+          if (audioInputBuffer.length > 0) {
+            // Asumiendo 16-bit PCM (2 bytes por frame/sample para mono)
+            // numFrames es el número total de muestras de audio.
+            // Si es mono, 16-bit, cada muestra es de 2 bytes.
+            // Entonces, numFrames = totalBytes / bytesPorMuestra.
+            const bytesPerSample = 2; // Para PCM 16-bit
+            const numChannels = 1;    // Asumimos mono
+
+            const numFrames = audioInputBuffer.length / (bytesPerSample * numChannels);
+
+            if (audioInputBuffer.length % (bytesPerSample * numChannels) !== 0) {
+                call.callLogger.warn(`PCM audio buffer length (${audioInputBuffer.length}) is not a multiple of bytesPerSample*numChannels (${bytesPerSample * numChannels}). WAV header might be incorrect.`);
+            }
+
+            const wavHeader = createWavHeader({
+              numFrames: numFrames,
+              numChannels: numChannels,
+              sampleRate: outputSampleRate,
+              bytesPerSample: bytesPerSample
+            });
+            finalAudioBuffer = Buffer.concat([wavHeader, audioInputBuffer]);
+            filenameWithExt = `${filenameOnly}.wav`;
+            call.callLogger.info(`PCM data wrapped with WAV header. Final buffer length: ${finalAudioBuffer.length}. SampleRate for header: ${outputSampleRate}Hz. NumFrames for header: ${numFrames}.`);
+          } else {
+            call.callLogger.warn(`PCM audio buffer is empty. Cannot create WAV.`);
+            call.ttsAudioChunks = []; // Limpiar para el siguiente turno
+            return; // No hay nada que guardar o reproducir
+          }
+        } else if (outputFormat === 'g711_ulaw' || outputFormat === 'mulaw_8000hz' || outputFormat === 'ulaw') {
+          filenameWithExt = `${filenameOnly}.ulaw`;
+          call.callLogger.info(`Output format is uLaw. Saving as .ulaw. SampleRate expected by Asterisk: 8000Hz.`);
+        } else if (outputFormat === 'mp3') {
+           filenameWithExt = `${filenameOnly}.mp3`;
+           call.callLogger.info(`Output format is MP3. Saving as .mp3.`);
+        } else if (outputFormat === 'opus') {
+           filenameWithExt = `${filenameOnly}.opus`;
+           call.callLogger.info(`Output format is Opus. Saving as .opus.`);
+        } else {
+          call.callLogger.warn(`Unknown or unhandled output audio format: '${outputFormat}'. Saving as .raw`);
+          filenameWithExt = `${filenameOnly}.raw`;
+        }
+
         const absoluteFilepath = path.join(openaiRecordingsDir, filenameWithExt);
+        fs.writeFileSync(absoluteFilepath, finalAudioBuffer);
+        call.callLogger.info(`TTS audio for call ${callId} saved to ${absoluteFilepath} (${finalAudioBuffer.length} bytes)`);
 
-        const audioBuffer = Buffer.from(fullAudioBase64, 'base64');
-        fs.writeFileSync(absoluteFilepath, audioBuffer);
-        call.callLogger.info(`TTS audio for call ${callId} saved to ${absoluteFilepath} (${audioBuffer.length} bytes)`);
-
+        // Para Asterisk, al usar 'sound:', no se especifica la extensión si es un formato común como .wav o .ulaw
+        // Asterisk intentará encontrar el archivo con la extensión más apropiada.
         soundPathForPlayback = `openai/${filenameOnly}`;
+
       } catch (saveError: any) {
-        call.callLogger.error(`Failed to save TTS audio for call ${callId}: ${saveError.message}`, saveError);
+        call.callLogger.error(`Failed to save or process TTS audio for call ${callId}: ${saveError.message}`, saveError);
       }
 
       if (soundPathForPlayback) {
         call.callLogger.info(`Playing accumulated TTS audio for call ${callId} from sound path: sound:${soundPathForPlayback}`);
         try {
+          // Asegurarse de que no haya una reproducción anterior en curso que pueda interferir.
+          if (call.waitingPlayback) {
+            call.callLogger.debug(`Stopping potentially existing waitingPlayback before starting new TTS playback.`);
+            await call.waitingPlayback.stop().catch(e => call.callLogger.warn(`Error stopping previous waitingPlayback: ${e.message}`));
+            call.waitingPlayback = undefined; // Limpiar la referencia
+          }
+
           await this.playbackAudio(callId, null, `sound:${soundPathForPlayback}`);
           call.callLogger.info(`TTS audio playback initiated for call ${callId} using file: sound:${soundPathForPlayback}.`);
         } catch (e: any) {
           call.callLogger.error(`Error initiating TTS audio playback from file for call ${callId}: ${e.message}`, e);
         }
       } else {
-        call.callLogger.error(`TTS audio for call ${callId} was not saved correctly, cannot play from file. Attempting base64 playback as fallback.`);
-        // Fallback to base64 playback if file saving/pathing failed
-        try {
-            await this.playbackAudio(callId, fullAudioBase64, null);
-            call.callLogger.info(`TTS audio playback (fallback base64) initiated for call ${callId}.`);
-        } catch (e: any) {
-            call.callLogger.error(`Error initiating TTS audio playback (fallback base64) for call ${callId}: ${e.message}`, e);
-        }
+        call.callLogger.error(`TTS audio for call ${callId} was not saved correctly (soundPathForPlayback is null), cannot play from file.`);
+        // No intentar fallback a base64 aquí si el objetivo era guardar y reproducir desde archivo.
+        // Si saveError ocurrió, el problema es previo a la reproducción.
       }
     } else {
       call.callLogger.info(`TTS audio stream ended for call ${callId}, but no audio chunks were accumulated to play (length is 0).`);
     }
-    call.ttsAudioChunks = [];
+    call.ttsAudioChunks = []; // Limpiar siempre los chunks después de procesarlos (o intentar procesarlos)
   }
 
   public _onOpenAIError(callId: string, error: any): void {
@@ -944,8 +1016,27 @@ export class AriClientService implements AriClientInterface {
         }
       }
       callLogger.info(`StasisStart setup complete for call ${callId}.`);
+
+      this.sendEventToFrontend({
+        type: "ari_call_status_update",
+        payload: {
+          status: "active",
+          callId: callId,
+          callerId: incomingChannel.caller?.number || "Unknown"
+        }
+      });
+
     } catch (err: any) {
       callLogger.error(`Error in StasisStart for ${callId}: ${(err instanceof Error ? err.message : String(err))}`);
+      this.sendEventToFrontend({
+        type: "ari_call_status_update",
+        payload: {
+          status: "error",
+          callId: callId,
+          callerId: incomingChannel.caller?.number || "Unknown",
+          errorMessage: (err instanceof Error ? err.message : String(err))
+        }
+      });
       await this._fullCleanup(callId, true, "STASIS_START_ERROR");
     }
   }
@@ -980,13 +1071,38 @@ export class AriClientService implements AriClientInterface {
       return;
     }
     if (call) {
+      if (call.isCleanupCalled) { // Evitar doble limpieza o envío de eventos duplicados
+        // call.callLogger.debug(`_fullCleanup for ${callId} already called or in progress. Skipping.`);
+        return;
+      }
       call.isCleanupCalled = true;
-      call.callLogger.info(`Full cleanup initiated. Reason: ${reason}. Hangup main: ${hangupMainChannel}`);
+      call.callLogger.info(`Full cleanup initiated for call ${callId}. Reason: ${reason}. Hangup main: ${hangupMainChannel}`);
 
+      // Send event before clearing currentPrimaryCallId if this IS the primary call
       if (this.currentPrimaryCallId === callId) {
+        this.sendEventToFrontend({
+          type: "ari_call_status_update",
+          payload: {
+            status: "ended",
+            callId: callId,
+            callerId: call.channel?.caller?.number || call.config?.openAIRealtimeAPI?.callerIdStorage || "Unknown", // Use stored if available
+            reason: reason
+          }
+        });
         this.currentPrimaryCallId = null;
         call.callLogger.info(`Cleared as current primary call.`);
+      } else if (callId) { // If it's a different callId (should not happen if only one primary call)
+         this.sendEventToFrontend({
+          type: "ari_call_status_update",
+          payload: {
+            status: "ended",
+            callId: callId,
+            callerId: call.channel?.caller?.number || call.config?.openAIRealtimeAPI?.callerIdStorage || "Unknown",
+            reason: `secondary_call_cleanup: ${reason}`
+          }
+        });
       }
+
 
       if (call.playbackFailedHandler && this.client) {
         this.client.removeListener('PlaybackFailed' as any, call.playbackFailedHandler);
@@ -1197,26 +1313,73 @@ export class AriClientService implements AriClientInterface {
 
     try {
       // @ts-ignore
-      const audioBuffer = await sessionManager.synthesizeSpeechOpenAI(call.config, textToSpeak, call.callLogger);
+      const audioBuffer = await sessionManager.synthesizeSpeechOpenAI(call.config, textToSpeak, call.callLogger); // This function might not exist or be intended for this flow.
 
       if (audioBuffer && audioBuffer.length > 0) {
-        const audioBase64 = audioBuffer.toString('base64');
-        call.callLogger.info(`TTS audio received (${audioBuffer.length} bytes). Playing to caller.`);
-        // Esta función ahora guardará y reproducirá desde archivo si es posible.
-        // await this.playbackAudio(callId, audioBase64);
-        // _onOpenAIAudioStreamEnd se encargará de esto si el audio viene de la API Realtime.
-        // Esta función _playTTSToCaller parece ser para un flujo de TTS diferente/síncrono.
-        // Si es para TTS síncrono, se debe decidir si guardar y reproducir o usar base64.
-        // Por ahora, se asume que el flujo principal es a través de _onOpenAIAudioStreamEnd.
-         call.callLogger.warn("_playTTSToCaller is likely deprecated if using Realtime API audio streaming. Audio should come via _onOpenAIAudioChunk.");
+        // This part is problematic if synthesizeSpeechOpenAI is not actually fetching audio for Realtime API.
+        // The Realtime API sends audio via _onOpenAIAudioChunk.
+        // This _playTTSToCaller seems like a remnant of a different TTS approach.
+        call.callLogger.warn("_playTTSToCaller was invoked, but TTS audio for Realtime API should arrive via _onOpenAIAudioChunk and be handled by _onOpenAIAudioStreamEnd. This path might be deprecated or for a non-realtime TTS flow.");
+        // If it *were* to play audio, it should use the file-based playback like _onOpenAIAudioStreamEnd.
+        // For example, it would need to save the audioBuffer to a file (potentially as WAV) and then call this.playbackAudio(callId, null, 'sound:path/to/file').
       } else {
-        call.callLogger.error(`TTS synthesis failed or returned empty audio.`);
+        call.callLogger.error(`TTS synthesis (via _playTTSToCaller) failed or returned empty audio.`);
       }
     } catch (error: any) {
-      call.callLogger.error(`Error during TTS synthesis or playback: ${error.message}`, error);
+      call.callLogger.error(`Error during TTS synthesis or playback (via _playTTSToCaller): ${error.message}`, error);
     }
   }
 }
+
+// Helper function to create WAV header (can be moved to a utils file if preferred)
+interface WavHeaderOptions {
+  numFrames: number;
+  numChannels: number;
+  sampleRate: number;
+  bytesPerSample: number;
+}
+
+function createWavHeader(opts: WavHeaderOptions): Buffer {
+  const numFrames = opts.numFrames;
+  const numChannels = opts.numChannels || 1;
+  const sampleRate = opts.sampleRate || 8000;
+  const bytesPerSample = opts.bytesPerSample || 2; // 16-bit
+  const blockAlign = numChannels * bytesPerSample;
+  const byteRate = sampleRate * blockAlign;
+  const dataSize = numFrames * blockAlign;
+
+  const buffer = Buffer.alloc(44);
+
+  // RIFF identifier
+  buffer.write('RIFF', 0);
+  // RIFF chunk length (36 + dataSize)
+  buffer.writeUInt32LE(36 + dataSize, 4);
+  // RIFF type
+  buffer.write('WAVE', 8);
+  // format chunk identifier
+  buffer.write('fmt ', 12);
+  // format chunk length
+  buffer.writeUInt32LE(16, 16);
+  // sample format (1 for PCM)
+  buffer.writeUInt16LE(1, 20);
+  // channel count
+  buffer.writeUInt16LE(numChannels, 22);
+  // sample rate
+  buffer.writeUInt32LE(sampleRate, 24);
+  // byte rate (sampleRate * blockAlign)
+  buffer.writeUInt32LE(byteRate, 28);
+  // block align (numChannels * bytesPerSample)
+  buffer.writeUInt16LE(blockAlign, 32);
+  // bits per sample (bytesPerSample * 8)
+  buffer.writeUInt16LE(bytesPerSample * 8, 34);
+  // data chunk identifier
+  buffer.write('data', 36);
+  // data chunk length (dataSize)
+  buffer.writeUInt32LE(dataSize, 40);
+
+  return buffer;
+}
+
 
 let ariClientServiceInstance: AriClientService | null = null;
 

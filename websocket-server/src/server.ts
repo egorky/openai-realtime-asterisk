@@ -149,3 +149,12 @@ server.listen(PORT, HOST_IP, async () => {
     // process.exit(1);
   }
 });
+
+export function sendGenericEventToFrontend(event: any) {
+  if (currentLogs && currentLogs.readyState === WebSocket.OPEN) {
+    console.log("Sending generic event to frontend:", JSON.stringify(event, null, 2));
+    currentLogs.send(JSON.stringify(event));
+  } else {
+    console.warn("Cannot send generic event to frontend, /logs WebSocket not connected or not open.", currentLogs ? currentLogs.readyState: 'null');
+  }
+}

@@ -7,15 +7,19 @@ import SessionConfigurationPanel from "@/components/session-configuration-panel"
 import Transcript from "@/components/transcript";
 import FunctionCallsPanel from "@/components/function-calls-panel";
 import { Item } from "@/components/types";
-import handleRealtimeEvent from "@/lib/handle-realtime-event";
-import ServerStatusIndicator from "@/components/server-status-indicator"; // Updated import
+import handleRealtimeEvent, { AriCallInfo } from "@/lib/handle-realtime-event"; // Import AriCallInfo
+import ServerStatusIndicator from "@/components/server-status-indicator";
 
 const CallInterface = () => {
-  // Removed selectedPhoneNumber state
-  const [allConfigsReady, setAllConfigsReady] = useState(false); // This is now set by ChecklistAndConfig
+  const [allConfigsReady, setAllConfigsReady] = useState(false);
   const [items, setItems] = useState<Item[]>([]);
-  const [callStatus, setCallStatus] = useState("disconnected"); // "connected" or "disconnected" to /logs WS
+  const [logsWsStatus, setLogsWsStatus] = useState("disconnected"); // "connected" or "disconnected" to /logs WS
   const [ws, setWs] = useState<WebSocket | null>(null);
+  const [ariCallInfo, setAriCallInfo] = useState<AriCallInfo>({ // New state for ARI call info
+    status: "idle",
+    callId: null,
+    callerId: null,
+  });
 
   const websocketServerBaseUrl = process.env.NEXT_PUBLIC_WEBSOCKET_SERVER_BASE_URL;
 
@@ -35,27 +39,26 @@ const CallInterface = () => {
 
       newWs.onopen = () => {
         console.log("Connected to logs websocket at", wsUrl);
-        setCallStatus("connected");
+        setLogsWsStatus("connected");
       };
 
       newWs.onerror = (error) => {
         console.error("Logs websocket error:", error);
-        // setCallStatus("error"); // Or handle error state appropriately
+        setLogsWsStatus("error");
       };
 
       newWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        // console.log("Received logs event:", data); // Potentially too verbose
-        handleRealtimeEvent(data, setItems);
+        // console.log("Received logs event from backend:", data);
+        handleRealtimeEvent(data, setItems, setAriCallInfo); // Pass setAriCallInfo
       };
 
       newWs.onclose = () => {
         console.log("Logs websocket disconnected from", wsUrl);
         setWs(null);
-        setCallStatus("disconnected");
-        // Optionally, you might want to set allConfigsReady to false to re-trigger checklist
-        // if the connection is critical and was previously established.
-        // setAllConfigsReady(false);
+        setLogsWsStatus("disconnected");
+        // Reset ARI info on WS disconnect as well, as we lose connection to the source of this info
+        setAriCallInfo({ status: "idle", callId: null, callerId: null, errorMessage: "WebSocket disconnected" });
       };
 
       setWs(newWs);
@@ -70,15 +73,14 @@ const CallInterface = () => {
       <ChecklistAndConfig
         ready={allConfigsReady}
         setReady={setAllConfigsReady}
-        // selectedPhoneNumber and setSelectedPhoneNumber props removed
       />
-      <TopBar />
+      <TopBar ariCallInfo={ariCallInfo} /> {/* Pass ariCallInfo to TopBar */}
       <div className="flex-grow p-4 h-full overflow-hidden flex flex-col">
         <div className="grid grid-cols-12 gap-4 h-full">
           {/* Left Column */}
           <div className="col-span-3 flex flex-col h-full overflow-hidden">
             <SessionConfigurationPanel
-              callStatus={callStatus} // This reflects /logs WS connection
+              callStatus={logsWsStatus} // This reflects /logs WS connection
               onSave={(config) => {
                 if (ws && ws.readyState === WebSocket.OPEN) {
                   const updateEvent = {
@@ -96,9 +98,12 @@ const CallInterface = () => {
 
           {/* Middle Column: Transcript */}
           <div className="col-span-6 flex flex-col gap-4 h-full overflow-hidden">
-            {/* Use ServerStatusIndicator and pass the actual /logs WS connection status */}
             <ServerStatusIndicator
-              isConnectedToLogs={callStatus === "connected"}
+              isConnectedToLogs={logsWsStatus === "connected"}
+              ariCallStatus={ariCallInfo?.status || "idle"} // Pass ARI call status
+              ariCallId={ariCallInfo?.callId}
+              ariCallerId={ariCallInfo?.callerId}
+              ariErrorMessage={ariCallInfo?.errorMessage}
             />
             <Transcript items={items} />
           </div>
