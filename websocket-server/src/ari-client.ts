@@ -396,9 +396,17 @@ export class AriClientService implements AriClientInterface {
     }
 
     if (call.ttsAudioChunks.length > 0) {
+      call.callLogger.info(`Processing ${call.ttsAudioChunks.length} audio chunks.`);
+      for (let i = 0; i < call.ttsAudioChunks.length; i++) {
+        const chunk = call.ttsAudioChunks[i];
+        call.callLogger.debug(`Chunk ${i}: Length=${chunk?.length}, Type=${typeof chunk}, Content (first 50): ${chunk?.substring(0, 50)}`);
+      }
+
       const fullAudioBase64 = call.ttsAudioChunks.join('');
-      call.callLogger.info(`TTS audio stream ended for call ${callId}. Total base64 length: ${fullAudioBase64.length}.`);
-      call.callLogger.debug(`First 100 chars of base64 audio: ${fullAudioBase64.substring(0,100)}`);
+      call.callLogger.info(`TTS audio stream ended for call ${callId}. Total accumulated base64 length after join: ${fullAudioBase64.length}.`);
+      call.callLogger.debug(`Full base64 string (first 100 chars): ${fullAudioBase64.substring(0,100)}`);
+      call.callLogger.debug(`Full base64 string (last 100 chars): ${fullAudioBase64.substring(Math.max(0, fullAudioBase64.length - 100))}`);
+
 
       if (fullAudioBase64.trim() === "") {
           call.callLogger.warn(`Combined audio data for call ${callId} is empty or whitespace. Skipping playback and saving.`);
