@@ -267,7 +267,7 @@ export class AriClientService implements AriClientInterface {
     call.callLogger.info(`${logPrefix} Waiting for OpenAI to generate response (including potential audio).`);
   }
 
-  public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, isLastChunk: boolean): void {
+  public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): void { // isLastChunk is deprecated here, triggered by _onOpenAIAudioStreamEnd
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) {
       (call?.callLogger || this.logger).warn(`[${callId}] _onOpenAIAudioChunk: Call not active or cleanup called. Ignoring audio chunk.`);
@@ -278,25 +278,34 @@ export class AriClientService implements AriClientInterface {
       call.ttsAudioChunks = [];
     }
     if (audioChunkBase64 && audioChunkBase64.length > 0) {
-       call.callLogger.debug(`${logPrefix} Received TTS audio chunk, length: ${audioChunkBase64.length}. IsLast: ${isLastChunk}`);
+       call.callLogger.debug(`${logPrefix} Received TTS audio chunk, length: ${audioChunkBase64.length}.`);
        call.ttsAudioChunks.push(audioChunkBase64);
     }
-    if (isLastChunk) {
-      if (call.ttsAudioChunks.length > 0) {
-        const fullAudioBase64 = call.ttsAudioChunks.join('');
-        call.callLogger.info(`${logPrefix} All TTS audio chunks received. Total base64 length: ${fullAudioBase64.length}. Playing audio.`);
-        this.playbackAudio(callId, fullAudioBase64)
-          .then(() => {
-            call.callLogger.info(`${logPrefix} TTS audio playback initiated.`);
-          })
-          .catch(e => {
-            call.callLogger.error(`${logPrefix} Error initiating TTS audio playback: ${e.message}`, e);
-          });
-      } else {
-        call.callLogger.warn(`${logPrefix} Received isLastChunk=true for TTS, but no audio chunks were accumulated.`);
-      }
-      call.ttsAudioChunks = [];
+    // Playback logic moved to _onOpenAIAudioStreamEnd
+  }
+
+  public _onOpenAIAudioStreamEnd(callId: string): void {
+    const call = this.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) {
+      (call?.callLogger || this.logger).warn(`[${callId}] _onOpenAIAudioStreamEnd: Call not active or cleanup called.`);
+      return;
     }
+    const logPrefix = `[${call.channel.id}][Caller: ${call.channel.caller?.number || 'N/A'}]`;
+
+    if (call.ttsAudioChunks && call.ttsAudioChunks.length > 0) {
+      const fullAudioBase64 = call.ttsAudioChunks.join('');
+      call.callLogger.info(`${logPrefix} TTS audio stream ended. Total base64 length: ${fullAudioBase64.length}. Playing audio.`);
+      this.playbackAudio(callId, fullAudioBase64)
+        .then(() => {
+          call.callLogger.info(`${logPrefix} TTS audio playback initiated by stream end.`);
+        })
+        .catch(e => {
+          call.callLogger.error(`${logPrefix} Error initiating TTS audio playback by stream end: ${e.message}`, e);
+        });
+    } else {
+      call.callLogger.info(`${logPrefix} TTS audio stream ended, but no audio chunks were accumulated to play.`);
+    }
+    call.ttsAudioChunks = []; // Clear chunks after attempting playback
   }
 
   public _onOpenAIError(callId: string, error: any): void {
@@ -738,7 +747,7 @@ export class AriClientService implements AriClientInterface {
       }
       this.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
 
-      const snoopDirection = 'out' as ('in' | 'out' | 'both');
+      const snoopDirection = 'in' as ('in' | 'out' | 'both'); // Changed to 'in'
       callLogger.info(`${logPrefix} Attempting to create snoopChannel on ${callId} (snoopId: snoop_${callId}, direction: '${snoopDirection}').`);
       try {
         callResources.snoopChannel = await this.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });

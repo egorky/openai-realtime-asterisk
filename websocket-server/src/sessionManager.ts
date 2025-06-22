@@ -209,7 +209,12 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             }
             break;
           case 'response.audio.done':
-            msgSessionLogger.info(`OpenAI response.audio.done for ${callId}.`);
+            msgSessionLogger.info(`OpenAI response.audio.done for ${callId}. Triggering playback of accumulated audio.`);
+            if (typeof currentAriClient._onOpenAIAudioStreamEnd === 'function') {
+              currentAriClient._onOpenAIAudioStreamEnd(callId);
+            } else {
+              msgSessionLogger.warn("ariClient._onOpenAIAudioStreamEnd is not implemented yet."); // Should not happen
+            }
             break;
           case 'input_audio_buffer.speech_started':
                msgSessionLogger.info(`OpenAI detected speech started for ${callId}`);
