@@ -1239,5 +1239,3 @@ export async function initializeAriClient(): Promise<AriClientService> {
   }
   return ariClientServiceInstance;
 }
-
-[end of websocket-server/src/ari-client.ts]
