@@ -404,7 +404,6 @@ export class AriClientService implements AriClientInterface {
         const chunkBase64 = call.ttsAudioChunks[i];
         if (typeof chunkBase64 === 'string' && chunkBase64.length > 0) {
           totalOriginalBase64Length += chunkBase64.length;
-          // Quitar el log detallado del contenido del chunk que es muy verboso para producción.
           // call.callLogger.debug(`Chunk ${i}: Original Length=${chunkBase64.length}, Type=${typeof chunkBase64}, Content (first 50): ${chunkBase64.substring(0, 50)}`);
           try {
             const decodedChunk = Buffer.from(chunkBase64, 'base64');
@@ -425,9 +424,7 @@ export class AriClientService implements AriClientInterface {
         return;
       }
 
-      // const audioInputBuffer = Buffer.from(fullAudioBase64, 'base64'); // Esta línea era el error, fullAudioBase64 ya no existe aquí.
-      // audioInputBuffer se crea ahora con Buffer.concat(decodedBuffers)
-      const audioInputBuffer = Buffer.concat(decodedBuffers); // Correcto
+      const audioInputBuffer = Buffer.concat(decodedBuffers);
       call.callLogger.info(`Concatenated ${decodedBuffers.length} decoded buffer(s). Total audioInputBuffer length for call ${callId}: ${audioInputBuffer.length} bytes.`);
 
 
