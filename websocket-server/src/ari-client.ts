@@ -1072,14 +1072,27 @@ export class AriClientService implements AriClientInterface {
     call.vadSpeechDetected = true;
     call.vadRecognitionTriggeredAfterInitialDelay = true;
 
-    // Stop any remaining prompt playback if it wasn't stopped by barge-in logic earlier.
-    // This is a safeguard.
+    let playbackToStop: Playback | undefined = undefined;
+    let playbackType = "";
+
     if (call.mainPlayback && !call.promptPlaybackStoppedForInterim) {
+        playbackToStop = call.mainPlayback;
+        playbackType = "main greeting";
+    } else if (call.waitingPlayback && !call.promptPlaybackStoppedForInterim) { // Check for OpenAI TTS playback
+        playbackToStop = call.waitingPlayback;
+        playbackType = "OpenAI TTS";
+    }
+
+    if (playbackToStop) {
       try {
-        call.callLogger.info(`VAD: Stopping main prompt (safeguard) due to ChannelTalkingStarted.`);
-        await call.mainPlayback.stop(); // This will trigger PlaybackFinished
-        call.promptPlaybackStoppedForInterim = true;
-      } catch (e: any) { call.callLogger.warn(`VAD: Error stopping main playback (safeguard): ${e.message}`); }
+        call.callLogger.info(`VAD: Barge-in: Stopping ${playbackType} playback (ID: ${playbackToStop.id}) due to ChannelTalkingStarted.`);
+        await playbackToStop.stop(); // This will trigger its PlaybackFinished event
+        call.promptPlaybackStoppedForInterim = true; // Use this generic flag for any interrupted bot speech
+        if (playbackToStop === call.mainPlayback) call.mainPlayback = undefined;
+        else if (playbackToStop === call.waitingPlayback) call.waitingPlayback = undefined;
+      } catch (e: any) {
+        call.callLogger.warn(`VAD: Error stopping ${playbackType} playback (ID: ${playbackToStop.id}) for barge-in: ${e.message}`);
+      }
     }
 
     // Clear timers that were waiting for this speech event
@@ -1141,62 +1154,97 @@ export class AriClientService implements AriClientInterface {
     if (!call || call.isCleanupCalled) {
       return;
     }
-    // This function is primarily for when the main greeting/prompt finishes.
+
+    const appRecogConf = call.config.appConfig.appRecognitionConfig;
+    const activationMode = appRecogConf.recognitionActivationMode;
+
     if (reason.startsWith('main_greeting_')) {
-      call.callLogger.info(`Main greeting/prompt finished or failed. Reason: ${reason}. Handling post-prompt logic.`);
-      call.mainPlayback = undefined; // Clear the main playback reference
+      call.callLogger.info(`Main greeting/prompt finished or failed. Reason: ${reason}. Handling post-prompt logic for main greeting.`);
+      call.mainPlayback = undefined;
 
-      const appRecogConf = call.config.appConfig.appRecognitionConfig;
-      const activationMode = appRecogConf.recognitionActivationMode;
-
+      // Logic for after main greeting finishes
       switch (activationMode) {
         case 'fixedDelay':
-          // In fixedDelay, OpenAI stream starts after bargeInDelaySeconds, *regardless of prompt finishing*.
-          // This logic here is a fallback or secondary trigger if the initial timer in onStasisStart didn't fire
-          // or if the prompt finishes *before* the bargeInDelaySeconds.
-          // The primary activation for fixedDelay should be in onStasisStart's timer.
-          // If prompt finishes and bargeInActivationTimer is still pending, let it fire.
-          // If it already fired or bargeInDelay is 0, stream should be active or activating.
-          call.callLogger.info(`fixedDelay mode: Prompt finished. Barge-in logic should have been handled by timer in onStasisStart or direct activation if delay was 0.`);
+          call.callLogger.info(`fixedDelay mode: Main greeting finished. Barge-in logic handled by onStasisStart timer or direct activation.`);
           if (!call.openAIStreamingActive && !call.bargeInActivationTimer) {
-            // This case implies bargeInDelay was >0, timer hasn't fired, and prompt ended.
-            // This shouldn't happen if timer was set correctly. Or bargeInDelay was 0 and activation failed.
-            // As a safeguard, try to activate if not already.
-            call.callLogger.warn(`fixedDelay mode: Prompt finished, stream not active, no pending barge-in timer. Attempting activation (safeguard).`);
-            this._activateOpenAIStreaming(callId, "fixedDelay_safeguard_post_prompt");
+            call.callLogger.warn(`fixedDelay mode: Main greeting finished, stream not active, no pending barge-in timer. Safeguard activation.`);
+            this._activateOpenAIStreaming(callId, "fixedDelay_safeguard_post_main_greeting");
           }
           break;
-
         case 'Immediate':
-          // In Immediate mode, OpenAI stream starts right away. Prompt finishing doesn't change that.
-          call.callLogger.info(`Immediate mode: Prompt finished. OpenAI stream should already be active.`);
+          call.callLogger.info(`Immediate mode: Main greeting finished. OpenAI stream should be active.`);
           if (!call.openAIStreamingActive) {
-            call.callLogger.warn(`Immediate mode: Prompt finished, but stream is not active. This is unexpected. Attempting activation (safeguard).`);
-            this._activateOpenAIStreaming(callId, "Immediate_safeguard_post_prompt");
+            call.callLogger.warn(`Immediate mode: Main greeting finished, stream not active. Unexpected. Safeguard activation.`);
+            this._activateOpenAIStreaming(callId, "Immediate_safeguard_post_main_greeting");
           }
           break;
-
         case 'vad':
-          // In 'vad' mode, what happens after prompt depends on 'vadRecogActivation'.
           if (appRecogConf.vadRecogActivation === 'afterPrompt') {
-            call.callLogger.info(`VAD mode (afterPrompt): Prompt finished. Activating TALK_DETECT based logic now.`);
-            this._handlePostPromptVADLogic(callId); // This will manage TALK_DETECT and vadMaxWaitAfterPromptSeconds
+            call.callLogger.info(`VAD mode (afterPrompt): Main greeting finished. Activating VAD logic.`);
+            this._handlePostPromptVADLogic(callId);
           } else if (appRecogConf.vadRecogActivation === 'vadMode') {
-            // In 'vadMode', TALK_DETECT is active from the start (after initial delays).
-            // Prompt finishing doesn't change the VAD listening state directly, but vadMaxWait might apply from now.
-            call.callLogger.info(`VAD mode (vadMode): Prompt finished. VAD logic (initial delays, TALK_DETECT) should already be in effect.`);
-            this._handleVADDelaysCompleted(callId); // Re-check delay completion status and subsequent logic
-            // If delays are complete, _handlePostPromptVADLogic might set a max wait if no speech yet.
-             if (call.vadInitialSilenceDelayCompleted && !call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay) {
-                 this._handlePostPromptVADLogic(callId);
-             }
+            call.callLogger.info(`VAD mode (vadMode): Main greeting finished. VAD logic (delays/TALK_DETECT) already in effect.`);
+            this._handleVADDelaysCompleted(callId); // Check if delays completed and if speech occurred during them
+            if (call.vadInitialSilenceDelayCompleted && !call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay) {
+                 this._handlePostPromptVADLogic(callId); // Potentially start maxWait timer
+            }
           }
           break;
         default:
-          call.callLogger.warn(`Unhandled recognitionActivationMode: ${activationMode} in _handlePlaybackFinished.`);
+          call.callLogger.warn(`Unhandled recognitionActivationMode: ${activationMode} after main_greeting.`);
+      }
+    } else if (reason.startsWith('openai_tts_')) {
+      call.callLogger.info(`OpenAI TTS playback finished or failed. Reason: ${reason}. Preparing for next caller turn.`);
+      // After OpenAI TTS finishes, we always need to set up to listen for the user again.
+      // The exact mechanism depends on the overall RECOGNITION_ACTIVATION_MODE.
+      // TALK_DETECT should have been (re-)enabled before this playback started if VAD barge-in was desired.
+
+      // Reset flags for the new turn
+      call.speechHasBegun = false;
+      call.finalTranscription = "";
+      call.openAIStreamingActive = false; // Ensure it's false before trying to activate for user.
+      call.vadRecognitionTriggeredAfterInitialDelay = false; // Reset VAD trigger for the new turn.
+      call.promptPlaybackStoppedForInterim = false; // Reset barge-in flag for prompts.
+
+      // Clear previous turn's speech timers
+      if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
+      if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
+      // MaxRecognitionDurationTimer for the *overall interaction* might still be running or might be reset/re-evaluated here.
+      // For now, let's assume it continues unless a new interaction "turn" starts a fresh one.
+      // The existing onStasisStart sets a global one. This might need refinement for multi-turn.
+
+      call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${activationMode}`);
+
+      switch (activationMode) {
+        case 'fixedDelay':
+          const delaySeconds = appRecogConf.bargeInDelaySeconds;
+          call.callLogger.info(`fixedDelay mode: Post-TTS. Activating OpenAI stream after ${delaySeconds}s.`);
+          if (call.bargeInActivationTimer) clearTimeout(call.bargeInActivationTimer); // Clear previous if any
+          if (delaySeconds > 0) {
+            call.bargeInActivationTimer = setTimeout(() => {
+              if (call.isCleanupCalled || call.openAIStreamingActive) return;
+              this._activateOpenAIStreaming(callId, "fixedDelay_post_tts_delay_expired");
+            }, delaySeconds * 1000);
+          } else {
+            this._activateOpenAIStreaming(callId, "fixedDelay_post_tts_immediate");
+          }
+          break;
+        case 'Immediate':
+          call.callLogger.info(`Immediate mode: Post-TTS. Activating OpenAI stream immediately.`);
+          this._activateOpenAIStreaming(callId, "Immediate_post_tts");
+          break;
+        case 'vad':
+          call.callLogger.info(`VAD mode: Post-TTS. VAD logic (TALK_DETECT) should be active. Sub-mode: ${appRecogConf.vadRecogActivation}`);
+           // Ensure TALK_DETECT is active. It was set before TTS playback.
+           // If vadRecogActivation is 'afterPrompt', this is the point it becomes truly active.
+           // If 'vadMode', it was already active or waiting for initial delays.
+          this._handlePostPromptVADLogic(callId); // This will set up vadMaxWaitAfterPromptSeconds if applicable.
+          break;
+        default:
+          call.callLogger.warn(`Unhandled RECOGNITION_ACTIVATION_MODE: ${activationMode} after OpenAI TTS.`);
       }
     } else {
-      call.callLogger.debug(`_handlePlaybackFinished called for non-greeting playback or unknown reason: ${reason}`);
+      call.callLogger.debug(`_handlePlaybackFinished called for other reason: ${reason}`);
     }
   }
 
@@ -1680,6 +1728,27 @@ export class AriClientService implements AriClientInterface {
       return;
     }
 
+    // Ensure TALK_DETECT is active before playing TTS if barge-in is desired
+    // This applies if any form of VAD-based barge-in is expected during this playback.
+    // We'll make it conditional based on a general "barge-in enabled" idea, which might come from a new config
+    // or be implicit in the modes. For now, let's assume if not in DTMF mode, VAD barge-in is possible.
+    if (!call.dtmfModeActive) { // Only set TALK_DETECT if not in DTMF mode.
+        try {
+            // Check if TALK_DETECT is already set. This is a simplification; real check might be more complex.
+            // For now, we'll re-apply it to ensure it's active with correct params.
+            const appRecogConf = call.config.appConfig.appRecognitionConfig;
+            const talkThresholdForAri = appRecogConf.vadTalkThreshold;
+            const silenceThresholdMsForAri = appRecogConf.vadSilenceThresholdMs;
+            const talkDetectValue = `${talkThresholdForAri},${silenceThresholdMsForAri}`;
+
+            call.callLogger.info(`Ensuring TALK_DETECT is active for TTS playback barge-in. Value: '${talkDetectValue}'`);
+            await call.channel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+        } catch (e: any) {
+            call.callLogger.warn(`Error setting TALK_DETECT for TTS barge-in on channel ${call.channel.id}: ${e.message}. Speech barge-in might not work.`);
+        }
+    }
+
+
     try {
       if (call.waitingPlayback) {
         try {
@@ -1692,12 +1761,12 @@ export class AriClientService implements AriClientInterface {
 
       call.waitingPlayback = this.client.Playback();
       const playbackId = call.waitingPlayback.id;
-      call.callLogger.debug(`Created playback object ${playbackId} for ${channelId}. Media: ${mediaToPlay.substring(0,60)}...`);
+      call.callLogger.debug(`Created playback object ${playbackId} for ${channelId} (OpenAI TTS). Media: ${mediaToPlay.substring(0,60)}...`);
 
       const waitingPlaybackFinishedCb = () => {
         const currentCall = this.activeCalls.get(channelId);
-        if (!currentCall) return;
-        currentCall.callLogger.debug(`Playback ${playbackId} finished for ${channelId}.`);
+        if (!currentCall || currentCall.isCleanupCalled) return;
+        currentCall.callLogger.debug(`OpenAI TTS Playback ${playbackId} finished for ${channelId}.`);
         if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
           currentCall.waitingPlayback = undefined;
         }
@@ -1705,6 +1774,8 @@ export class AriClientService implements AriClientInterface {
           this.client.removeListener('PlaybackFailed' as any, currentCall.waitingPlaybackFailedHandler);
           currentCall.waitingPlaybackFailedHandler = null;
         }
+        // After TTS playback finishes, proceed to listen for user based on mode
+        this._handlePlaybackFinished(channelId, 'openai_tts_finished');
       };
       if (call.waitingPlayback) {
           call.waitingPlayback.once('PlaybackFinished', waitingPlaybackFinishedCb);
@@ -1713,8 +1784,8 @@ export class AriClientService implements AriClientInterface {
       const waitingPlaybackFailedCb = (event: any, failedPlayback: Playback) => {
         if (this.client && failedPlayback.id === playbackId) {
           const currentCall = this.activeCalls.get(channelId);
-          if (!currentCall) return;
-          currentCall.callLogger.error(`Playback ${playbackId} FAILED for ${channelId}: ${failedPlayback?.state}, Reason: ${event?.message || (event?.playback?.reason || 'Unknown')}`);
+          if (!currentCall || currentCall.isCleanupCalled) return;
+          currentCall.callLogger.error(`OpenAI TTS Playback ${playbackId} FAILED for ${channelId}: ${failedPlayback?.state}, Reason: ${event?.message || (event?.playback?.reason || 'Unknown')}`);
           if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
             currentCall.waitingPlayback = undefined;
           }
@@ -1722,15 +1793,16 @@ export class AriClientService implements AriClientInterface {
             this.client.removeListener('PlaybackFailed' as any, waitingPlaybackFailedCb);
             currentCall.waitingPlaybackFailedHandler = null;
           }
+          this._handlePlaybackFinished(channelId, 'openai_tts_failed');
         }
       };
       call.waitingPlaybackFailedHandler = waitingPlaybackFailedCb;
       this.client.on('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
 
       await call.channel.play({ media: mediaToPlay }, call.waitingPlayback);
-      call.callLogger.info(`Playback ${playbackId} started for ${channelId}.`);
+      call.callLogger.info(`OpenAI TTS Playback ${playbackId} started for ${channelId}.`);
     } catch (err: any) {
-      call.callLogger.error(`Error playing audio for ${channelId}: ${err.message || JSON.stringify(err)}`);
+      call.callLogger.error(`Error playing OpenAI TTS audio for ${channelId}: ${err.message || JSON.stringify(err)}`);
       if (call.waitingPlayback) {
         if (call.waitingPlaybackFailedHandler && this.client) {
             this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
@@ -1738,6 +1810,7 @@ export class AriClientService implements AriClientInterface {
         }
         call.waitingPlayback = undefined;
       }
+       this._handlePlaybackFinished(channelId, 'openai_tts_playback_exception');
     }
   }
   public async endCall(channelId: string): Promise<void> {
