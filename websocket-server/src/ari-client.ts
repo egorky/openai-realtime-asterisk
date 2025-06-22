@@ -396,20 +396,40 @@ export class AriClientService implements AriClientInterface {
     }
 
     if (call.ttsAudioChunks.length > 0) {
-      call.callLogger.info(`Processing ${call.ttsAudioChunks.length} audio chunks.`);
+      call.callLogger.info(`Processing ${call.ttsAudioChunks.length} audio chunks for call ${callId}.`);
+      const decodedBuffers: Buffer[] = [];
+      let totalOriginalBase64Length = 0;
+
       for (let i = 0; i < call.ttsAudioChunks.length; i++) {
-        const chunk = call.ttsAudioChunks[i];
-        call.callLogger.debug(`Chunk ${i}: Length=${chunk?.length}, Type=${typeof chunk}, Content (first 50): ${chunk?.substring(0, 50)}`);
+        const chunkBase64 = call.ttsAudioChunks[i];
+        if (typeof chunkBase64 === 'string' && chunkBase64.length > 0) {
+          totalOriginalBase64Length += chunkBase64.length;
+          // Quitar el log detallado del contenido del chunk que es muy verboso para producción.
+          // call.callLogger.debug(`Chunk ${i}: Original Length=${chunkBase64.length}, Type=${typeof chunkBase64}, Content (first 50): ${chunkBase64.substring(0, 50)}`);
+          try {
+            const decodedChunk = Buffer.from(chunkBase64, 'base64');
+            decodedBuffers.push(decodedChunk);
+            call.callLogger.debug(`Chunk ${i}: Original Length=${chunkBase64.length}, Decoded Length=${decodedChunk.length}.`);
+          } catch (e: any) {
+            call.callLogger.error(`Error decoding chunk ${i} (length ${chunkBase64.length}): ${e.message}. Chunk (first 50): ${chunkBase64.substring(0,50)}`);
+          }
+        } else {
+          call.callLogger.warn(`Chunk ${i} is not a valid string or is empty. Skipping.`);
+        }
+      }
+      call.callLogger.info(`Total original base64 length from all chunks for call ${callId}: ${totalOriginalBase64Length}`);
+
+      if (decodedBuffers.length === 0) {
+        call.callLogger.warn(`No audio chunks could be successfully decoded for call ${callId}. Skipping playback.`);
+        call.ttsAudioChunks = [];
+        return;
       }
 
-      const fullAudioBase64 = call.ttsAudioChunks.join('');
-      call.callLogger.info(`TTS audio stream ended for call ${callId}. Total accumulated base64 length after join: ${fullAudioBase64.length}.`);
-      call.callLogger.debug(`Full base64 string (first 100 chars): ${fullAudioBase64.substring(0,100)}`);
-      call.callLogger.debug(`Full base64 string (last 100 chars): ${fullAudioBase64.substring(Math.max(0, fullAudioBase64.length - 100))}`);
+      const audioInputBuffer = Buffer.concat(decodedBuffers);
+      call.callLogger.info(`Concatenated ${decodedBuffers.length} decoded buffer(s). Total audioInputBuffer length for call ${callId}: ${audioInputBuffer.length} bytes.`);
 
-
-      if (fullAudioBase64.trim() === "") {
-          call.callLogger.warn(`Combined audio data for call ${callId} is empty or whitespace. Skipping playback and saving.`);
+      if (audioInputBuffer.length === 0) {
+          call.callLogger.warn(`Combined decoded audio data for call ${callId} is empty. Skipping playback and saving.`);
           call.ttsAudioChunks = [];
           return;
       }
