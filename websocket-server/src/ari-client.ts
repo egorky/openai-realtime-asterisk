@@ -387,7 +387,8 @@ export class AriClientService implements AriClientInterface {
     call.finalTranscription = transcript;
     call.callLogger.info(`Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
 
-    call.ttsAudioChunks = []; // Clear any previous chunks before new response
+    // NO limpiar ttsAudioChunks aquí. Se limpiará en _onOpenAIAudioStreamEnd
+    // call.ttsAudioChunks = [];
 
     try {
       sessionManager.requestOpenAIResponse(callId, transcript, call.config);
