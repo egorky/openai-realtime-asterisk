@@ -390,11 +390,14 @@ export class AriClientService implements AriClientInterface {
           return;
       }
 
+      let soundPathForPlayback: string | null = null;
       try {
-        const recordingsDir = path.join(__dirname, '..', 'recordings');
-        if (!fs.existsSync(recordingsDir)){
-            fs.mkdirSync(recordingsDir, { recursive: true });
-            call.callLogger.info(`Created recordings directory: ${recordingsDir}`);
+        const recordingsBaseDir = '/var/lib/asterisk/sounds';
+        const openaiRecordingsDir = path.join(recordingsBaseDir, 'openai');
+
+        if (!fs.existsSync(openaiRecordingsDir)){
+            fs.mkdirSync(openaiRecordingsDir, { recursive: true });
+            call.callLogger.info(`Created recordings directory: ${openaiRecordingsDir}`);
         }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -410,22 +413,36 @@ export class AriClientService implements AriClientInterface {
           audioExtension = '.opus';
         }
 
-        const filename = `openai_tts_${callId}_${timestamp}${audioExtension}`;
-        const filepath = path.join(recordingsDir, filename);
+        const filenameOnly = `openai_tts_${callId}_${timestamp}`;
+        const filenameWithExt = `${filenameOnly}${audioExtension}`;
+        const absoluteFilepath = path.join(openaiRecordingsDir, filenameWithExt);
 
         const audioBuffer = Buffer.from(fullAudioBase64, 'base64');
-        fs.writeFileSync(filepath, audioBuffer);
-        call.callLogger.info(`TTS audio for call ${callId} saved to ${filepath} (${audioBuffer.length} bytes)`);
+        fs.writeFileSync(absoluteFilepath, audioBuffer);
+        call.callLogger.info(`TTS audio for call ${callId} saved to ${absoluteFilepath} (${audioBuffer.length} bytes)`);
+
+        soundPathForPlayback = `openai/${filenameOnly}`;
       } catch (saveError: any) {
         call.callLogger.error(`Failed to save TTS audio for call ${callId}: ${saveError.message}`, saveError);
       }
 
-      call.callLogger.info(`Playing accumulated TTS audio for call ${callId}.`);
-      try {
-        await this.playbackAudio(callId, fullAudioBase64);
-        call.callLogger.info(`TTS audio playback initiated by stream end for call ${callId}.`);
-      } catch (e: any) {
-        call.callLogger.error(`Error initiating TTS audio playback by stream end for call ${callId}: ${e.message}`, e);
+      if (soundPathForPlayback) {
+        call.callLogger.info(`Playing accumulated TTS audio for call ${callId} from sound path: sound:${soundPathForPlayback}`);
+        try {
+          await this.playbackAudio(callId, null, `sound:${soundPathForPlayback}`);
+          call.callLogger.info(`TTS audio playback initiated for call ${callId} using file: sound:${soundPathForPlayback}.`);
+        } catch (e: any) {
+          call.callLogger.error(`Error initiating TTS audio playback from file for call ${callId}: ${e.message}`, e);
+        }
+      } else {
+        call.callLogger.error(`TTS audio for call ${callId} was not saved correctly, cannot play from file. Attempting base64 playback as fallback.`);
+        // Fallback to base64 playback if file saving/pathing failed
+        try {
+            await this.playbackAudio(callId, fullAudioBase64, null);
+            call.callLogger.info(`TTS audio playback (fallback base64) initiated for call ${callId}.`);
+        } catch (e: any) {
+            call.callLogger.error(`Error initiating TTS audio playback (fallback base64) for call ${callId}: ${e.message}`, e);
+        }
       }
     } else {
       call.callLogger.info(`TTS audio stream ended for call ${callId}, but no audio chunks were accumulated to play (length is 0).`);
@@ -1081,32 +1098,43 @@ export class AriClientService implements AriClientInterface {
     this.activeCalls.clear();
     this.appOwnedChannelIds.clear();
    }
-  public async playbackAudio(channelId: string, audioPayloadB64: string): Promise<void> {
+  public async playbackAudio(channelId: string, audioPayloadB64?: string | null, mediaUri?: string | null): Promise<void> {
     const call = this.activeCalls.get(channelId);
     if (!call || call.isCleanupCalled || !this.client) {
-      (call?.callLogger || this.logger).warn(`Cannot playback audio, call not active or client missing.`);
+      (call?.callLogger || this.logger).warn(`Cannot playback audio for call ${channelId}, call not active or client missing.`);
       return;
     }
-    call.callLogger.debug(`Attempting to play audio chunk of length ${audioPayloadB64.length}.`);
+
+    let mediaToPlay: string;
+    if (mediaUri) {
+      mediaToPlay = mediaUri;
+      call.callLogger.info(`Attempting to play audio from media URI: ${mediaUri}`);
+    } else if (audioPayloadB64) {
+      call.callLogger.warn(`Playing audio via base64 for call ${channelId}. Length: ${audioPayloadB64.length}. This might fail for long audio strings if not using file playback.`);
+      mediaToPlay = `sound:base64:${audioPayloadB64}`;
+    } else {
+      call.callLogger.error(`playbackAudio called for ${channelId} without audioPayloadB64 or mediaUri.`);
+      return;
+    }
+
     try {
       if (call.waitingPlayback) {
         try {
           await call.waitingPlayback.stop();
-          call.callLogger.debug(`Stopped previous waiting playback.`);
+          call.callLogger.debug(`Stopped previous waiting playback for ${channelId}.`);
         }
-        catch(e:any) { call.callLogger.warn(`Error stopping previous waiting playback: ${e.message}`);}
+        catch(e:any) { call.callLogger.warn(`Error stopping previous waiting playback for ${channelId}: ${e.message}`);}
         call.waitingPlayback = undefined;
       }
 
       call.waitingPlayback = this.client.Playback();
       const playbackId = call.waitingPlayback.id;
-      const currentCallId = call.channel.id;
-      call.callLogger.debug(`Created playback object ${playbackId}.`);
+      call.callLogger.debug(`Created playback object ${playbackId} for ${channelId}. Media: ${mediaToPlay.substring(0,60)}...`);
 
       const waitingPlaybackFinishedCb = () => {
-        const currentCall = this.activeCalls.get(currentCallId);
+        const currentCall = this.activeCalls.get(channelId);
         if (!currentCall) return;
-        currentCall.callLogger.debug(`Playback ${playbackId} finished.`);
+        currentCall.callLogger.debug(`Playback ${playbackId} finished for ${channelId}.`);
         if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
           currentCall.waitingPlayback = undefined;
         }
@@ -1121,9 +1149,9 @@ export class AriClientService implements AriClientInterface {
 
       const waitingPlaybackFailedCb = (event: any, failedPlayback: Playback) => {
         if (this.client && failedPlayback.id === playbackId) {
-          const currentCall = this.activeCalls.get(currentCallId);
+          const currentCall = this.activeCalls.get(channelId);
           if (!currentCall) return;
-          currentCall.callLogger.error(`Playback ${playbackId} failed: ${failedPlayback?.state}, ${event?.message || (event?.playback?.reason || 'Unknown')}`);
+          currentCall.callLogger.error(`Playback ${playbackId} FAILED for ${channelId}: ${failedPlayback?.state}, Reason: ${event?.message || (event?.playback?.reason || 'Unknown')}`);
           if(currentCall.waitingPlayback && currentCall.waitingPlayback.id === playbackId) {
             currentCall.waitingPlayback = undefined;
           }
@@ -1136,10 +1164,10 @@ export class AriClientService implements AriClientInterface {
       call.waitingPlaybackFailedHandler = waitingPlaybackFailedCb;
       this.client.on('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
 
-      await call.channel.play({ media: `sound:base64:${audioPayloadB64}` }, call.waitingPlayback);
-      call.callLogger.debug(`Playback ${playbackId} started.`);
+      await call.channel.play({ media: mediaToPlay }, call.waitingPlayback);
+      call.callLogger.info(`Playback ${playbackId} started for ${channelId}.`);
     } catch (err: any) {
-      call.callLogger.error(`Error playing audio: ${err.message || JSON.stringify(err)}`);
+      call.callLogger.error(`Error playing audio for ${channelId}: ${err.message || JSON.stringify(err)}`);
       if (call.waitingPlayback) {
         if (call.waitingPlaybackFailedHandler && this.client) {
             this.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler);
@@ -1174,7 +1202,13 @@ export class AriClientService implements AriClientInterface {
       if (audioBuffer && audioBuffer.length > 0) {
         const audioBase64 = audioBuffer.toString('base64');
         call.callLogger.info(`TTS audio received (${audioBuffer.length} bytes). Playing to caller.`);
-        await this.playbackAudio(callId, audioBase64);
+        // Esta función ahora guardará y reproducirá desde archivo si es posible.
+        // await this.playbackAudio(callId, audioBase64);
+        // _onOpenAIAudioStreamEnd se encargará de esto si el audio viene de la API Realtime.
+        // Esta función _playTTSToCaller parece ser para un flujo de TTS diferente/síncrono.
+        // Si es para TTS síncrono, se debe decidir si guardar y reproducir o usar base64.
+        // Por ahora, se asume que el flujo principal es a través de _onOpenAIAudioStreamEnd.
+         call.callLogger.warn("_playTTSToCaller is likely deprecated if using Realtime API audio streaming. Audio should come via _onOpenAIAudioChunk.");
       } else {
         call.callLogger.error(`TTS synthesis failed or returned empty audio.`);
       }
