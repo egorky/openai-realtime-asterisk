@@ -324,7 +324,7 @@ export function requestOpenAIResponse(callId: string, transcript: string, config
 
 export function handleAriCallEnd(callId: string) {
   const openAISession = activeOpenAISessions.get(callId);
-  const loggerToUse = openAISession?.ariClient?.logger || moduleLogger; // Fallback to moduleLogger
+  const loggerToUse = openAISession?.ariClient?.logger || console; // Fallback to console
   loggerToUse.info(`SessionManager: ARI call ${callId} ended. Cleaning up associated OpenAI Realtime session data.`);
   if (openAISession?.ws && isOpen(openAISession.ws)) {
     loggerToUse.info(`SessionManager: Closing active OpenAI Realtime connection for ended call ${callId}.`);
@@ -358,7 +358,7 @@ function isOpen(ws?: WebSocket): ws is WebSocket { return !!ws && ws.readyState 
 
 export function sendSessionUpdateToOpenAI(callId: string, currentOpenAIConfig: OpenAIRealtimeAPIConfig) {
   const session = activeOpenAISessions.get(callId);
-  const loggerToUse = session?.ariClient?.logger || moduleLogger; // Fallback to moduleLogger
+  const loggerToUse = session?.ariClient?.logger || console; // Fallback to console
 
   if (!session || !session.ws || !isOpen(session.ws)) {
     loggerToUse.warn(`[${callId}] SessionManager: Cannot send session.update to OpenAI, session not found or WebSocket not open.`);
