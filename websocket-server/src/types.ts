@@ -131,7 +131,8 @@ export interface AriClientInterface {
   _onOpenAIError: (callId: string, error: any) => void;
   _onOpenAISessionEnded: (callId: string, reason: string) => void;
   playbackAudio: (channelId: string, audioPayloadB64: string) => Promise<void>;
-  _onOpenAIAudioChunk: (callId: string, audioChunkBase64: string, isLastChunk: boolean) => void; // Added for TTS audio streaming
+  _onOpenAIAudioChunk: (callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean) => void; // isLastChunk is deprecated
+  _onOpenAIAudioStreamEnd: (callId: string) => void; // New method for signaling end of audio stream
   // Potentially other methods like endCall, if sessionManager needs to trigger them directly
 }
 

@@ -111,12 +111,15 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     const sessionUpdateEvent = {
       type: "session.update",
       session: {
-        input_audio_format: currentSTTConfig?.inputAudioFormat || "g711_ulaw",
-        output_audio_format: currentSTTConfig?.outputAudioFormat || "g711_ulaw",
+        input_audio_format: currentSTTConfig?.inputAudioFormat || "g711_ulaw", // Default to g711_ulaw if not specified
+        output_audio_format: currentSTTConfig?.outputAudioFormat || "g711_ulaw", // Default to g711_ulaw if not specified
         voice: currentSTTConfig?.ttsVoice || 'alloy',
-        instructions: currentSTTConfig?.instructions, // This will carry the Spanish default from config if not overridden
+        instructions: currentSTTConfig?.instructions,
       }
     };
+    // Sample rates for g711 are implied (8000Hz) and should not be sent.
+    // For PCM, they would be part of the format string itself if needed, e.g., "pcm_16000hz"
+    // The API seems to reject explicit sample rate parameters at this level.
 
     sessionLogger.debug(`[${callId}] OpenAI Realtime: Sending session.update event:`, sessionUpdateEvent);
     if (ws.readyState === WebSocket.OPEN) {
@@ -209,7 +212,12 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             }
             break;
           case 'response.audio.done':
-            msgSessionLogger.info(`OpenAI response.audio.done for ${callId}.`);
+            msgSessionLogger.info(`OpenAI response.audio.done for ${callId}. Triggering playback of accumulated audio.`);
+            if (typeof currentAriClient._onOpenAIAudioStreamEnd === 'function') {
+              currentAriClient._onOpenAIAudioStreamEnd(callId);
+            } else {
+              msgSessionLogger.warn("ariClient._onOpenAIAudioStreamEnd is not implemented yet."); // Should not happen
+            }
             break;
           case 'input_audio_buffer.speech_started':
                msgSessionLogger.info(`OpenAI detected speech started for ${callId}`);
@@ -218,12 +226,60 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
           case 'input_audio_buffer.speech_stopped':
                msgSessionLogger.info(`OpenAI detected speech stopped for ${callId}`);
                break;
+          case 'input_audio_buffer.committed':
+            msgSessionLogger.info(`OpenAI input_audio_buffer.committed for ${callId}: item_id=${serverEvent.item_id}`);
+            // This event confirms a segment of user audio has been fully processed for STT.
+            // It might be useful for turn-taking logic or if specific actions are needed
+            // after the user finishes speaking a phrase and before the assistant responds.
+            break;
+          case 'conversation.item.created':
+            msgSessionLogger.info(`OpenAI conversation.item.created for ${callId}: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
+            // This event signals a new item (user message, assistant response, tool call)
+            // has been added to the conversation history.
+            break;
+          case 'response.created':
+            msgSessionLogger.info(`OpenAI response.created for ${callId}: response_id=${serverEvent.response?.id}, status=${serverEvent.response?.status}`);
+            // This indicates the start of an assistant's response generation.
+            break;
+          case 'response.output_item.added':
+            msgSessionLogger.info(`OpenAI response.output_item.added for ${callId}: response_id=${serverEvent.response_id}, item_id=${serverEvent.item?.id}`);
+            // This event indicates a new item (e.g. a message with audio/text content parts)
+            // has been added to the current assistant response.
+            break;
+          case 'response.audio_transcript.delta':
+            msgSessionLogger.debug(`OpenAI response.audio_transcript.delta for ${callId}: "${serverEvent.delta}"`);
+            // This is the text version of what OpenAI is currently speaking (TTS).
+            // Could be used to display real-time captions if a UI were present.
+            break;
+          case 'response.audio_transcript.done':
+            msgSessionLogger.info(`OpenAI response.audio_transcript.done for ${callId}: transcript="${serverEvent.transcript}"`);
+            // Full transcript of what OpenAI just spoke.
+            break;
+          case 'response.content_part.added':
+            msgSessionLogger.debug(`OpenAI response.content_part.added for ${callId}: item_id=${serverEvent.item_id}, content_type=${serverEvent.part?.type}`);
+            // Signals a new content part (like audio or text) is being added to an output item.
+            break;
+          case 'response.content_part.done':
+            msgSessionLogger.debug(`OpenAI response.content_part.done for ${callId}: item_id=${serverEvent.item_id}, content_type=${serverEvent.part?.type}`);
+            // Signals a content part has finished. For audio, transcript might be here.
+            if (serverEvent.part?.type === 'audio' && serverEvent.part?.transcript) {
+              msgSessionLogger.info(`OpenAI TTS transcript (from content_part.done) for ${callId}: "${serverEvent.part.transcript}"`);
+            }
+            break;
+          case 'response.output_item.done':
+            msgSessionLogger.info(`OpenAI response.output_item.done for ${callId}: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
+            // Signals a complete item in the assistant's response (e.g., a full message with all its content parts) is done.
+            break;
+          case 'rate_limits.updated':
+            msgSessionLogger.info(`OpenAI rate_limits.updated for ${callId}: ${JSON.stringify(serverEvent.rate_limits)}`);
+            // Provides information about current API rate limit status.
+            break;
           case 'error':
             msgSessionLogger.error(`OpenAI Server Error for ${callId}:`, serverEvent.error || serverEvent);
             currentAriClient._onOpenAIError(callId, serverEvent.error || serverEvent);
             break;
           default:
-            msgSessionLogger.debug(`OpenAI: Unhandled event type '${serverEvent.type}' for ${callId}.`);
+            msgSessionLogger.warn(`OpenAI: Unhandled event type '${serverEvent.type}' for ${callId}. Full event: ${JSON.stringify(serverEvent)}`);
         }
       } catch (e: any) {
         msgSessionLogger.error(`OpenAI Realtime WebSocket: Error parsing JSON message for callId ${callId}: ${e.message}. Raw content: "${messageContent}"`);
