@@ -147,7 +147,12 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     if (messageContent && messageContent.trim().length > 0) {
       try {
         const serverEvent = JSON.parse(messageContent);
-        msgSessionLogger.debug(`[${callId}] OpenAI Parsed Server Event (${serverEvent.type}):`, serverEvent);
+        // Loguear el evento completo como string JSON para máxima verbosidad en debug
+        if (msgSessionLogger.isLevelEnabled?.('debug')) {
+          msgSessionLogger.debug(`[${callId}] OpenAI Raw Parsed Server Event (${serverEvent.type}): ${JSON.stringify(serverEvent, null, 2)}`);
+        } else { // Loguear de forma más concisa si no es debug
+          msgSessionLogger.info(`[${callId}] OpenAI Parsed Server Event Type: ${serverEvent.type}`);
+        }
 
         switch (serverEvent.type) {
           case 'session.created':
