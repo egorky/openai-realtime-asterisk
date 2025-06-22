@@ -122,6 +122,15 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `PORT`: Port for this WebSocket server (e.g., `8081`).
 *   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
 *   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`, `warn`, `error`, `silly`). Setting to `debug` or `silly` will enable verbose logging of OpenAI API interactions, including request/response payloads.
+    *   **Log Format**: Logs now include a timestamp and the caller's ID (or channel name/call ID if caller number is not available), e.g., `[2024-01-15T12:30:00.123Z] [callerId] [service=ServiceName] message...`
+
+### Redis for Conversation Logging (Optional)
+*   `REDIS_HOST`: Hostname/IP of the Redis server. Defaults to `127.0.0.1`.
+*   `REDIS_PORT`: Port of the Redis server. Defaults to `6379`.
+*   `REDIS_PASSWORD`: Password for Redis authentication (if needed).
+*   `REDIS_CONVERSATION_TTL_SECONDS`: Time-to-live (in seconds) for conversation logs stored in Redis. Defaults to `3600` (1 hour).
+
+If Redis is configured, the server will log conversation turns (caller speech, bot speech, DTMF, system messages) to Redis lists, keyed by `conversation:<callId>`.
 
 ## Audio Handling
 

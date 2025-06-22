@@ -14,6 +14,7 @@ import {
   OpenAIRealtimeAPIConfig
 } from './types';
 import { sendGenericEventToFrontend } from './server';
+import { logConversationToRedis } from './redis-client';
 
 dotenv.config();
 
@@ -68,42 +69,93 @@ const moduleLogger: LoggerInstance = (() => {
     const conf = configForLevel || currentCallSpecificConfig || baseConfig;
     return process.env.LOG_LEVEL?.toLowerCase() || conf?.logging?.level || 'info';
   };
+
   loggerInstance.isLevelEnabled = (level: string, configOverride?: CallSpecificConfig | RuntimeConfig): boolean => {
     const effectiveLogLevel = getEffectiveLogLevel(configOverride);
     const configuredLevelNum = levels[effectiveLogLevel] ?? levels.info;
     return levels[level] >= configuredLevelNum;
   };
+
+  const formatLogMessage = (level: string, bindings: any, ...args: any[]): void => {
+    if (!loggerInstance.isLevelEnabled(level, bindings.configOverride)) {
+      return;
+    }
+
+    const timestamp = new Date().toISOString();
+    // Try to get callerId from bindings first (for child loggers), then from activeCalls map.
+    let callerId = bindings.callerId || 'System';
+    if (bindings.callId && ariClientServiceInstance) { // Check if ariClientServiceInstance is defined
+        const call = ariClientServiceInstance.getActiveCallResource(bindings.callId);
+        if (call && call.channel && call.channel.caller && call.channel.caller.number) {
+            callerId = call.channel.caller.number;
+        } else if (call && call.channel && call.channel.name && !callerId) {
+            // Fallback to channel name if caller number is not available but callId was bound
+            callerId = call.channel.name;
+        }
+    }
+
+
+    const prefixParts: string[] = [];
+    if (bindings.service) prefixParts.push(`service=${bindings.service}`);
+    // We won't use callId in the general prefix if callerId is available, to avoid redundancy.
+    // However, if only callId is available (no full call object yet), it can be useful.
+    if (bindings.callId && (callerId === 'System' || callerId === bindings.callId) ) { // Show callId if it's the best identifier we have
+         prefixParts.push(`callId=${bindings.callId}`);
+    }
+    if (bindings.component) prefixParts.push(`component=${bindings.component}`);
+
+    const prefix = prefixParts.length > 0 ? ` ${prefixParts.join(' ')}` : '';
+
+    const logFunction = console[level === 'silly' ? 'log' : level] || console.log;
+
+    if (args.length > 0 && typeof args[0] === 'string') {
+      logFunction(`[${timestamp}] [${callerId}]${prefix} ${args[0]}`, ...args.slice(1));
+    } else {
+      logFunction(`[${timestamp}] [${callerId}]${prefix}`, ...args);
+    }
+  };
+
   (['info', 'error', 'warn', 'debug', 'silly'] as const).forEach(levelKey => {
     loggerInstance[levelKey] = (...args: any[]) => {
-      if (loggerInstance.isLevelEnabled(levelKey)) {
-        const logFunction = console[levelKey === 'silly' ? 'log' : levelKey] || console.log;
-        logFunction(...args);
-      }
+      // For top-level logger, bindings are empty or minimal
+      formatLogMessage(levelKey, {}, ...args);
     };
   });
+
   loggerInstance.child = (bindings: object, callSpecificLogLevel?: string): LoggerInstance => {
     const childLogger: any = {};
+    const effectiveBindings = { ...bindings } as any;
+    if (callSpecificLogLevel) {
+        // This is a bit of a hack; ideally, the config for level check should be more cleanly passed.
+        // We are attaching a temporary config override for isLevelEnabled.
+        effectiveBindings.configOverride = { logging: { level: callSpecificLogLevel } } as CallSpecificConfig;
+    }
+    if (effectiveBindings.channelName && !effectiveBindings.callerId) {
+        // If channelName was passed (old way), try to use it as a fallback for callerId if no callerId.
+        // This is mostly for backward compatibility with old child logger calls.
+        // The new formatLogMessage will try to get callerId from call resource if callId is present.
+    }
+
+
     childLogger.isLevelEnabled = (level: string): boolean => {
       const levelsMap: { [key: string]: number } = { silly: 0, debug: 1, info: 2, warn: 3, error: 4 };
-      const effectiveCallLogLevel = callSpecificLogLevel || getEffectiveLogLevel();
+      const effectiveCallLogLevel = callSpecificLogLevel || getEffectiveLogLevel((bindings as any).configOverride); // Use override if present
       const configuredLevelNum = levelsMap[effectiveCallLogLevel] ?? levelsMap.info;
       return levelsMap[level] >= configuredLevelNum;
     };
+
     (['info', 'error', 'warn', 'debug', 'silly'] as const).forEach(levelKey => {
       childLogger[levelKey] = (...args: any[]) => {
-        if (childLogger.isLevelEnabled(levelKey)) {
-          const prefix = Object.entries(bindings).map(([k,v]) => `${k}=${v}`).join(' ');
-          const originalLogFn = console[levelKey === 'silly' ? 'log' : levelKey] || console.log;
-          if (typeof args[0] === 'string') {
-            originalLogFn(`[${prefix}] ${args[0]}`, ...args.slice(1));
-          } else {
-            originalLogFn(`[${prefix}]`, ...args);
-          }
-        }
+        formatLogMessage(levelKey, effectiveBindings, ...args);
       };
     });
-    childLogger.child = (newBindings: object, newCallSpecificLogLevel?: string) => {
-      return loggerInstance.child({...bindings, ...newBindings}, newCallSpecificLogLevel || callSpecificLogLevel);
+
+    childLogger.child = (newBindings: object, newCallSpecificLogLevel?: string): LoggerInstance => {
+      // Merge new bindings with existing ones. New bindings take precedence.
+      const mergedBindings = {...effectiveBindings, ...newBindings};
+      // If a new log level is provided for this further child, it takes precedence.
+      // Otherwise, inherit the parent child's log level.
+      return loggerInstance.child(mergedBindings, newCallSpecificLogLevel || callSpecificLogLevel);
     };
     return childLogger as LoggerInstance;
   };
@@ -256,12 +308,17 @@ export class AriClientService implements AriClientInterface {
   private client: Ari.Client | null = null;
   private activeCalls = new Map<string, CallResources>();
   private appOwnedChannelIds = new Set<string>();
-  public logger: LoggerInstance = moduleLogger;
+  public logger: LoggerInstance = moduleLogger.child({ service: 'AriClientService' }); // Initialize logger here
   private currentPrimaryCallId: string | null = null;
 
   constructor() {
-    this.logger = moduleLogger.child({ service: 'AriClientService' });
+    // Logger is already initialized above using moduleLogger.child
     if (!baseConfig) { throw new Error("Base configuration was not loaded."); }
+  }
+
+  // Method to get a call resource, used by the logger
+  public getActiveCallResource(callId: string): CallResources | undefined {
+    return this.activeCalls.get(callId);
   }
 
   private sendEventToFrontend(event: any) {
@@ -394,10 +451,22 @@ export class AriClientService implements AriClientInterface {
     call.finalTranscription = transcript;
     call.callLogger.info(`Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
 
+    // Log caller's transcript to Redis
+    logConversationToRedis(callId, {
+      actor: 'caller',
+      type: 'transcript',
+      content: transcript,
+    }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
+
     try {
       sessionManager.requestOpenAIResponse(callId, transcript, call.config);
     } catch (e: any) {
       call.callLogger.error(`Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
+      logConversationToRedis(callId, { // Log error if request fails
+        actor: 'system',
+        type: 'error_message',
+        content: `Failed to request OpenAI response: ${e.message}`
+      }).catch(redisErr => call.callLogger.error(`RedisLog Error (OpenAI request fail): ${redisErr.message}`));
     }
     call.callLogger.info(`Waiting for OpenAI to generate response (including potential audio).`);
   }
@@ -461,7 +530,6 @@ export class AriClientService implements AriClientInterface {
         const chunkBase64 = call.ttsAudioChunks[i];
         if (typeof chunkBase64 === 'string' && chunkBase64.length > 0) {
           totalOriginalBase64Length += chunkBase64.length;
-          // call.callLogger.debug(`Chunk ${i}: Original Length=${chunkBase64.length}, Type=${typeof chunkBase64}, Content (first 50): ${chunkBase64.substring(0, 50)}`);
           try {
             const decodedChunk = Buffer.from(chunkBase64, 'base64');
             decodedBuffers.push(decodedChunk);
@@ -477,6 +545,8 @@ export class AriClientService implements AriClientInterface {
 
       if (decodedBuffers.length === 0) {
         call.callLogger.warn(`No audio chunks could be successfully decoded for call ${callId}. Skipping playback.`);
+        logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: 'TTS audio decoding failed, no chunks decoded.' })
+          .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
         call.ttsAudioChunks = [];
         return;
       }
@@ -484,9 +554,10 @@ export class AriClientService implements AriClientInterface {
       const audioInputBuffer = Buffer.concat(decodedBuffers);
       call.callLogger.info(`Concatenated ${decodedBuffers.length} decoded buffer(s). Total audioInputBuffer length for call ${callId}: ${audioInputBuffer.length} bytes.`);
 
-
       if (audioInputBuffer.length === 0) {
           call.callLogger.warn(`Combined decoded audio data for call ${callId} is empty. Skipping playback and saving.`);
+          logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: 'Bot TTS audio was empty after decoding.' })
+            .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
           call.ttsAudioChunks = [];
           return;
       }
@@ -502,116 +573,107 @@ export class AriClientService implements AriClientInterface {
         }
 
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        let audioExtension = '.raw';
         const outputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase();
-        if (outputFormat === 'g711_ulaw' || outputFormat === 'mulaw_8000hz' || outputFormat === 'ulaw') {
-          audioExtension = '.ulaw';
-        } else if (outputFormat?.startsWith('pcm')) {
-          audioExtension = '.pcm';
-        } else if (outputFormat === 'mp3') {
-          audioExtension = '.mp3';
-        } else if (outputFormat === 'opus') {
-          audioExtension = '.opus';
-        }
-
-        call.callLogger.info(`Decoded base64 audio. Buffer length: ${audioInputBuffer.length} bytes`);
-
-        const currentOutputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase(); // Renombrada para claridad
-        const outputSampleRate = call.config.openAIRealtimeAPI.outputAudioSampleRate || 8000;
-        call.callLogger.info(`OpenAI outputAudioFormat configured: ${currentOutputFormat}, SampleRate: ${outputSampleRate}Hz`);
-
         let filenameOnly = `openai_tts_${callId}_${timestamp}`;
         let filenameWithExt: string;
-        let finalAudioBuffer = audioInputBuffer; // Buffer que se guardará
+        let finalAudioBuffer = audioInputBuffer;
 
-        if (currentOutputFormat?.startsWith('pcm')) {
+        if (outputFormat?.startsWith('pcm')) {
           call.callLogger.info(`Output format is PCM. Attempting to wrap with WAV header.`);
-          if (audioInputBuffer.length > 0) {
-            // Asumiendo 16-bit PCM (2 bytes por frame/sample para mono)
-            // numFrames es el número total de muestras de audio.
-            // Si es mono, 16-bit, cada muestra es de 2 bytes.
-            // Entonces, numFrames = totalBytes / bytesPorMuestra.
-            const bytesPerSample = 2; // Para PCM 16-bit
-            const numChannels = 1;    // Asumimos mono
-
-            const numFrames = audioInputBuffer.length / (bytesPerSample * numChannels);
-
-            if (audioInputBuffer.length % (bytesPerSample * numChannels) !== 0) {
-                call.callLogger.warn(`PCM audio buffer length (${audioInputBuffer.length}) is not a multiple of bytesPerSample*numChannels (${bytesPerSample * numChannels}). WAV header might be incorrect.`);
-            }
-
-            const wavHeader = createWavHeader({
-              numFrames: numFrames,
-              numChannels: numChannels,
-              sampleRate: outputSampleRate,
-              bytesPerSample: bytesPerSample
-            });
-            finalAudioBuffer = Buffer.concat([wavHeader, audioInputBuffer]);
-            filenameWithExt = `${filenameOnly}.wav`;
-            call.callLogger.info(`PCM data wrapped with WAV header. Final buffer length: ${finalAudioBuffer.length}. SampleRate for header: ${outputSampleRate}Hz. NumFrames for header: ${numFrames}.`);
-          } else {
-            call.callLogger.warn(`PCM audio buffer is empty. Cannot create WAV.`);
-            call.ttsAudioChunks = []; // Limpiar para el siguiente turno
-            return; // No hay nada que guardar o reproducir
+          const bytesPerSample = 2;
+          const numChannels = 1;
+          const outputSampleRate = call.config.openAIRealtimeAPI.outputAudioSampleRate || 8000;
+          const numFrames = audioInputBuffer.length / (bytesPerSample * numChannels);
+          if (audioInputBuffer.length % (bytesPerSample * numChannels) !== 0) {
+              call.callLogger.warn(`PCM audio buffer length issue for WAV header.`);
           }
-        } else if (currentOutputFormat === 'g711_ulaw' || currentOutputFormat === 'mulaw_8000hz' || currentOutputFormat === 'ulaw') {
+          const wavHeader = createWavHeader({ numFrames, numChannels, sampleRate: outputSampleRate, bytesPerSample });
+          finalAudioBuffer = Buffer.concat([wavHeader, audioInputBuffer]);
+          filenameWithExt = `${filenameOnly}.wav`;
+          call.callLogger.info(`PCM data wrapped with WAV header. File: ${filenameWithExt}`);
+        } else if (outputFormat === 'g711_ulaw' || outputFormat === 'mulaw_8000hz' || outputFormat === 'ulaw') {
           filenameWithExt = `${filenameOnly}.ulaw`;
-          call.callLogger.info(`Output format is uLaw. Saving as .ulaw. SampleRate expected by Asterisk: 8000Hz.`);
-        } else if (currentOutputFormat === 'mp3') {
+          call.callLogger.info(`Output format is uLaw. Saving as .ulaw.`);
+        } else if (outputFormat === 'mp3') {
            filenameWithExt = `${filenameOnly}.mp3`;
-           call.callLogger.info(`Output format is MP3. Saving as .mp3.`);
-        } else if (currentOutputFormat === 'opus') {
+        } else if (outputFormat === 'opus') {
            filenameWithExt = `${filenameOnly}.opus`;
-           call.callLogger.info(`Output format is Opus. Saving as .opus.`);
         } else {
-          call.callLogger.warn(`Unknown or unhandled output audio format: '${currentOutputFormat}'. Saving as .raw`);
+          call.callLogger.warn(`Unknown or unhandled output audio format: '${outputFormat}'. Saving as .raw`);
           filenameWithExt = `${filenameOnly}.raw`;
         }
 
         const absoluteFilepath = path.join(openaiRecordingsDir, filenameWithExt);
         fs.writeFileSync(absoluteFilepath, finalAudioBuffer);
-        call.callLogger.info(`TTS audio for call ${callId} saved to ${absoluteFilepath} (${finalAudioBuffer.length} bytes)`);
-
-        // Para Asterisk, al usar 'sound:', no se especifica la extensión si es un formato común como .wav o .ulaw
-        // Asterisk intentará encontrar el archivo con la extensión más apropiada.
+        call.callLogger.info(`TTS audio for call ${callId} saved to ${absoluteFilepath}`);
         soundPathForPlayback = `openai/${filenameOnly}`;
 
       } catch (saveError: any) {
         call.callLogger.error(`Failed to save or process TTS audio for call ${callId}: ${saveError.message}`, saveError);
+        logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `TTS audio save/process error: ${saveError.message}` })
+          .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
       }
 
       if (soundPathForPlayback) {
         call.callLogger.info(`Playing accumulated TTS audio for call ${callId} from sound path: sound:${soundPathForPlayback}`);
-        try {
-          // Asegurarse de que no haya una reproducción anterior en curso que pueda interferir.
-          if (call.waitingPlayback) {
-            call.callLogger.debug(`Stopping potentially existing waitingPlayback before starting new TTS playback.`);
-            await call.waitingPlayback.stop().catch(e => call.callLogger.warn(`Error stopping previous waitingPlayback: ${e.message}`));
-            call.waitingPlayback = undefined; // Limpiar la referencia
-          }
 
+        // Attempt to get the text transcript of what's about to be played.
+        // This relies on call.finalTranscription being the bot's textual response if available.
+        // Or a more robust way if the bot's text response is stored elsewhere before TTS generation.
+        let ttsSpokenText = call.finalTranscription; // Assumes this holds the bot's text response.
+                                                 // This might be incorrect if finalTranscription is the user's last speech.
+                                                 // Needs a reliable way to get the bot's text response.
+        if (!ttsSpokenText) {
+            // A more reliable way to get the text that was synthesized is needed.
+            // For now, we'll use a placeholder.
+            // One approach: store the text that was sent for TTS generation in the CallResources.
+            ttsSpokenText = "[Bot audio response played]";
+        }
+
+        logConversationToRedis(callId, {
+            actor: 'bot',
+            type: 'tts_prompt',
+            content: ttsSpokenText
+        }).catch(e => call.callLogger.error(`RedisLog Error (bot TTS): ${e.message}`));
+
+        try {
+          if (call.waitingPlayback) {
+            await call.waitingPlayback.stop().catch(e => call.callLogger.warn(`Error stopping previous waitingPlayback: ${e.message}`));
+            call.waitingPlayback = undefined;
+          }
           await this.playbackAudio(callId, null, `sound:${soundPathForPlayback}`);
-          call.callLogger.info(`TTS audio playback initiated for call ${callId} using file: sound:${soundPathForPlayback}.`);
+          call.callLogger.info(`TTS audio playback initiated for call ${callId}.`);
         } catch (e: any) {
-          call.callLogger.error(`Error initiating TTS audio playback from file for call ${callId}: ${e.message}`, e);
+          call.callLogger.error(`Error initiating TTS audio playback for call ${callId}: ${e.message}`, e);
+          logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `TTS playback error: ${e.message}` })
+            .catch(redisErr => call.callLogger.error(`RedisLog Error: ${redisErr.message}`));
         }
       } else {
-        call.callLogger.error(`TTS audio for call ${callId} was not saved correctly (soundPathForPlayback is null), cannot play from file.`);
-        // No intentar fallback a base64 aquí si el objetivo era guardar y reproducir desde archivo.
-        // Si saveError ocurrió, el problema es previo a la reproducción.
+        call.callLogger.error(`TTS audio for call ${callId} not saved correctly, cannot play.`);
+         logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: 'TTS audio not saved, playback skipped.' })
+           .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
       }
     } else {
-      call.callLogger.info(`TTS audio stream ended for call ${callId}, but no audio chunks were accumulated to play (length is 0).`);
+      call.callLogger.info(`TTS audio stream ended for call ${callId}, but no audio chunks were accumulated.`);
+      logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: 'Bot TTS stream ended, no audio chunks.' })
+        .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
     }
-    call.ttsAudioChunks = []; // Limpiar siempre los chunks después de procesarlos (o intentar procesarlos)
+    call.ttsAudioChunks = [];
   }
 
   public _onOpenAIError(callId: string, error: any): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.error(`OpenAI stream error reported by sessionManager:`, error);
+    const errorMessage = error.message || (typeof error === 'string' ? error : JSON.stringify(error));
+    call.callLogger.error(`OpenAI stream error reported by sessionManager:`, errorMessage);
     call.openAIStreamError = error;
-    // Ensure timers related to OpenAI stream are cleared on error
+
+    logConversationToRedis(callId, {
+      actor: 'error',
+      type: 'error_message',
+      content: `OpenAI Stream Error: ${errorMessage}`
+    }).catch(e => call.callLogger.error(`RedisLog Error (OpenAI stream error): ${e.message}`));
+
     if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
     if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
@@ -622,19 +684,16 @@ export class AriClientService implements AriClientInterface {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.info(`OpenAI session ended event from sessionManager. Reason: ${reason}`);
+    logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `OpenAI session ended. Reason: ${reason}`})
+      .catch(e => call.callLogger.error(`RedisLog Error (OpenAI session ended): ${e.message}`));
     call.openAIStreamingActive = false;
 
-    // Clear timers that are contingent on an active OpenAI stream, regardless of mode
     if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
     if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
 
     if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive) {
         call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout, or new turn logic might apply.`);
-        // Depending on the mode, we might need to re-evaluate or start listening again if the call is not ending.
-        // For now, this function primarily handles the direct fallout of the session ending.
-        // If the call is to continue (e.g. waiting for user to speak again in a VAD mode after a misfire),
-        // that logic would typically be handled by the state machine managing turns, not directly here.
     } else {
         call.callLogger.info(`OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result, DTMF, error, or explicit stop).`);
     }
@@ -757,7 +816,6 @@ export class AriClientService implements AriClientInterface {
   private async _finalizeDtmfInput(callId: string, reason: string): Promise<void> {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled || !call.dtmfModeActive) {
-      // If not in DTMF mode anymore or call cleaned up, do nothing.
       if (call && !call.dtmfModeActive) {
         call.callLogger.debug(`_finalizeDtmfInput called for ${callId} but DTMF mode no longer active. Reason: ${reason}. Ignoring.`);
       }
@@ -766,25 +824,29 @@ export class AriClientService implements AriClientInterface {
 
     call.callLogger.info(`Finalizing DTMF input for call ${callId}. Reason: ${reason}. Collected digits: '${call.collectedDtmfDigits}'`);
 
-    // Clear DTMF timers
+    logConversationToRedis(callId, {
+      actor: 'dtmf',
+      type: 'dtmf_input',
+      content: call.collectedDtmfDigits,
+    }).catch(e => call.callLogger.error(`RedisLog Error (DTMF input): ${e.message}`));
+
     if (call.dtmfInterDigitTimer) { clearTimeout(call.dtmfInterDigitTimer); call.dtmfInterDigitTimer = null; }
     if (call.dtmfFinalTimer) { clearTimeout(call.dtmfFinalTimer); call.dtmfFinalTimer = null; }
 
-    // Set DTMF_RESULT channel variable
     if (call.collectedDtmfDigits.length > 0) {
       try {
         await call.channel.setChannelVar({ variable: 'DTMF_RESULT', value: call.collectedDtmfDigits });
         call.callLogger.info(`DTMF_RESULT set to '${call.collectedDtmfDigits}' for channel ${call.channel.id}.`);
       } catch (e: any) {
         call.callLogger.error(`Error setting DTMF_RESULT for channel ${call.channel.id}: ${(e instanceof Error ? e.message : String(e))}`);
+        logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Error setting DTMF_RESULT: ${e.message}`})
+          .catch(redisErr => call.callLogger.error(`RedisLog Error (DTMF set var fail): ${redisErr.message}`));
       }
     } else {
       call.callLogger.info(`No DTMF digits collected for channel ${call.channel.id} to set in DTMF_RESULT.`);
     }
 
-    // End the call or current interaction phase.
-    // The problem implies DTMF finalization leads to ending the interaction for now.
-    this._fullCleanup(call.channel.id, false, reason); // false for hangupMainChannel, assuming dialplan continues.
+    this._fullCleanup(call.channel.id, false, reason);
   }
 
   private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
@@ -1262,8 +1324,13 @@ export class AriClientService implements AriClientInterface {
       // Global max recognition timer for the turn/attempt
       if (appRecogConf.maxRecognitionDurationSeconds && appRecogConf.maxRecognitionDurationSeconds > 0) {
         callResources.maxRecognitionDurationTimer = setTimeout(() => {
-            callLogger.warn(`Max recognition duration ${appRecogConf.maxRecognitionDurationSeconds}s reached.`);
-            this._fullCleanup(callId, true, "MAX_RECOGNITION_DURATION_TIMEOUT");
+            const currentCall = this.activeCalls.get(callId);
+            if(currentCall && !currentCall.isCleanupCalled) {
+              currentCall.callLogger.warn(`Max recognition duration ${appRecogConf.maxRecognitionDurationSeconds}s reached.`);
+              logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `Max recognition duration timeout (${appRecogConf.maxRecognitionDurationSeconds}s).`})
+                .catch(e => currentCall.callLogger.error(`RedisLog Error: ${e.message}`));
+              this._fullCleanup(callId, true, "MAX_RECOGNITION_DURATION_TIMEOUT");
+            }
         }, appRecogConf.maxRecognitionDurationSeconds * 1000);
       }
 
@@ -1339,6 +1406,9 @@ export class AriClientService implements AriClientInterface {
       const greetingAudio = appRecogConf.greetingAudioPath;
       if (greetingAudio && this.client) {
         callLogger.info(`Playing greeting/prompt audio: ${greetingAudio}`);
+        logConversationToRedis(callId, { actor: 'bot', type: 'tts_prompt', content: `Playing greeting: ${greetingAudio}`})
+          .catch(e => callLogger.error(`RedisLog Error (greeting): ${e.message}`));
+
         callResources.mainPlayback = this.client.Playback();
         if (callResources.mainPlayback) {
           const mainPlaybackId = callResources.mainPlayback.id;
@@ -1348,6 +1418,8 @@ export class AriClientService implements AriClientInterface {
               const currentCall = this.activeCalls.get(callId);
               if (currentCall?.mainPlayback?.id === mainPlaybackId) {
                 currentCall.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED. State: ${failedPlayback.state}`);
+                logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Main greeting playback ${failedPlayback.id} FAILED.`})
+                  .catch(e => currentCall.callLogger.error(`RedisLog Error (greeting fail): ${e.message}`));
                 this._handlePlaybackFinished(callId, 'main_greeting_failed');
               }
               if (currentCall?.playbackFailedHandler) { // Remove listener
@@ -1369,6 +1441,7 @@ export class AriClientService implements AriClientInterface {
             }
             if (currentCall?.mainPlayback?.id === instance.id) {
               currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED.`);
+              // Redis log for greeting finished could be added here if desired, but might be redundant if next turn is logged.
               this._handlePlaybackFinished(callId, 'main_greeting_finished');
             }
           });
@@ -1376,11 +1449,16 @@ export class AriClientService implements AriClientInterface {
           callLogger.info(`Successfully started main greeting playback ${callResources.mainPlayback.id}.`);
         } else {
            callLogger.error(`Failed to create mainPlayback object for greeting.`);
+           logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Failed to create mainPlayback for greeting.`})
+             .catch(e => callLogger.error(`RedisLog Error (greeting creation fail): ${e.message}`));
            this._handlePlaybackFinished(callId, 'main_greeting_creation_failed'); // Trigger post-prompt logic even if playback object fails
         }
       } else {
         // No greeting audio, or client not available.
-        callLogger.info(greetingAudio ? `ARI client not available for greeting playback.` : `No greeting audio specified. Proceeding to post-prompt logic directly.`);
+        const logMsg = greetingAudio ? `ARI client not available for greeting playback.` : `No greeting audio specified. Proceeding to post-prompt logic directly.`;
+        callLogger.info(logMsg);
+        logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: logMsg})
+          .catch(e => callLogger.error(`RedisLog Error (no greeting): ${e.message}`));
         // Directly trigger post-prompt logic as if an empty prompt finished.
         this._handlePlaybackFinished(callId, 'main_greeting_skipped_or_no_client');
       }

@@ -126,6 +126,26 @@ Estas son las variables más críticas que generalmente se configuran en un arch
     *   Default: `audio,text` (controlado por `config.openAIRealtimeAPI.responseModalities`).
     *   Ejemplo: `APP_OPENAI_RESPONSE_MODALITIES=audio`
 
+### Variables de Entorno para Redis (Opcional):
+
+*   **`REDIS_HOST`**:
+    *   Descripción: Hostname o dirección IP del servidor Redis.
+    *   Default: `127.0.0.1`
+    *   Ejemplo: `REDIS_HOST=myredisserver.example.com`
+*   **`REDIS_PORT`**:
+    *   Descripción: Puerto del servidor Redis.
+    *   Default: `6379`
+    *   Ejemplo: `REDIS_PORT=6380`
+*   **`REDIS_PASSWORD`**:
+    *   Descripción: Contraseña para la autenticación con el servidor Redis (si está configurada).
+    *   Default: `undefined` (sin contraseña)
+    *   Ejemplo: `REDIS_PASSWORD=yourredispassword`
+*   **`REDIS_CONVERSATION_TTL_SECONDS`**:
+    *   Descripción: Tiempo de vida (TTL) en segundos para las conversaciones almacenadas en Redis.
+    *   Default: `3600` (1 hora)
+    *   Ejemplo: `REDIS_CONVERSATION_TTL_SECONDS=86400` (24 horas)
+
+
 ## Parámetros de Configuración en `config/default.json`
 
 El archivo `config/default.json` contiene una estructura jerárquica para estos parámetros y otros más detallados. Las variables de entorno listadas arriba generalmente sobrescriben los valores correspondientes en este archivo.
