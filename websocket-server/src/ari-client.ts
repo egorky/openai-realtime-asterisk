@@ -410,13 +410,20 @@ export class AriClientService implements AriClientInterface {
 
   public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): void { // isLastChunk is deprecated here, triggered by _onOpenAIAudioStreamEnd
     const call = this.activeCalls.get(callId);
-    // Log inmediato para ver si la función es llamada
-    (call?.callLogger || this.logger).info(`_onOpenAIAudioChunk CALLED for callId: ${callId}, chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}, current ttsAudioChunks length: ${call?.ttsAudioChunks?.length ?? 'N/A'}`);
+    const loggerForThisChunk = call?.callLogger || this.logger;
+
+    loggerForThisChunk.info(
+      `_onOpenAIAudioChunk CALLED for callId: ${callId}. ` +
+      `Call object exists: ${!!call}. ` +
+      `Chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}. ` +
+      `Initial ttsAudioChunks length: ${call?.ttsAudioChunks?.length ?? 'N/A (call undefined)'}.`
+    );
 
     if (!call || call.isCleanupCalled) {
-      (call?.callLogger || this.logger).warn(`_onOpenAIAudioChunk: Call not active or cleanup called. Ignoring audio chunk.`);
+      loggerForThisChunk.warn(`_onOpenAIAudioChunk: Call not active or cleanup called for ${callId}. Ignoring audio chunk.`);
       return;
     }
+
     if (!call.ttsAudioChunks) {
       call.callLogger.info('_onOpenAIAudioChunk: Initializing ttsAudioChunks array.');
       call.ttsAudioChunks = [];
