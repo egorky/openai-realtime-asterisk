@@ -432,15 +432,15 @@ export class AriClientService implements AriClientInterface {
         const audioInputBuffer = Buffer.from(fullAudioBase64, 'base64');
         call.callLogger.info(`Decoded base64 audio. Buffer length: ${audioInputBuffer.length} bytes`);
 
-        const outputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase();
-        const outputSampleRate = call.config.openAIRealtimeAPI.outputAudioSampleRate || 8000; // Default a 8kHz si no está especificado
-        call.callLogger.info(`OpenAI outputAudioFormat configured: ${outputFormat}, SampleRate: ${outputSampleRate}Hz`);
+        const currentOutputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase(); // Renombrada para claridad
+        const outputSampleRate = call.config.openAIRealtimeAPI.outputAudioSampleRate || 8000;
+        call.callLogger.info(`OpenAI outputAudioFormat configured: ${currentOutputFormat}, SampleRate: ${outputSampleRate}Hz`);
 
         let filenameOnly = `openai_tts_${callId}_${timestamp}`;
         let filenameWithExt: string;
         let finalAudioBuffer = audioInputBuffer; // Buffer que se guardará
 
-        if (outputFormat?.startsWith('pcm')) {
+        if (currentOutputFormat?.startsWith('pcm')) {
           call.callLogger.info(`Output format is PCM. Attempting to wrap with WAV header.`);
           if (audioInputBuffer.length > 0) {
             // Asumiendo 16-bit PCM (2 bytes por frame/sample para mono)
@@ -470,17 +470,17 @@ export class AriClientService implements AriClientInterface {
             call.ttsAudioChunks = []; // Limpiar para el siguiente turno
             return; // No hay nada que guardar o reproducir
           }
-        } else if (outputFormat === 'g711_ulaw' || outputFormat === 'mulaw_8000hz' || outputFormat === 'ulaw') {
+        } else if (currentOutputFormat === 'g711_ulaw' || currentOutputFormat === 'mulaw_8000hz' || currentOutputFormat === 'ulaw') {
           filenameWithExt = `${filenameOnly}.ulaw`;
           call.callLogger.info(`Output format is uLaw. Saving as .ulaw. SampleRate expected by Asterisk: 8000Hz.`);
-        } else if (outputFormat === 'mp3') {
+        } else if (currentOutputFormat === 'mp3') {
            filenameWithExt = `${filenameOnly}.mp3`;
            call.callLogger.info(`Output format is MP3. Saving as .mp3.`);
-        } else if (outputFormat === 'opus') {
+        } else if (currentOutputFormat === 'opus') {
            filenameWithExt = `${filenameOnly}.opus`;
            call.callLogger.info(`Output format is Opus. Saving as .opus.`);
         } else {
-          call.callLogger.warn(`Unknown or unhandled output audio format: '${outputFormat}'. Saving as .raw`);
+          call.callLogger.warn(`Unknown or unhandled output audio format: '${currentOutputFormat}'. Saving as .raw`);
           filenameWithExt = `${filenameOnly}.raw`;
         }
 
@@ -1085,19 +1085,19 @@ export class AriClientService implements AriClientInterface {
           payload: {
             status: "ended",
             callId: callId,
-            callerId: call.channel?.caller?.number || call.config?.openAIRealtimeAPI?.callerIdStorage || "Unknown", // Use stored if available
+            callerId: call.channel?.caller?.number || "Unknown",
             reason: reason
           }
         });
         this.currentPrimaryCallId = null;
         call.callLogger.info(`Cleared as current primary call.`);
-      } else if (callId) { // If it's a different callId (should not happen if only one primary call)
+      } else if (callId) { // If it's a different callId (e.g. if logic changes to allow multiple non-primary calls)
          this.sendEventToFrontend({
           type: "ari_call_status_update",
           payload: {
             status: "ended",
             callId: callId,
-            callerId: call.channel?.caller?.number || call.config?.openAIRealtimeAPI?.callerIdStorage || "Unknown",
+            callerId: call.channel?.caller?.number || "Unknown",
             reason: `secondary_call_cleanup: ${reason}`
           }
         });
