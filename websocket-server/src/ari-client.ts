@@ -425,8 +425,11 @@ export class AriClientService implements AriClientInterface {
         return;
       }
 
-      const audioInputBuffer = Buffer.concat(decodedBuffers);
+      // const audioInputBuffer = Buffer.from(fullAudioBase64, 'base64'); // Esta línea era el error, fullAudioBase64 ya no existe aquí.
+      // audioInputBuffer se crea ahora con Buffer.concat(decodedBuffers)
+      const audioInputBuffer = Buffer.concat(decodedBuffers); // Correcto
       call.callLogger.info(`Concatenated ${decodedBuffers.length} decoded buffer(s). Total audioInputBuffer length for call ${callId}: ${audioInputBuffer.length} bytes.`);
+
 
       if (audioInputBuffer.length === 0) {
           call.callLogger.warn(`Combined decoded audio data for call ${callId} is empty. Skipping playback and saving.`);
