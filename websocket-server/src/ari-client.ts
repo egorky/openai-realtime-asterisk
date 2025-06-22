@@ -834,129 +834,241 @@ export class AriClientService implements AriClientInterface {
 
   private _handleVADDelaysCompleted(callId: string): void {
     const call = this.activeCalls.get(callId);
-    if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD' || call.config.appConfig.appRecognitionConfig.vadRecogActivation !== 'vadMode') {
+    if (!call || call.isCleanupCalled ||
+        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad' ||
+        call.config.appConfig.appRecognitionConfig.vadRecogActivation !== 'vadMode') {
       return;
     }
-    call.callLogger.debug(`VAD delays completed. InitialSilence: ${call.vadInitialSilenceDelayCompleted}, ActivationDelay: ${call.vadActivationDelayCompleted}`);
+    call.callLogger.debug(`VAD (vadMode) delays completed. InitialSilence: ${call.vadInitialSilenceDelayCompleted}, vadInitialSilenceDelaySeconds: ${call.config.appConfig.appRecognitionConfig.vadInitialSilenceDelaySeconds}s completed.`);
+    // Note: vadActivationDelaySeconds was removed from new config structure, so only vadInitialSilenceDelaySeconds is checked.
 
-    if (call.vadInitialSilenceDelayCompleted && call.vadActivationDelayCompleted) {
-      call.callLogger.info(`VAD vadMode: All initial delays completed.`);
-      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
+    if (call.vadInitialSilenceDelayCompleted) { // Only one delay now
+      call.callLogger.info(`VAD (vadMode): Initial silence delay completed.`);
+      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) {
+          call.callLogger.debug(`VAD (vadMode): Stream already active or VAD triggered. No action needed from delay completion.`);
+          return;
+      }
 
       if (call.vadSpeechActiveDuringDelay) {
-        call.callLogger.info(`VAD vadMode: Speech detected during delays. Activating OpenAI stream.`);
-        this._activateOpenAIStreaming(callId, "vad_speech_during_delay_window");
-        call.pendingVADBufferFlush = true;
+        call.callLogger.info(`VAD (vadMode): Speech was detected *during* the initial silence delay. Activating OpenAI stream now.`);
+        // Mark that VAD has triggered recognition because speech happened during the window where we would have ignored it
+        // but now the window is over, so we act on it.
+        call.vadRecognitionTriggeredAfterInitialDelay = true;
+        call.pendingVADBufferFlush = true; // Ensure buffered audio is sent
+        call.isFlushingVADBuffer = true;  // Indicate we are now flushing
+        this._activateOpenAIStreaming(callId, "vad_speech_during_delay_window_flush_attempt");
+
+        // TALK_DETECT should already be active. Once OpenAI stream is active, we might remove it,
+        // or let OpenAI's own VAD take over. The current _activateOpenAIStreaming does not remove it.
+        // It's removed in _onChannelTalkingStarted after it triggers.
+        // If speech occurred *during* delay, TALK_DETECT hasn't triggered _onChannelTalkingStarted yet for *this* speech segment to remove itself.
+        // So, we might need to remove it here if we are activating the stream based on vadSpeechActiveDuringDelay.
         if(call.channel) {
+            call.callLogger.info(`VAD (vadMode): Removing TALK_DETECT as stream is activating due to speech during delay.`);
             call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
-                .catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`));
+                .catch(e => call.callLogger.warn(`VAD (vadMode): Error removing TALK_DETECT: ${e.message}`));
         }
       } else {
-        call.callLogger.info(`VAD vadMode: Delays completed, no prior speech. Listening via TALK_DETECT.`);
-        this._handlePostPromptVADLogic(callId);
+        call.callLogger.info(`VAD (vadMode): Initial silence delay completed, no prior speech detected during delay. TALK_DETECT is active and listening.`);
+        // TALK_DETECT was set up in onStasisStart. Now we just wait for ChannelTalkingStarted.
+        // Start vadMaxWaitAfterPromptTimer to prevent indefinite waiting if no speech ever occurs.
+        const maxWait = call.config.appConfig.appRecognitionConfig.vadMaxWaitAfterPromptSeconds;
+        if (maxWait > 0 && !call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay) {
+            if(call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
+            call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
+                if (call.isCleanupCalled || call.openAIStreamingActive || call.vadRecognitionTriggeredAfterInitialDelay) return;
+                call.callLogger.warn(`VAD (vadMode): Max wait ${maxWait}s for speech (post-initial-delay) reached. Ending call.`);
+                if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
+                this._fullCleanup(callId, true, "VAD_MODE_MAX_WAIT_POST_INITIAL_DELAY_TIMEOUT");
+            }, maxWait * 1000);
+            call.callLogger.info(`VAD (vadMode): Started max wait timer (${maxWait}s) for speech to begin after initial delay.`);
+        }
       }
     }
   }
 
   private _handlePostPromptVADLogic(callId: string): void {
     const call = this.activeCalls.get(callId);
-    if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
+    if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
-    call.callLogger.info(`VAD: Handling post-prompt/no-prompt logic for mode '${call.config.appConfig.appRecognitionConfig.vadRecogActivation}'.`);
+    const appRecogConf = call.config.appConfig.appRecognitionConfig;
+    call.callLogger.info(`VAD: Handling post-prompt logic for vadRecogActivation: '${appRecogConf.vadRecogActivation}'.`);
 
-    const vadRecogActivation = call.config.appConfig.appRecognitionConfig.vadRecogActivation;
+    // This function is called when a prompt finishes (or if no prompt was played).
+    // TALK_DETECT should have been set in onStasisStart for 'vad' mode.
 
-    if (vadRecogActivation === 'afterPrompt') {
-      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
+    if (appRecogConf.vadRecogActivation === 'afterPrompt') {
+      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) {
+        call.callLogger.debug(`VAD (afterPrompt): Stream already active or VAD triggered. No action from post-prompt logic.`);
+        return;
+      }
+
+      // Check if speech was detected *during* the prompt playback (call.vadSpeechDetected would be true if ChannelTalkingStarted fired)
       if (call.vadSpeechDetected) {
-        call.callLogger.info(`VAD (afterPrompt): Speech previously detected. Activating OpenAI stream.`);
-        this._activateOpenAIStreaming(callId, "vad_afterPrompt_speech_during_prompt");
-        call.pendingVADBufferFlush = true;
+        call.callLogger.info(`VAD (afterPrompt): Speech was detected *during* the prompt. Activating OpenAI stream now.`);
+        call.vadRecognitionTriggeredAfterInitialDelay = true; // Mark VAD has triggered
+        this._activateOpenAIStreaming(callId, "vad_afterPrompt_speech_during_prompt_playback");
+        call.pendingVADBufferFlush = true; // VAD buffering might have occurred
+
+        // Remove TALK_DETECT as OpenAI stream is now active.
         if(call.channel) {
+            call.callLogger.info(`VAD (afterPrompt): Removing TALK_DETECT as stream is activating due to speech during prompt.`);
             call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
-                .catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`));
+                .catch(e => call.callLogger.warn(`VAD (afterPrompt): Error removing TALK_DETECT: ${e.message}`));
         }
       } else {
-        call.callLogger.info(`VAD (afterPrompt): No speech during prompt. Starting max wait timer.`);
-        const maxWait = call.config.appConfig.appRecognitionConfig.vadMaxWaitAfterPromptSeconds ?? 5;
+        call.callLogger.info(`VAD (afterPrompt): Prompt finished, no speech detected during prompt. TALK_DETECT is active. Starting vadMaxWaitAfterPromptSeconds timer.`);
+        const maxWait = appRecogConf.vadMaxWaitAfterPromptSeconds;
         if (maxWait > 0) {
           if(call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
           call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
             if (call.isCleanupCalled || call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) return;
-            call.callLogger.warn(`VAD (afterPrompt): Max wait ${maxWait}s reached. Ending call.`);
-            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`)); }
-            this._fullCleanup(callId, true, "VAD_MAX_WAIT_TIMEOUT");
+            call.callLogger.warn(`VAD (afterPrompt): Max wait ${maxWait}s for speech (post-prompt) reached. Ending call.`);
+            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
+            this._fullCleanup(callId, true, "VAD_AFTERPROMPT_MAX_WAIT_TIMEOUT");
           }, maxWait * 1000);
         } else {
-            call.callLogger.info(`VAD (afterPrompt): Max wait is 0 and no speech during prompt. Ending call.`);
-            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`)); }
-            this._fullCleanup(callId, true, "VAD_MAX_WAIT_0_NO_SPEECH");
+            call.callLogger.info(`VAD (afterPrompt): Max wait is 0 and no speech during prompt. Ending call as per logic (or this implies immediate listen without timeout). Assuming listen without timeout if 0.`);
+            // If maxWait is 0, it means listen indefinitely or rely on other timeouts like maxRecognitionDuration.
+            // For clarity, we won't end the call here if maxWait is 0. TALK_DETECT remains active.
         }
       }
-    } else if (vadRecogActivation === 'vadMode') {
-      call.callLogger.info(`VAD vadMode: Delays completed, no speech during delay. Actively listening via TALK_DETECT.`);
+    } else if (appRecogConf.vadRecogActivation === 'vadMode') {
+      // This function (_handlePostPromptVADLogic) is typically called after a prompt.
+      // In 'vadMode', the main VAD logic (initial delays, etc.) is handled by _handleVADDelaysCompleted.
+      // If a prompt *was* played in 'vadMode', this function call might be redundant or a fallback.
+      // The key is that TALK_DETECT is already active from onStasisStart.
+      // If vadInitialSilenceDelay has passed and no speech yet, vadMaxWaitAfterPromptSeconds might apply.
+      call.callLogger.info(`VAD (vadMode): Post-prompt logic invoked. Initial silence delay should have been handled. TALK_DETECT is active.`);
+      if (!call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay && call.vadInitialSilenceDelayCompleted) {
+          const maxWait = appRecogConf.vadMaxWaitAfterPromptSeconds;
+          if (maxWait > 0 && !call.vadMaxWaitAfterPromptTimer) { // Start timer only if not already running
+              call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
+                  if (call.isCleanupCalled || call.openAIStreamingActive || call.vadRecognitionTriggeredAfterInitialDelay) return;
+                  call.callLogger.warn(`VAD (vadMode): Max wait ${maxWait}s for speech (after prompt/initial delays) reached. Ending call.`);
+                  if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
+                  this._fullCleanup(callId, true, "VAD_MODE_MAX_WAIT_POST_PROMPT_TIMEOUT");
+              }, maxWait * 1000);
+              call.callLogger.info(`VAD (vadMode): Started max wait timer (${maxWait}s) for speech after prompt/initial delay.`);
+          }
+      }
     }
   }
 
   private async _onChannelTalkingStarted(event: ChannelTalkingStarted, channel: Channel): Promise<void> {
     const call = this.activeCalls.get(channel.id);
-    if (!call || call.channel.id !== channel.id || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled ||
+        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech started on channel ${channel.id}.`);
 
-    if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) { return; }
-
-    const vadRecogActivation = call.config.appConfig.appRecognitionConfig.vadRecogActivation;
-    if (vadRecogActivation === 'vadMode') {
-      if (!call.vadInitialSilenceDelayCompleted || !call.vadActivationDelayCompleted) {
-        call.callLogger.debug(`VAD (vadMode): Speech detected during initial VAD delays.`);
-        call.vadSpeechActiveDuringDelay = true;
-        call.vadSpeechDetected = true;
+    // If OpenAI stream is already active (e.g. due to speech during VAD delay in vadMode), ignore subsequent TALK_DETECT starts.
+    if (call.openAIStreamingActive) {
+        call.callLogger.debug(`TALK_DETECT: Speech started, but OpenAI stream already active. Ignoring.`);
         return;
-      }
-    } else if (vadRecogActivation === 'afterPrompt') {
-      if (call.mainPlayback) {
-        call.callLogger.debug(`VAD (afterPrompt): Speech detected during main prompt.`);
-        call.vadSpeechDetected = true;
+    }
+    // If VAD has already triggered recognition and started the stream (e.g. vadSpeechActiveDuringDelay), ignore.
+    if (call.vadRecognitionTriggeredAfterInitialDelay && call.openAIStreamingActive) { // Added openAIStreamingActive here for robustness
+        call.callLogger.debug(`TALK_DETECT: Speech started, but VAD recognition already triggered and stream active. Ignoring.`);
         return;
-      }
     }
 
-    call.callLogger.info(`VAD: Speech detected, proceeding to activate stream.`);
+
+    const appRecogConf = call.config.appConfig.appRecognitionConfig;
+    const vadRecogActivation = appRecogConf.vadRecogActivation;
+
+    if (vadRecogActivation === 'vadMode') {
+      // In 'vadMode', speech can occur *during* vadInitialSilenceDelaySeconds.
+      // If that delay has NOT YET COMPLETED, we mark that speech occurred and wait for the delay to finish.
+      if (!call.vadInitialSilenceDelayCompleted) {
+        call.callLogger.debug(`VAD (vadMode): Speech detected (ChannelTalkingStarted) *during* vadInitialSilenceDelay. Marking vadSpeechActiveDuringDelay.`);
+        call.vadSpeechActiveDuringDelay = true; // Mark that speech happened
+        call.vadSpeechDetected = true; // General flag for speech detection
+        // Do not activate stream yet. _handleVADDelaysCompleted will do it when timer expires.
+        return;
+      }
+      // If vadInitialSilenceDelay *IS* complete, then this ChannelTalkingStarted is the trigger.
+      call.callLogger.info(`VAD (vadMode): Speech detected (ChannelTalkingStarted) *after* initial silence delay. This is the trigger.`);
+    } else if (vadRecogActivation === 'afterPrompt') {
+      // In 'afterPrompt' mode, TALK_DETECT is only meant to trigger action *after* the prompt has finished playing.
+      if (call.mainPlayback) { // Check if prompt is currently playing
+        call.callLogger.info(`VAD (afterPrompt): Speech detected (ChannelTalkingStarted) *during* main prompt playback. Stopping prompt.`);
+        call.vadSpeechDetected = true; // Mark that speech was detected during prompt
+        await this._stopAllPlaybacks(call); // Stop the prompt immediately (barge-in)
+        call.promptPlaybackStoppedForInterim = true;
+        // Stream activation will be handled by _handlePostPromptVADLogic when PlaybackFinished (due to stop) or naturally.
+        // _handlePostPromptVADLogic will see vadSpeechDetected = true.
+        return;
+      }
+      // If prompt is NOT playing, this ChannelTalkingStarted is the valid trigger for 'afterPrompt'.
+      call.callLogger.info(`VAD (afterPrompt): Speech detected (ChannelTalkingStarted) *after* prompt has finished. This is the trigger.`);
+    }
+
+    // Common logic for VAD triggering OpenAI stream if conditions above are met:
     call.vadSpeechDetected = true;
     call.vadRecognitionTriggeredAfterInitialDelay = true;
 
+    // Stop any remaining prompt playback if it wasn't stopped by barge-in logic earlier.
+    // This is a safeguard.
     if (call.mainPlayback && !call.promptPlaybackStoppedForInterim) {
       try {
-        call.callLogger.info(`VAD: Stopping main prompt due to speech.`);
-        await call.mainPlayback.stop();
+        call.callLogger.info(`VAD: Stopping main prompt (safeguard) due to ChannelTalkingStarted.`);
+        await call.mainPlayback.stop(); // This will trigger PlaybackFinished
         call.promptPlaybackStoppedForInterim = true;
-      } catch (e: any) { call.callLogger.warn(`VAD: Error stopping main playback: ${e.message}`); }
+      } catch (e: any) { call.callLogger.warn(`VAD: Error stopping main playback (safeguard): ${e.message}`); }
     }
 
-    if(call.bargeInActivationTimer) { clearTimeout(call.bargeInActivationTimer); call.bargeInActivationTimer = null; }
+    // Clear timers that were waiting for this speech event
     if(call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
+    // vadInitialSilenceDelayTimer should have already expired if we are here in 'vadMode' post-delay.
 
-    this._activateOpenAIStreaming(call.channel.id, "vad_speech_detected_direct");
-    call.pendingVADBufferFlush = true;
+    // Activate OpenAI stream
+    this._activateOpenAIStreaming(call.channel.id, "vad_channel_talking_started");
+    call.pendingVADBufferFlush = true; // Buffer VAD audio if any was captured before this point
 
+    // Once speech is confirmed and stream is activating, remove TALK_DETECT. OpenAI will handle VAD.
     try {
-      call.callLogger.info(`VAD: Removing TALK_DETECT from channel after confirmed speech.`);
+      call.callLogger.info(`VAD: Removing TALK_DETECT from channel '${channel.id}' as speech confirmed and OpenAI stream activating.`);
       await channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' });
-    } catch (e: any) { call.callLogger.warn(`VAD: Error removing TALK_DETECT: ${e.message}`); }
+    } catch (e: any) { call.callLogger.warn(`VAD: Error removing TALK_DETECT from channel '${channel.id}': ${e.message}`); }
   }
 
   private async _onChannelTalkingFinished(event: ChannelTalkingFinished, channel: Channel): Promise<void> {
     const call = this.activeCalls.get(channel.id);
-    if (!call || call.channel.id !== channel.id || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'VAD') {
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled ||
+        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
-    call.callLogger.info(`TALK_DETECT: Speech finished. Duration: ${event.duration}ms`);
-    call.vadSpeechDetected = false;
-    if (!call.vadInitialSilenceDelayCompleted || !call.vadActivationDelayCompleted) {
-        call.vadSpeechActiveDuringDelay = false;
+    call.callLogger.info(`TALK_DETECT: Speech finished on channel ${channel.id}. Duration: ${event.duration}ms. Silence: ${event.silence_duration}ms`);
+
+    // This event means Asterisk's local VAD detected end of speech.
+    call.vadSpeechDetected = false; // Caller has stopped talking according to Asterisk VAD.
+
+    const appRecogConf = call.config.appConfig.appRecognitionConfig;
+    if (appRecogConf.vadRecogActivation === 'vadMode') {
+        if (!call.vadInitialSilenceDelayCompleted) {
+            // If speech stopped *during* the initial silence delay, reset the flag.
+            call.vadSpeechActiveDuringDelay = false;
+            call.callLogger.debug(`VAD (vadMode): Speech finished during initial silence delay. Resetting vadSpeechActiveDuringDelay.`);
+        }
+    }
+
+    // IMPORTANT: If OpenAI stream is active, this local VAD event (ChannelTalkingFinished)
+    // should NOT by itself stop the OpenAI stream. OpenAI has its own more sophisticated
+    // end-of-speech detection (e.g., input_audio_buffer.speech_stopped and subsequent silence).
+    // Relying on this local event to stop OpenAI stream can be premature.
+    // The primary purpose of TALK_DETECT was to *start* the stream.
+    if (call.openAIStreamingActive) {
+        call.callLogger.info(`TALK_DETECT: Speech finished, but OpenAI stream is active. OpenAI will manage end-of-turn.`);
+    } else {
+        // If stream is NOT active, this event might be useful in some scenarios,
+        // e.g., if a very short utterance occurred that didn't activate OpenAI,
+        // or if we were in 'afterPrompt' and waiting.
+        // However, the main logic for timeouts (like vadMaxWaitAfterPromptSeconds) should handle cases
+        // where speech starts and then stops without a full interaction.
+        call.callLogger.info(`TALK_DETECT: Speech finished, OpenAI stream is NOT active. State: vadSpeechDetected=${call.vadSpeechDetected}, vadRecognitionTriggered=${call.vadRecognitionTriggeredAfterInitialDelay}`);
     }
   }
 
