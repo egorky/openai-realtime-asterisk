@@ -85,7 +85,17 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   const callConfig = JSON.parse(JSON.stringify(baseConfig)) as CallSpecificConfig;
   callConfig.logging.level = getVar(logger, channel, 'LOG_LEVEL', callConfig.logging.level) as any || callConfig.logging.level;
   const arc = callConfig.appConfig.appRecognitionConfig = callConfig.appConfig.appRecognitionConfig || {} as AppRecognitionConfig;
-  arc.greetingAudioPath = getVar(logger, channel, 'GREETING_AUDIO_PATH', arc.greetingAudioPath) || 'sound:hello-world';
+
+  // Configurable initial greeting audio: Env Var > default.json > hardcoded fallback
+  arc.greetingAudioPath = getVar(logger, channel, 'INITIAL_GREETING_AUDIO_PATH', arc.greetingAudioPath);
+  if (!arc.greetingAudioPath) { // If not set by specific INITIAL_GREETING_AUDIO_PATH env var
+    arc.greetingAudioPath = getVar(logger, channel, 'GREETING_AUDIO_PATH', arc.greetingAudioPath); // Try general GREETING_AUDIO_PATH
+  }
+  if (!arc.greetingAudioPath) { // If still not set (neither env var nor in default.json)
+    arc.greetingAudioPath = 'sound:hello-world'; // Hardcoded fallback
+    logger.info(`No greeting audio path configured, defaulting to ${arc.greetingAudioPath}`);
+  }
+
   arc.maxRecognitionDurationSeconds = getVarAsInt(logger, channel, 'MAX_RECOGNITION_DURATION_SECONDS', arc.maxRecognitionDurationSeconds) || 30;
   arc.noSpeechBeginTimeoutSeconds = getVarAsInt(logger, channel, 'NO_SPEECH_BEGIN_TIMEOUT_SECONDS', arc.noSpeechBeginTimeoutSeconds) ?? 3;
   arc.speechCompleteTimeoutSeconds = getVarAsInt(logger, channel, 'SPEECH_COMPLETE_TIMEOUT_SECONDS', arc.speechCompleteTimeoutSeconds) ?? 5;
@@ -110,8 +120,26 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   oaiConf.inputAudioFormat = getVar(logger, channel, 'OPENAI_INPUT_AUDIO_FORMAT', oaiConf.inputAudioFormat) ?? "mulaw_8000hz";
   oaiConf.inputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_INPUT_AUDIO_SAMPLE_RATE', oaiConf.inputAudioSampleRate) ?? 8000;
   oaiConf.ttsVoice = getVar(logger, channel, 'APP_OPENAI_TTS_VOICE', oaiConf.ttsVoice) ?? "alloy";
-  oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat) ?? "pcm_s16le_24000hz";
-  oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate) ?? 24000;
+
+  // Correctly set output audio format: prioritize env var, then default.json, then hardcoded fallback
+  oaiConf.outputAudioFormat = getVar(logger, channel, 'OPENAI_OUTPUT_AUDIO_FORMAT', oaiConf.outputAudioFormat);
+  if (oaiConf.outputAudioFormat === undefined) {
+    oaiConf.outputAudioFormat = "g711_ulaw"; // Final hardcoded fallback
+    logger.warn(`Output audio format not configured via ENV or default.json, defaulting to ${oaiConf.outputAudioFormat}`);
+  }
+
+  oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate);
+  // If format is g711_ulaw or mulaw_8000hz, ensure sample rate is 8000, otherwise use configured/default.
+  if (oaiConf.outputAudioFormat === "g711_ulaw" || oaiConf.outputAudioFormat === "mulaw_8000hz") {
+    if (oaiConf.outputAudioSampleRate !== 8000) {
+      logger.warn(`Output audio format is ${oaiConf.outputAudioFormat} but sample rate is ${oaiConf.outputAudioSampleRate}, forcing to 8000Hz.`);
+      oaiConf.outputAudioSampleRate = 8000;
+    }
+  } else if (oaiConf.outputAudioSampleRate === undefined) {
+    // Fallback for other formats if not specified, e.g. pcm16 often uses 24000 or 16000
+    oaiConf.outputAudioSampleRate = 24000;
+    logger.warn(`Output audio sample rate not configured, defaulting to ${oaiConf.outputAudioSampleRate} for format ${oaiConf.outputAudioFormat}`);
+  }
 
   oaiConf.instructions = getVar(logger, channel, 'OPENAI_INSTRUCTIONS', oaiConf.instructions, 'APP_OPENAI_INSTRUCTIONS');
   if (oaiConf.instructions === undefined) {
@@ -782,8 +810,10 @@ export class AriClientService implements AriClientInterface {
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = this.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
-          const sessionLoggerForAudio = call.callLogger || console;
-          sessionLoggerForAudio.debug(`[${call.channel.id}] Received raw audio packet from Asterisk, length: ${audioPayload.length}. Forwarding as is (u-law expected).`);
+          const sessionLoggerForAudio = call.callLogger || moduleLogger; // Use moduleLogger if callLogger is not yet set
+          if (sessionLoggerForAudio.isLevelEnabled?.('silly')) {
+            sessionLoggerForAudio.silly(`[${call.channel.id}] Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
+          }
 
           if (call.openAIStreamingActive && !call.pendingVADBufferFlush) {
             sessionManager.sendAudioToOpenAI(callId, audioPayload); // Send original audioPayload
