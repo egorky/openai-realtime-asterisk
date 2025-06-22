@@ -121,10 +121,15 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     };
     if (ws.readyState === WebSocket.OPEN) {
       try {
-        ws.send(JSON.stringify(sessionUpdateEvent));
-        sessionLogger.info(`[${callId}] OpenAI Realtime: Sent session.update event:`, sessionUpdateEvent.session);
+        const eventString = JSON.stringify(sessionUpdateEvent);
+        ws.send(eventString);
+        if (sessionLogger.isLevelEnabled?.('debug')) {
+          sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent initial session.update: ${eventString}`);
+        } else {
+          sessionLogger.info(`[${callId}] OpenAI Realtime: Sent initial session.update event (details in debug log).`);
+        }
       } catch (e: any) {
-        sessionLogger.error(`[${callId}] OpenAI Realtime: Failed to send session.update event: ${e.message}`);
+        sessionLogger.error(`[${callId}] OpenAI Realtime: Failed to send initial session.update event: ${e.message}`);
       }
     }
   });
@@ -291,8 +296,10 @@ export function sendAudioToOpenAI(callId: string, audioPayload: Buffer): void {
     const base64AudioChunk = audioPayload.toString('base64');
     const audioEvent = { type: 'input_audio_buffer.append', audio: base64AudioChunk };
     try {
-      session.ws.send(JSON.stringify(audioEvent));
-      sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent input_audio_buffer.append (chunk length: ${base64AudioChunk.length})`);
+      const eventString = JSON.stringify(audioEvent);
+      session.ws.send(eventString);
+      // El log de debug ya es bastante bueno aquí, no necesita el JSON completo usualmente.
+      sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent input_audio_buffer.append (base64 chunk length: ${base64AudioChunk.length}, JSON event length: ${eventString.length})`);
     } catch (e:any) {
       sessionLogger.error(`[${callId}] Error sending audio event to OpenAI: ${e.message}`);
     }
@@ -313,15 +320,27 @@ export function requestOpenAIResponse(callId: string, transcript: string, config
       type: "conversation.item.create",
       item: { type: "message", role: "user", content: [{ type: "input_text", text: transcript }] }
     };
-    session.ws.send(JSON.stringify(conversationItemCreateEvent));
-    sessionLogger.info(`[${callId}] OpenAI Realtime: Sent conversation.item.create:`, conversationItemCreateEvent.item.content);
+    const convEventString = JSON.stringify(conversationItemCreateEvent);
+    session.ws.send(convEventString);
+    if (sessionLogger.isLevelEnabled?.('debug')) {
+      sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent conversation.item.create: ${convEventString}`);
+    } else {
+      sessionLogger.info(`[${callId}] OpenAI Realtime: Sent conversation.item.create (details in debug log).`);
+    }
+
 
     const responseCreateEvent = {
       type: "response.create",
       response: { modalities: config.openAIRealtimeAPI?.responseModalities || ["audio", "text"] }
     };
-    session.ws.send(JSON.stringify(responseCreateEvent));
-    sessionLogger.info(`[${callId}] OpenAI Realtime: Sent response.create requesting modalities:`, responseCreateEvent.response.modalities);
+    const respEventString = JSON.stringify(responseCreateEvent);
+    session.ws.send(respEventString);
+    if (sessionLogger.isLevelEnabled?.('debug')) {
+      sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent response.create: ${respEventString}`);
+    } else {
+      sessionLogger.info(`[${callId}] OpenAI Realtime: Sent response.create (details in debug log). Modalities: ${responseCreateEvent.response.modalities.join(', ')}`);
+    }
+
   } catch (e:any) {
     sessionLogger.error(`[${callId}] Error sending request for OpenAI response: ${e.message}`);
   }
