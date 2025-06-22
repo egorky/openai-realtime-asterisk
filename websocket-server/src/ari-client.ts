@@ -19,9 +19,44 @@ import {
 
 const moduleLogger: LoggerInstance = {
   info: console.log, error: console.error, warn: console.warn, debug: console.log, silly: console.log,
-  isLevelEnabled: (level: string) => level !== 'silly',
-  child: (bindings: object) => moduleLogger,
+  isLevelEnabled: (level: string) => {
+    // A simple implementation for isLevelEnabled
+    const levels: { [key: string]: number } = { silly: 0, debug: 1, info: 2, warn: 3, error: 4 };
+    const configuredLevel = levels[process.env.LOG_LEVEL?.toLowerCase() || callConfig?.logging?.level || 'info'] ?? levels.info;
+    return levels[level] >= configuredLevel;
+  },
+  child: (bindings: object) => {
+    // Return a new logger instance that includes bindings, or enhance existing one
+    // For simplicity, this example returns a new object that prepends bindings to messages
+    // A more robust solution would use a proper logging library like pino or winston
+    const newLogger: LoggerInstance = {} as LoggerInstance;
+    for (const key in moduleLogger) {
+        if (typeof (moduleLogger as any)[key] === 'function') {
+            (newLogger as any)[key] = (...args: any[]) => {
+                const prefix = Object.entries(bindings).map(([k,v]) => `${k}=${v}`).join(' ');
+                if (typeof args[0] === 'string') {
+                    (moduleLogger as any)[key](`[${prefix}] ${args[0]}`, ...args.slice(1));
+                } else {
+                    (moduleLogger as any)[key](`[${prefix}]`, ...args);
+                }
+            };
+        } else {
+            (newLogger as any)[key] = (moduleLogger as any)[key];
+        }
+    }
+    newLogger.isLevelEnabled = (level: string) => {
+        const levels: { [key: string]: number } = { silly: 0, debug: 1, info: 2, warn: 3, error: 4 };
+        // Ensure callConfig is accessible or use a global/default config for LOG_LEVEL
+        // This is a simplified approach; ideally, callConfig's log level would be part of the bound logger's state.
+        const configuredLevelVal = levels[process.env.LOG_LEVEL?.toLowerCase() || baseConfig?.logging?.level || 'info'] ?? levels.info;
+        return levels[level] >= configuredLevelVal;
+    };
+    return newLogger;
+  },
 };
+
+let callConfig: CallSpecificConfig; // To be initialized
+let baseConfig: RuntimeConfig; // To hold base config from file
 
 dotenv.config();
 
@@ -57,7 +92,7 @@ function getVarAsBoolean(logger: any, channel: Channel | undefined, envVarName: 
 
 function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConfig {
   const configFilePath = process.env.CONFIG_FILE_PATH || path.join(__dirname, '../config/default.json');
-  let baseConfig: RuntimeConfig;
+  // let baseConfig: RuntimeConfig; // Declared globally now
   try {
     const rawConfig = fs.readFileSync(configFilePath, 'utf-8');
     baseConfig = JSON.parse(rawConfig) as RuntimeConfig;
@@ -78,11 +113,11 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
         dtmfConfig: { dtmfEnabled: true, dtmfInterdigitTimeoutSeconds: 2, dtmfMaxDigits: 16, dtmfTerminatorDigit: "#", dtmfFinalTimeoutSeconds: 3 },
         bargeInConfig: { bargeInModeEnabled: true, bargeInDelaySeconds: 0.5, noSpeechBargeInTimeoutSeconds: 5 },
       },
-      openAIRealtimeAPI: { model: "gpt-4o-mini-realtime-preview-2024-12-17", inputAudioFormat: "mulaw_8000hz", inputAudioSampleRate: 8000, outputAudioFormat: "pcm_s16le_24000hz", outputAudioSampleRate: 24000, responseModalities: ["audio", "text"], instructions: "Eres un asistente de IA amigable y servicial. Responde de manera concisa." },
+      openAIRealtimeAPI: { model: "gpt-4o-mini-realtime-preview-2024-12-17", inputAudioFormat: "mulaw_8000hz", inputAudioSampleRate: 8000, outputAudioFormat: "g711_ulaw", outputAudioSampleRate: 8000, responseModalities: ["audio", "text"], instructions: "Eres un asistente de IA amigable y servicial. Responde de manera concisa." },
       logging: { level: "info" },
     };
   }
-  const callConfig = JSON.parse(JSON.stringify(baseConfig)) as CallSpecificConfig;
+  callConfig = JSON.parse(JSON.stringify(baseConfig)) as CallSpecificConfig; // Assign to global callConfig
   callConfig.logging.level = getVar(logger, channel, 'LOG_LEVEL', callConfig.logging.level) as any || callConfig.logging.level;
   const arc = callConfig.appConfig.appRecognitionConfig = callConfig.appConfig.appRecognitionConfig || {} as AppRecognitionConfig;
 
@@ -131,7 +166,7 @@ function getCallSpecificConfig(logger: any, channel?: Channel): CallSpecificConf
   oaiConf.outputAudioSampleRate = getVarAsInt(logger, channel, 'OPENAI_OUTPUT_AUDIO_SAMPLE_RATE', oaiConf.outputAudioSampleRate);
   // If format is g711_ulaw or mulaw_8000hz, ensure sample rate is 8000, otherwise use configured/default.
   if (oaiConf.outputAudioFormat === "g711_ulaw" || oaiConf.outputAudioFormat === "mulaw_8000hz") {
-    if (oaiConf.outputAudioSampleRate !== 8000) {
+    if (!oaiConf.outputAudioSampleRate || oaiConf.outputAudioSampleRate !== 8000) { // Check if undefined or not 8000
       logger.warn(`Output audio format is ${oaiConf.outputAudioFormat} but sample rate is ${oaiConf.outputAudioSampleRate}, forcing to 8000Hz.`);
       oaiConf.outputAudioSampleRate = 8000;
     }
@@ -210,11 +245,15 @@ export class AriClientService implements AriClientInterface {
   private activeCalls = new Map<string, CallResources>();
   private appOwnedChannelIds = new Set<string>();
   public logger: LoggerInstance = moduleLogger;
-  private baseConfig: RuntimeConfig;
+  // private baseConfig: RuntimeConfig; // Removed, use global baseConfig
 
   constructor() {
-    this.baseConfig = getCallSpecificConfig(this.logger.child({ context: 'AriBaseConfigLoad' }));
+    // this.baseConfig = getCallSpecificConfig(this.logger.child({ context: 'AriBaseConfigLoad' })); // Load config once if not per call
     this.logger = this.logger.child({ service: 'AriClientService' });
+    if (!baseConfig) { // Ensure baseConfig is loaded if getCallSpecificConfig hasn't been called yet (e.g. by constructor)
+        const tempLogger = moduleLogger.child({context: 'AriConstructorConfigLoad'});
+        getCallSpecificConfig(tempLogger); // This will load and set the global baseConfig and callConfig
+    }
   }
 
   public async connect(): Promise<void> {
@@ -677,10 +716,10 @@ export class AriClientService implements AriClientInterface {
     if (this.appOwnedChannelIds.has(callId)) {
       callLogger.info(`${logPrefix} Channel ${callId} is app-owned. Ignoring StasisStart.`); return;
     }
-    const callConfig = getCallSpecificConfig(callLogger, incomingChannel);
+    const currentCallConfig = getCallSpecificConfig(callLogger, incomingChannel); // Use 'currentCallConfig' to avoid conflict with global 'callConfig'
 
     const callResources: CallResources = {
-      channel: incomingChannel, config: callConfig, callLogger, isCleanupCalled: false,
+      channel: incomingChannel, config: currentCallConfig, callLogger, isCleanupCalled: false, // Use currentCallConfig here
       promptPlaybackStoppedForInterim: false, fallbackAttempted: false, openAIStreamError: null,
       openAIStreamingActive: false, isOpenAIStreamEnding: false, speechHasBegun: false,
       finalTranscription: "",
@@ -694,7 +733,7 @@ export class AriClientService implements AriClientInterface {
       vadMaxWaitAfterPromptTimer: null, vadActivationDelayTimer: null, vadInitialSilenceDelayTimer: null,
     };
     this.activeCalls.set(callId, callResources);
-    callLogger.info(`${logPrefix} Call resources initialized. Mode: ${callConfig.appConfig.appRecognitionConfig.recognitionActivationMode}`);
+    callLogger.info(`${logPrefix} Call resources initialized. Mode: ${currentCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}`);
 
     try {
       callLogger.info(`${logPrefix} Attempting to answer incoming channel ${callId}.`);
@@ -835,7 +874,7 @@ export class AriClientService implements AriClientInterface {
       sessionManager.handleCallConnection(callId, this);
       callLogger.info(`${logPrefix} Call connection details passed to SessionManager.`);
 
-      const appRecogConf = callConfig.appConfig.appRecognitionConfig;
+      const appRecogConf = currentCallConfig.appConfig.appRecognitionConfig; // Use currentCallConfig
       if (appRecogConf.maxRecognitionDurationSeconds && appRecogConf.maxRecognitionDurationSeconds > 0) {
         callResources.maxRecognitionDurationTimer = setTimeout(() => { this._fullCleanup(callId, true, "MAX_RECOGNITION_DURATION_TIMEOUT"); }, appRecogConf.maxRecognitionDurationSeconds * 1000);
       }

@@ -111,12 +111,22 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     const sessionUpdateEvent = {
       type: "session.update",
       session: {
-        input_audio_format: currentSTTConfig?.inputAudioFormat || "g711_ulaw",
-        output_audio_format: currentSTTConfig?.outputAudioFormat || "g711_ulaw",
+        input_audio_format: currentSTTConfig?.inputAudioFormat || "g711_ulaw", // Default to g711_ulaw if not specified
+        output_audio_format: currentSTTConfig?.outputAudioFormat || "g711_ulaw", // Default to g711_ulaw if not specified
         voice: currentSTTConfig?.ttsVoice || 'alloy',
-        instructions: currentSTTConfig?.instructions, // This will carry the Spanish default from config if not overridden
+        instructions: currentSTTConfig?.instructions,
       }
     };
+    // Ensure sample rates are included if the formats are PCM, otherwise OpenAI might default to 24kHz for PCM or reject if mismatched.
+    // For g711, sample rate is implicitly 8000Hz and usually not needed to be sent.
+    // However, if specified in config, include them.
+    if (currentSTTConfig?.inputAudioSampleRate && (currentSTTConfig.inputAudioFormat?.startsWith("pcm") || currentSTTConfig.inputAudioFormat?.startsWith("g711")) ) {
+      (sessionUpdateEvent.session as any).input_audio_sample_rate = currentSTTConfig.inputAudioSampleRate;
+    }
+    if (currentSTTConfig?.outputAudioSampleRate && (currentSTTConfig.outputAudioFormat?.startsWith("pcm") || currentSTTConfig.outputAudioFormat?.startsWith("g711"))) {
+      (sessionUpdateEvent.session as any).output_audio_sample_rate = currentSTTConfig.outputAudioSampleRate;
+    }
+
 
     sessionLogger.debug(`[${callId}] OpenAI Realtime: Sending session.update event:`, sessionUpdateEvent);
     if (ws.readyState === WebSocket.OPEN) {
