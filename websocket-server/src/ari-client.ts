@@ -313,10 +313,14 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAIFinalResult(callId: string, transcript: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
+
+    call.callLogger.info(`_onOpenAIFinalResult CALLED for callId: ${callId}. Current ttsAudioChunks.length: ${call.ttsAudioChunks?.length ?? 'N/A'}`);
     call.callLogger.info(`OpenAI final transcript received: "${transcript}"`);
+
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
     call.callLogger.info(`Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
+
     try {
       sessionManager.requestOpenAIResponse(callId, transcript, call.config);
     } catch (e: any) {
@@ -350,7 +354,7 @@ export class AriClientService implements AriClientInterface {
     if (audioChunkBase64 && audioChunkBase64.length > 0) {
        call.callLogger.debug(`Received TTS audio chunk, length: ${audioChunkBase64.length}. Accumulating. Previous #chunks: ${call.ttsAudioChunks.length}`);
        call.ttsAudioChunks.push(audioChunkBase64);
-       call.callLogger.debug(`New #chunks: ${call.ttsAudioChunks.length}.`);
+       call.callLogger.info(`_onOpenAIAudioChunk: AFTER PUSH for call ${callId}, ttsAudioChunks.length: ${call.ttsAudioChunks.length}`);
     } else {
        call.callLogger.warn('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
     }
