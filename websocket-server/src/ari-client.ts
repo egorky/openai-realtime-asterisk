@@ -1041,7 +1041,9 @@ export class AriClientService implements AriClientInterface {
         call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
-    call.callLogger.info(`TALK_DETECT: Speech finished on channel ${channel.id}. Duration: ${event.duration}ms. Silence: ${event.silence_duration}ms`);
+    // Corrected: The 'ChannelTalkingFinished' event has 'duration' (total time talking)
+    // but not 'silence_duration'. Silence duration is what triggers this event based on TALK_DETECT settings.
+    call.callLogger.info(`TALK_DETECT: Speech finished on channel ${channel.id}. Last speech duration: ${event.duration}ms.`);
 
     // This event means Asterisk's local VAD detected end of speech.
     call.vadSpeechDetected = false; // Caller has stopped talking according to Asterisk VAD.
