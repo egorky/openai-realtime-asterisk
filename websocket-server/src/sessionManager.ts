@@ -184,8 +184,8 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             }
             break;
           case 'response.audio.delta':
-            if (serverEvent.delta && typeof serverEvent.delta.audio === 'string') {
-              currentAriClient._onOpenAIAudioChunk(callId, serverEvent.delta.audio, false);
+            if (serverEvent.delta && typeof serverEvent.delta === 'string') {
+              currentAriClient._onOpenAIAudioChunk(callId, serverEvent.delta, false);
             }
             break;
           case 'response.audio.done':
