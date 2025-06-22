@@ -699,7 +699,10 @@ export class AriClientService implements AriClientInterface {
     // Initialize call-specific config first. This will also set the global currentCallSpecificConfig.logging.level
     const localCallConfig = getCallSpecificConfig(moduleLogger.child({ callId, channelName: incomingChannel.name, context: 'configLoad' }), incomingChannel);
     // Create callLogger using the log level from the now-updated currentCallSpecificConfig
-    const callLogger = moduleLogger.child({ callId, channelName: incomingChannel.name }, currentCallSpecificConfig.logging.level);
+    // The second argument to child() was incorrect based on LoggerInstance interface.
+    // The child logger will use the effective log level determined by its parent (moduleLogger)
+    // which considers currentCallSpecificConfig.logging.level.
+    const callLogger = moduleLogger.child({ callId, channelName: incomingChannel.name });
 
     const channelId = incomingChannel.id; // Already have callId
     const callerIdNum = incomingChannel.caller?.number || 'N/A';
@@ -855,10 +858,9 @@ export class AriClientService implements AriClientInterface {
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = this.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
-          const loggerToUse = call.callLogger || moduleLogger;
-          if (loggerToUse.isLevelEnabled?.('silly')) { // Check against the call-specific or module logger
-            loggerToUse.silly(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
-          }
+          // Use call.callLogger directly as it's guaranteed to be initialized for an active call
+          // Use optional chaining for .silly as it's an optional method in LoggerInstance
+          call.callLogger.silly?.(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
 
           if (call.openAIStreamingActive && !call.pendingVADBufferFlush) {
             sessionManager.sendAudioToOpenAI(callId, audioPayload);
