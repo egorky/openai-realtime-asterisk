@@ -410,16 +410,24 @@ export class AriClientService implements AriClientInterface {
 
   public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): void { // isLastChunk is deprecated here, triggered by _onOpenAIAudioStreamEnd
     const call = this.activeCalls.get(callId);
+    // Log inmediato para ver si la función es llamada
+    (call?.callLogger || this.logger).info(`_onOpenAIAudioChunk CALLED for callId: ${callId}, chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}, current ttsAudioChunks length: ${call?.ttsAudioChunks?.length ?? 'N/A'}`);
+
     if (!call || call.isCleanupCalled) {
       (call?.callLogger || this.logger).warn(`_onOpenAIAudioChunk: Call not active or cleanup called. Ignoring audio chunk.`);
       return;
     }
     if (!call.ttsAudioChunks) {
+      call.callLogger.info('_onOpenAIAudioChunk: Initializing ttsAudioChunks array.');
       call.ttsAudioChunks = [];
     }
+
     if (audioChunkBase64 && audioChunkBase64.length > 0) {
-       call.callLogger.debug(`Received TTS audio chunk, length: ${audioChunkBase64.length}.`);
+       call.callLogger.debug(`Received TTS audio chunk, length: ${audioChunkBase64.length}. Accumulating. Previous #chunks: ${call.ttsAudioChunks.length}`);
        call.ttsAudioChunks.push(audioChunkBase64);
+       call.callLogger.debug(`New #chunks: ${call.ttsAudioChunks.length}`);
+    } else {
+       call.callLogger.warn('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
     }
   }
 
