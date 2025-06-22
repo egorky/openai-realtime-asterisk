@@ -106,7 +106,25 @@ const moduleLogger: LoggerInstance = (() => {
 
     const prefix = prefixParts.length > 0 ? ` ${prefixParts.join(' ')}` : '';
 
-    const logFunction = console[level === 'silly' ? 'log' : level] || console.log;
+    let logFunction: (...args: any[]) => void;
+    switch (level) {
+      case 'silly':
+        logFunction = console.debug; // console.silly is not standard, using debug for it or log
+        break;
+      case 'debug':
+        logFunction = console.debug;
+        break;
+      case 'warn':
+        logFunction = console.warn;
+        break;
+      case 'error':
+        logFunction = console.error;
+        break;
+      case 'info':
+      default:
+        logFunction = console.info;
+        break;
+    }
 
     if (args.length > 0 && typeof args[0] === 'string') {
       logFunction(`[${timestamp}] [${callerId}]${prefix} ${args[0]}`, ...args.slice(1));
