@@ -302,12 +302,13 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             }
             if (finalTranscriptText) {
               currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
-            } else if (serverEvent.response?.status !== 'cancelled') { // Don't warn if cancelled by turn_detected
+            } else if (serverEvent.response?.status !== 'cancelled' && serverEvent.response?.status !== 'tool_calls_completed') {
                  msgSessionLogger.warn(`[${callId}] OpenAI response.done, but no final text transcript in output. Status: ${serverEvent.response?.status}`);
-            }
-            break;
+            } // Cierre del else
+            } // Cierre del if/else (session.processingToolCalls)
+            break; // Break para el case 'response.done'
           case 'response.audio.delta':
-            if (serverEvent.delta && typeof serverEvent.delta === 'string') {
+            if (serverEvent.delta && typeof serverEvent.delta === 'string') { // OpenAI envía audio en base64
               currentAriClient._onOpenAIAudioChunk(callId, serverEvent.delta, false);
             }
             break;
