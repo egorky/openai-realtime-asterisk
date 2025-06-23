@@ -367,17 +367,23 @@ export class AriClientService implements AriClientInterface {
       // Ensure creationtime is accessed safely and converted
       let startTimeISO: string | undefined = undefined;
       try {
-        if (call.channel && call.channel.creationtime) {
-           // Assuming creationtime is like { seconds: number, nanoseconds: number } or a JS Date
-           // If it's { seconds: number, nanoseconds: number } from protobuf or similar:
-           if (typeof call.channel.creationtime.seconds === 'number') {
-             startTimeISO = new Date(call.channel.creationtime.seconds * 1000).toISOString();
-           } else if (call.channel.creationtime instanceof Date) {
-             startTimeISO = call.channel.creationtime.toISOString();
-           }
+        if (call.channel && typeof call.channel.creationtime === 'string') {
+          // creationtime is typically an ISO 8601 string from ari-client
+          // Attempt to parse it to ensure it's valid and then re-format or use directly
+          const dateObj = new Date(call.channel.creationtime);
+          if (!isNaN(dateObj.getTime())) {
+            startTimeISO = dateObj.toISOString();
+          } else {
+            call.callLogger.warn(`Could not parse creationtime string: ${call.channel.creationtime}`);
+            startTimeISO = call.channel.creationtime; // Use as is if parsing fails but it's a string
+          }
+        } else if (call.channel && call.channel.creationtime) {
+           // Fallback for other potential (though less likely for 'ari-client') types
+           call.callLogger.warn(`Unexpected type for creationtime: ${typeof call.channel.creationtime}. Value: ${call.channel.creationtime}`);
+           startTimeISO = String(call.channel.creationtime);
         }
-      } catch (e) {
-        call.callLogger.warn(`Error formatting creationtime for call ${callId}: ${e}`);
+      } catch (e: any) {
+        call.callLogger.warn(`Error processing creationtime for call ${callId}: ${e.message}`);
       }
 
       formattedCalls.push({
