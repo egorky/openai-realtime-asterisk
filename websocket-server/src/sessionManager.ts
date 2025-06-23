@@ -84,14 +84,15 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI);
     return;
   } else if (existingSession && existingSession.ws) {
-    // We know existingSession.ws exists here. Now check if it's NOT open.
+    // Store the readyState before the !isOpen check, as existingSession.ws is known to be a WebSocket here.
+    const currentState = existingSession.ws.readyState;
     if (!isOpen(existingSession.ws)) {
-        sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} exists but WebSocket is not open (state: ${existingSession.ws.readyState}). Will attempt to create a new one.`);
+        sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} exists but WebSocket is not open (state: ${currentState}). Will attempt to create a new one.`);
         activeOpenAISessions.delete(callId);
     } else {
-        // This case should ideally not be reached if the first `if` condition is `isOpen(existingSession.ws)`
-        // but as a fallback, if it's somehow not caught by the first `if` but `isOpen` is true here, it's an anomaly.
-        sessionLogger.warn(`SessionManager: Anomaly - session for ${callId} exists, ws exists, and isOpen is true, but not caught by first check. Treating as open.`);
+        // This path implies isOpen(existingSession.ws) is true, which should have been caught by the first 'if'.
+        // This is anomalous. Log it and treat as if it's open.
+        sessionLogger.warn(`SessionManager: Anomaly - session for ${callId} (state: ${currentState}) was not caught by the primary 'isOpen' check but is open now. Proceeding as open.`);
         existingSession.config = config;
         sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI);
         return;
