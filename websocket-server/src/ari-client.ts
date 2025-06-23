@@ -864,6 +864,13 @@ export class AriClientService implements AriClientInterface {
 
   private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
     const call = this.activeCalls.get(callId);
+
+    // Ensure call object exists before proceeding
+    if (!call) {
+      this.logger.error(`_activateOpenAIStreaming: Call object not found for callId ${callId}. Cannot activate stream. Reason: ${reason}`);
+      return;
+    }
+
     // If already streaming and this is not just a buffer flush attempt, log and return.
     if (call.openAIStreamingActive && reason !== "vad_speech_during_delay_window_flush_attempt") {
         call.callLogger.debug(`_activateOpenAIStreaming called (Reason: ${reason}), but stream already active. No action.`);
@@ -1126,56 +1133,77 @@ export class AriClientService implements AriClientInterface {
 
     // Check mainPlayback (initial greeting)
     if (call.mainPlayback && call.mainPlayback.id && !call.promptPlaybackStoppedForInterim) {
+        const mainPlaybackId = call.mainPlayback.id; // Store ID before any async op
         try {
-            const currentMainPlaybackState = await this.client?.playbacks.get({playbackId: call.mainPlayback.id});
-            if (currentMainPlaybackState && currentMainPlaybackState.state === 'playing') {
-                playbackToStop = call.mainPlayback;
-                playbackType = "main greeting";
+            const currentMainPlaybackState = await this.client?.playbacks.get({playbackId: mainPlaybackId});
+            // Ensure call.mainPlayback hasn't been changed by another async operation before checking its state or assigning it.
+            if (call.mainPlayback && call.mainPlayback.id === mainPlaybackId && !call.promptPlaybackStoppedForInterim) { // Re-check promptPlaybackStoppedForInterim
+                if (currentMainPlaybackState && currentMainPlaybackState.state === 'playing') {
+                    playbackToStop = call.mainPlayback;
+                    playbackType = "main greeting";
+                } else {
+                    call.callLogger.debug(`VAD: Main greeting playback (ID: ${mainPlaybackId}) was not in 'playing' state (ARI State: ${currentMainPlaybackState?.state}). Not stopping it via barge-in.`);
+                    if (currentMainPlaybackState?.state !== 'playing') call.mainPlayback = undefined;
+                }
             } else {
-                call.callLogger.debug(`VAD: Main greeting playback (ID: ${call.mainPlayback.id}) was not in 'playing' state (State: ${currentMainPlaybackState?.state}). Not considering for barge-in stop here.`);
-                 // If it's not playing, it might have finished or been stopped. Clear the reference if so.
-                if (currentMainPlaybackState?.state !== 'playing') call.mainPlayback = undefined;
+                 call.callLogger.debug(`VAD: Main greeting playback (ID: ${mainPlaybackId}) was changed, cleared, or already stopped by interim flag during state check. Not stopping.`);
             }
         } catch (e:any) {
-            call.callLogger.warn(`VAD: Error getting state for mainPlayback (ID: ${call.mainPlayback.id}): ${e.message}. Assuming it's not stoppable.`);
-            call.mainPlayback = undefined; // Playback likely gone
+            call.callLogger.warn(`VAD: Error getting state for mainPlayback (ID: ${mainPlaybackId}): ${e.message}. Assuming it's not stoppable or gone.`);
+            // If there's an error fetching state (e.g., playback already gone from ARI), clear our reference if it still matches.
+            if (call.mainPlayback && call.mainPlayback.id === mainPlaybackId) {
+                call.mainPlayback = undefined;
+            }
         }
     }
 
     // Check waitingPlayback (OpenAI TTS) only if mainPlayback wasn't selected for stopping
     if (!playbackToStop && call.waitingPlayback && call.waitingPlayback.id && !call.promptPlaybackStoppedForInterim) {
+        const waitingPlaybackId = call.waitingPlayback.id;
         try {
-            const currentWaitingPlaybackState = await this.client?.playbacks.get({playbackId: call.waitingPlayback.id});
-            if (currentWaitingPlaybackState && currentWaitingPlaybackState.state === 'playing') {
-                playbackToStop = call.waitingPlayback;
-                playbackType = "OpenAI TTS";
+            const currentWaitingPlaybackState = await this.client?.playbacks.get({playbackId: waitingPlaybackId});
+            if (call.waitingPlayback && call.waitingPlayback.id === waitingPlaybackId && !call.promptPlaybackStoppedForInterim) { // Re-check promptPlaybackStoppedForInterim
+                if (currentWaitingPlaybackState && currentWaitingPlaybackState.state === 'playing') {
+                    playbackToStop = call.waitingPlayback;
+                    playbackType = "OpenAI TTS";
+                } else {
+                    call.callLogger.debug(`VAD: OpenAI TTS playback (ID: ${waitingPlaybackId}) was not in 'playing' state (ARI State: ${currentWaitingPlaybackState?.state}). Not stopping it via barge-in.`);
+                    if (currentWaitingPlaybackState?.state !== 'playing') {
+                        call.waitingPlayback = undefined;
+                    }
+                }
             } else {
-                call.callLogger.debug(`VAD: OpenAI TTS playback (ID: ${call.waitingPlayback.id}) was not in 'playing' state (State: ${currentWaitingPlaybackState?.state}). Not considering for barge-in stop here.`);
-                if (currentWaitingPlaybackState?.state !== 'playing') call.waitingPlayback = undefined;
+                 call.callLogger.debug(`VAD: OpenAI TTS playback (ID: ${waitingPlaybackId}) was changed, cleared, or already stopped by interim flag during state check. Not stopping.`);
             }
         } catch (e:any) {
-            call.callLogger.warn(`VAD: Error getting state for waitingPlayback (ID: ${call.waitingPlayback.id}): ${e.message}. Assuming it's not stoppable.`);
-            call.waitingPlayback = undefined; // Playback likely gone
+            call.callLogger.warn(`VAD: Error getting state for waitingPlayback (ID: ${waitingPlaybackId}): ${e.message}. Assuming it's not stoppable or gone.`);
+            if (call.waitingPlayback && call.waitingPlayback.id === waitingPlaybackId) {
+                call.waitingPlayback = undefined;
+            }
         }
     }
 
-
-    if (playbackToStop) {
+    if (playbackToStop && playbackToStop.id) {
+      const playbackToStopId = playbackToStop.id;
       try {
-        call.callLogger.info(`VAD: Barge-in: Stopping ${playbackType} playback (ID: ${playbackToStop.id}) due to ChannelTalkingStarted.`);
+        call.callLogger.info(`VAD: Barge-in: Stopping ${playbackType} playback (ID: ${playbackToStopId}) due to ChannelTalkingStarted.`);
         await playbackToStop.stop();
         call.promptPlaybackStoppedForInterim = true;
-        if (playbackToStop === call.mainPlayback) call.mainPlayback = undefined;
-        else if (playbackToStop === call.waitingPlayback) call.waitingPlayback = undefined;
       } catch (e: any) {
          if (e.message && (e.message.includes("Playback not found") || e.message.includes("does not exist"))) {
-            call.callLogger.info(`VAD: Attempted to stop ${playbackType} (ID: ${playbackToStop.id}) for barge-in, but it was already gone: ${e.message}`);
+            call.callLogger.info(`VAD: Attempted to stop ${playbackType} (ID: ${playbackToStopId}) for barge-in, but it was already gone: ${e.message}`);
         } else {
-            call.callLogger.warn(`VAD: Error stopping ${playbackType} playback (ID: ${playbackToStop.id}) for barge-in: ${e.message}`);
+            call.callLogger.warn(`VAD: Error stopping ${playbackType} playback (ID: ${playbackToStopId}) for barge-in: ${e.message}`);
         }
-        // Ensure the local reference is cleared even if stop fails because it's not found
-        if (playbackToStop === call.mainPlayback) call.mainPlayback = undefined;
-        else if (playbackToStop === call.waitingPlayback) call.waitingPlayback = undefined;
+      } finally {
+        // Always clear the local reference if it matches the one we tried to stop.
+        // This handles cases where stop() might throw an error for an already-gone playback,
+        // but we still need to ensure our local state reflects it's no longer the active playback.
+        if (call.mainPlayback && call.mainPlayback.id === playbackToStopId) {
+            call.mainPlayback = undefined;
+        } else if (call.waitingPlayback && call.waitingPlayback.id === playbackToStopId) {
+            call.waitingPlayback = undefined;
+        }
       }
     }
 
