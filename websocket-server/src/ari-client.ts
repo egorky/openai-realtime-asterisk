@@ -901,8 +901,18 @@ export class AriClientService implements AriClientInterface {
           sessionManager.sendAudioToOpenAI(callId, audioPayload);
         }
         call.vadAudioBuffer = [];
+        call.pendingVADBufferFlush = false; // Explicitly reset after attempted flush
+        call.isFlushingVADBuffer = false;
+      } else {
+        // If no flush was performed (e.g. buffer empty or pendingVADBufferFlush was false),
+        // still ensure these flags are correctly set for subsequent audio sending.
         call.pendingVADBufferFlush = false;
         call.isFlushingVADBuffer = false;
+        // isVADBufferingActive should be false if we are now actively streaming to OpenAI for recognition,
+        // unless a specific VAD mode requires it to remain true for some other reason (currently not the case).
+        // It's typically set to true before playing TTS to buffer barge-in speech.
+        // When _activateOpenAIStreaming is called, VAD has done its job of detection or delay period is over.
+        call.isVADBufferingActive = false;
       }
 
       // Only set up these timers if we are truly starting a new listening phase for this turn,
