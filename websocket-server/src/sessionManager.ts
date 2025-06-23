@@ -74,16 +74,29 @@ export function handleFrontendConnection(ws: WebSocket) {
 
 
 export function startOpenAISession(callId: string, ariClient: AriClientInterface, config: CallSpecificConfig): void {
-  const sessionLogger = ariClient.logger; // Asumir que ariClient siempre tiene un logger
-  sessionLogger.info(`SessionManager: Attempting to start OpenAI Realtime session for callId ${callId}.`);
+  const sessionLogger = ariClient.logger;
+  sessionLogger.info(`SessionManager: Request to ensure OpenAI Realtime session is active for callId ${callId}.`);
 
-  if (activeOpenAISessions.has(callId)) {
-    sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} already exists. Closing old one.`);
-    const oldSession = activeOpenAISessions.get(callId);
-    if (oldSession?.ws && oldSession.ws.readyState === WebSocket.OPEN) {
-      oldSession.ws.close(1000, "Starting new session");
-    }
-    activeOpenAISessions.delete(callId);
+  const existingSession = activeOpenAISessions.get(callId);
+  if (existingSession && isOpen(existingSession.ws)) {
+    sessionLogger.info(`SessionManager: OpenAI Realtime session for ${callId} is already active and open. Re-sending session.update if config changed.`);
+    // Even if session exists, config (like instructions or voice) might have changed.
+    // So, we should send a session.update.
+    // We also need to update the stored config in the session object.
+    existingSession.config = config; // Update stored config
+    sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI); // This function already checks if session is open
+
+    // ariClient needs to know the session is (still) ready.
+    // This callback was previously only invoked on new ws.on('open').
+    // We need a way to signal readiness or re-confirm.
+    // For now, we assume if it's open, it's ready for audio.
+    // The `_activateOpenAIStreaming` in ari-client will proceed to send audio if this function doesn't throw.
+    return;
+  } else if (existingSession && !isOpen(existingSession.ws)) {
+    sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} exists but WebSocket is not open (state: ${existingSession.ws.readyState}). Will attempt to create a new one.`);
+    activeOpenAISessions.delete(callId); // Remove stale session
+  } else {
+     sessionLogger.info(`SessionManager: No active OpenAI session found for ${callId}, or it was closed. Creating new session.`);
   }
 
   const apiKey = process.env.OPENAI_API_KEY;

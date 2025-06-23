@@ -83,28 +83,28 @@ const moduleLogger: LoggerInstance = (() => {
 
     const timestamp = new Date().toISOString();
     // Try to get callerId from bindings first (for child loggers), then from activeCalls map.
-    let callerId = bindings.callerId || 'System';
-    if (bindings.callId && ariClientServiceInstance) { // Check if ariClientServiceInstance is defined
+    let effectiveCallId = bindings.callId || 'System'; // This is the Asterisk Channel ID / UNIQUEID
+    let displayCallerId = bindings.callerId || 'N/A'; // This is the Caller's Number (e.g., CNUM)
+
+    if (bindings.callId && ariClientServiceInstance) {
         const call = ariClientServiceInstance.getActiveCallResource(bindings.callId);
-        if (call && call.channel && call.channel.caller && call.channel.caller.number) {
-            callerId = call.channel.caller.number;
-        } else if (call && call.channel && call.channel.name && !callerId) {
-            // Fallback to channel name if caller number is not available but callId was bound
-            callerId = call.channel.name;
+        if (call && call.channel) {
+            effectiveCallId = call.channel.id; // Ensure we use the actual channel ID from the resource
+            if (call.channel.caller && call.channel.caller.number) {
+                displayCallerId = call.channel.caller.number;
+            } else if (displayCallerId === 'N/A') { // If no callerId was bound and no CNUM
+                displayCallerId = call.channel.name; // Fallback to channel name for displayCallerId
+            }
         }
     }
 
-
     const prefixParts: string[] = [];
     if (bindings.service) prefixParts.push(`service=${bindings.service}`);
-    // We won't use callId in the general prefix if callerId is available, to avoid redundancy.
-    // However, if only callId is available (no full call object yet), it can be useful.
-    if (bindings.callId && (callerId === 'System' || callerId === bindings.callId) ) { // Show callId if it's the best identifier we have
-         prefixParts.push(`callId=${bindings.callId}`);
-    }
     if (bindings.component) prefixParts.push(`component=${bindings.component}`);
 
-    const prefix = prefixParts.length > 0 ? ` ${prefixParts.join(' ')}` : '';
+    // Construct the main log prefix with timestamp, the channel's UNIQUEID (effectiveCallId), and the displayCallerId (CNUM or name)
+    const mainPrefix = `[${timestamp}] [uid:${effectiveCallId}] [cnum:${displayCallerId}]`;
+    const contextPrefix = prefixParts.length > 0 ? ` [${prefixParts.join(' ')}]` : ''; // Keep this for additional context like service/component
 
     let logFunction: (...args: any[]) => void;
     switch (level) {
@@ -127,53 +127,48 @@ const moduleLogger: LoggerInstance = (() => {
     }
 
     if (args.length > 0 && typeof args[0] === 'string') {
-      logFunction(`[${timestamp}] [${callerId}]${prefix} ${args[0]}`, ...args.slice(1));
+      logFunction(`${mainPrefix}${contextPrefix} ${args[0]}`, ...args.slice(1));
     } else {
-      logFunction(`[${timestamp}] [${callerId}]${prefix}`, ...args);
+      logFunction(`${mainPrefix}${contextPrefix}`, ...args);
     }
   };
 
   (['info', 'error', 'warn', 'debug', 'silly'] as const).forEach(levelKey => {
     loggerInstance[levelKey] = (...args: any[]) => {
-      // For top-level logger, bindings are empty or minimal
+      // For top-level logger, bindings are empty or minimal.
+      // Pass along an empty object for bindings, formatLogMessage will handle defaults.
       formatLogMessage(levelKey, {}, ...args);
     };
   });
 
   loggerInstance.child = (bindings: object, callSpecificLogLevel?: string): LoggerInstance => {
     const childLogger: any = {};
-    const effectiveBindings = { ...bindings } as any;
-    if (callSpecificLogLevel) {
-        // This is a bit of a hack; ideally, the config for level check should be more cleanly passed.
-        // We are attaching a temporary config override for isLevelEnabled.
-        effectiveBindings.configOverride = { logging: { level: callSpecificLogLevel } } as CallSpecificConfig;
-    }
-    if (effectiveBindings.channelName && !effectiveBindings.callerId) {
-        // If channelName was passed (old way), try to use it as a fallback for callerId if no callerId.
-        // This is mostly for backward compatibility with old child logger calls.
-        // The new formatLogMessage will try to get callerId from call resource if callId is present.
-    }
+    const currentBindings = { ...bindings } as any; // Current bindings for this child instance
 
+    if (callSpecificLogLevel) {
+        currentBindings.configOverride = { logging: { level: callSpecificLogLevel } } as CallSpecificConfig;
+    }
 
     childLogger.isLevelEnabled = (level: string): boolean => {
       const levelsMap: { [key: string]: number } = { silly: 0, debug: 1, info: 2, warn: 3, error: 4 };
-      const effectiveCallLogLevel = callSpecificLogLevel || getEffectiveLogLevel((bindings as any).configOverride); // Use override if present
+      // Use currentBindings.configOverride for level checking for this specific child logger
+      const effectiveCallLogLevel = callSpecificLogLevel || getEffectiveLogLevel(currentBindings.configOverride);
       const configuredLevelNum = levelsMap[effectiveCallLogLevel] ?? levelsMap.info;
       return levelsMap[level] >= configuredLevelNum;
     };
 
     (['info', 'error', 'warn', 'debug', 'silly'] as const).forEach(levelKey => {
       childLogger[levelKey] = (...args: any[]) => {
-        formatLogMessage(levelKey, effectiveBindings, ...args);
+        // Pass currentBindings to formatLogMessage
+        formatLogMessage(levelKey, currentBindings, ...args);
       };
     });
 
-    childLogger.child = (newBindings: object, newCallSpecificLogLevel?: string): LoggerInstance => {
-      // Merge new bindings with existing ones. New bindings take precedence.
-      const mergedBindings = {...effectiveBindings, ...newBindings};
-      // If a new log level is provided for this further child, it takes precedence.
-      // Otherwise, inherit the parent child's log level.
-      return loggerInstance.child(mergedBindings, newCallSpecificLogLevel || callSpecificLogLevel);
+    childLogger.child = (newChildBindings: object, newChildCallSpecificLogLevel?: string): LoggerInstance => {
+      // When creating a child of a child, merge new bindings with the current child's bindings.
+      const mergedBindings = {...currentBindings, ...newChildBindings};
+      // The new child's log level takes precedence; otherwise, it inherits from its direct parent (this childLogger).
+      return loggerInstance.child(mergedBindings, newChildCallSpecificLogLevel || callSpecificLogLevel);
     };
     return childLogger as LoggerInstance;
   };
@@ -326,11 +321,11 @@ export class AriClientService implements AriClientInterface {
   private client: Ari.Client | null = null;
   private activeCalls = new Map<string, CallResources>();
   private appOwnedChannelIds = new Set<string>();
-  public logger: LoggerInstance = moduleLogger.child({ service: 'AriClientService' }); // Initialize logger here
+  public logger: LoggerInstance;
   private currentPrimaryCallId: string | null = null;
 
   constructor() {
-    // Logger is already initialized above using moduleLogger.child
+    this.logger = moduleLogger.child({ service: 'AriClientService' });
     if (!baseConfig) { throw new Error("Base configuration was not loaded."); }
   }
 
@@ -869,46 +864,82 @@ export class AriClientService implements AriClientInterface {
 
   private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
     const call = this.activeCalls.get(callId);
-    if (!call || call.isCleanupCalled || call.openAIStreamingActive) {
-      if(call?.openAIStreamingActive) {
-        call.callLogger.debug(`Activate called but stream already active. Reason: ${reason}`);
-      }
-      return;
+    // If already streaming and this is not just a buffer flush attempt, log and return.
+    if (call.openAIStreamingActive && reason !== "vad_speech_during_delay_window_flush_attempt") {
+        call.callLogger.debug(`_activateOpenAIStreaming called (Reason: ${reason}), but stream already active. No action.`);
+        return;
     }
-    call.callLogger.info(`Activating OpenAI streaming. Reason: ${reason}`);
-    call.openAIStreamingActive = true;
+    // If cleanup is called, abort.
+    if (call.isCleanupCalled) {
+        call.callLogger.warn(`_activateOpenAIStreaming called (Reason: ${reason}), but cleanup already in progress. Aborting activation.`);
+        return;
+    }
+
+    call.callLogger.info(`_activateOpenAIStreaming called. Reason: ${reason}. Current stream active: ${call.openAIStreamingActive}`);
 
     try {
+      // sessionManager.startOpenAISession will now ensure a session is active,
+      // or start a new one if necessary. It won't close an existing healthy session.
       await sessionManager.startOpenAISession(callId, this, call.config);
-      call.callLogger.info(`Session manager initiated OpenAI session for ${callId}.`);
+      call.callLogger.info(`Session manager ensured OpenAI session is active for ${callId}.`);
+
+      // Mark as active only after successful session start/confirmation.
+      // This is important because startOpenAISession might return if session is already open.
+      call.openAIStreamingActive = true;
+
       if (call.pendingVADBufferFlush && call.vadAudioBuffer.length > 0) {
         call.callLogger.info(`Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
-        call.isVADBufferingActive = false;
-        for (const audioPayload of call.vadAudioBuffer) { sessionManager.sendAudioToOpenAI(callId, audioPayload); }
-        call.vadAudioBuffer = []; call.pendingVADBufferFlush = false;
+        call.isVADBufferingActive = false; // Stop further buffering
+        for (const audioPayload of call.vadAudioBuffer) {
+          sessionManager.sendAudioToOpenAI(callId, audioPayload);
+        }
+        call.vadAudioBuffer = [];
+        call.pendingVADBufferFlush = false;
+        call.isFlushingVADBuffer = false;
       }
-      const noSpeechTimeout = call.config.appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds;
-      if (noSpeechTimeout > 0 && !call.speechHasBegun) {
-        call.noSpeechBeginTimer = setTimeout(() => {
-          if (call.isCleanupCalled || call.speechHasBegun) return;
-          call.callLogger.warn(`No speech from OpenAI in ${noSpeechTimeout}s. Stopping session & call.`);
-          sessionManager.stopOpenAISession(callId, "no_speech_timeout_in_ari");
-          this._fullCleanup(callId, true, "NO_SPEECH_BEGIN_TIMEOUT");
-        }, noSpeechTimeout * 1000);
-        call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
+
+      // Only set up these timers if we are truly starting a new listening phase for this turn,
+      // not if we are just flushing a buffer to an already active stream that might be processing prior audio.
+      // The 'reason' can help differentiate.
+      // If speechHasBegun is already true for this turn, these timers might not be needed or should be re-evaluated.
+      if (!call.speechHasBegun) { // Timers are for the start of user speech detection in a turn
+        const noSpeechTimeout = call.config.appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds;
+        if (noSpeechTimeout > 0) {
+          if (call.noSpeechBeginTimer) clearTimeout(call.noSpeechBeginTimer);
+          call.noSpeechBeginTimer = setTimeout(() => {
+            if (call.isCleanupCalled || call.speechHasBegun) return;
+            call.callLogger.warn(`No speech detected by OpenAI in ${noSpeechTimeout}s. Stopping session & call.`);
+            logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `No speech from OpenAI timeout (${noSpeechTimeout}s).`})
+              .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+            sessionManager.stopOpenAISession(callId, "no_speech_timeout_in_ari");
+            this._fullCleanup(callId, true, "NO_SPEECH_BEGIN_TIMEOUT");
+          }, noSpeechTimeout * 1000);
+          call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
+        }
+
+        const streamIdleTimeout = call.config.appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds ?? 10;
+        if (streamIdleTimeout > 0) {
+            if (call.initialOpenAIStreamIdleTimer) clearTimeout(call.initialOpenAIStreamIdleTimer);
+            call.initialOpenAIStreamIdleTimer = setTimeout(() => {
+               if (call.isCleanupCalled || call.speechHasBegun) return;
+               call.callLogger.warn(`OpenAI stream idle (no events) for ${streamIdleTimeout}s. Stopping session & call.`);
+               logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `OpenAI stream idle timeout (${streamIdleTimeout}s).`})
+                 .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+               sessionManager.stopOpenAISession(callId, "initial_stream_idle_timeout_in_ari");
+               this._fullCleanup(callId, true, "OPENAI_STREAM_IDLE_TIMEOUT");
+            }, streamIdleTimeout * 1000);
+            call.callLogger.info(`InitialOpenAIStreamIdleTimer started (${streamIdleTimeout}s).`);
+        }
+      } else {
+        call.callLogger.info(`Speech already begun for this turn, not starting NoSpeechBeginTimer or InitialOpenAIStreamIdleTimer.`);
       }
-      const streamIdleTimeout = call.config.appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds ?? 10;
-      call.initialOpenAIStreamIdleTimer = setTimeout(() => {
-         if (call.isCleanupCalled || call.speechHasBegun) return;
-         call.callLogger.warn(`OpenAI stream idle for ${streamIdleTimeout}s. Stopping session & call.`);
-         sessionManager.stopOpenAISession(callId, "initial_stream_idle_timeout_in_ari");
-         this._fullCleanup(callId, true, "OPENAI_STREAM_IDLE_TIMEOUT");
-      }, streamIdleTimeout * 1000);
-      call.callLogger.info(`InitialOpenAIStreamIdleTimer started (${streamIdleTimeout}s).`);
+
     } catch (error: any) {
-        call.callLogger.error(`Error during _activateOpenAIStreaming for ${callId}: ${(error instanceof Error ? error.message : String(error))}`);
-        call.openAIStreamingActive = false;
-        this._onOpenAIError(callId, error);
+        call.callLogger.error(`Error during _activateOpenAIStreaming for ${callId} (reason: ${reason}): ${(error instanceof Error ? error.message : String(error))}`);
+        logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Error activating OpenAI stream: ${error.message}`})
+          .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+        call.openAIStreamingActive = false; // Ensure it's marked inactive on error
+        this._onOpenAIError(callId, error); // This will also trigger cleanup
     }
   }
 
@@ -1093,23 +1124,58 @@ export class AriClientService implements AriClientInterface {
     let playbackToStop: Playback | undefined = undefined;
     let playbackType = "";
 
-    if (call.mainPlayback && !call.promptPlaybackStoppedForInterim) {
-        playbackToStop = call.mainPlayback;
-        playbackType = "main greeting";
-    } else if (call.waitingPlayback && !call.promptPlaybackStoppedForInterim) { // Check for OpenAI TTS playback
-        playbackToStop = call.waitingPlayback;
-        playbackType = "OpenAI TTS";
+    // Check mainPlayback (initial greeting)
+    if (call.mainPlayback && call.mainPlayback.id && !call.promptPlaybackStoppedForInterim) {
+        try {
+            const currentMainPlaybackState = await this.client?.playbacks.get({playbackId: call.mainPlayback.id});
+            if (currentMainPlaybackState && currentMainPlaybackState.state === 'playing') {
+                playbackToStop = call.mainPlayback;
+                playbackType = "main greeting";
+            } else {
+                call.callLogger.debug(`VAD: Main greeting playback (ID: ${call.mainPlayback.id}) was not in 'playing' state (State: ${currentMainPlaybackState?.state}). Not considering for barge-in stop here.`);
+                 // If it's not playing, it might have finished or been stopped. Clear the reference if so.
+                if (currentMainPlaybackState?.state !== 'playing') call.mainPlayback = undefined;
+            }
+        } catch (e:any) {
+            call.callLogger.warn(`VAD: Error getting state for mainPlayback (ID: ${call.mainPlayback.id}): ${e.message}. Assuming it's not stoppable.`);
+            call.mainPlayback = undefined; // Playback likely gone
+        }
     }
+
+    // Check waitingPlayback (OpenAI TTS) only if mainPlayback wasn't selected for stopping
+    if (!playbackToStop && call.waitingPlayback && call.waitingPlayback.id && !call.promptPlaybackStoppedForInterim) {
+        try {
+            const currentWaitingPlaybackState = await this.client?.playbacks.get({playbackId: call.waitingPlayback.id});
+            if (currentWaitingPlaybackState && currentWaitingPlaybackState.state === 'playing') {
+                playbackToStop = call.waitingPlayback;
+                playbackType = "OpenAI TTS";
+            } else {
+                call.callLogger.debug(`VAD: OpenAI TTS playback (ID: ${call.waitingPlayback.id}) was not in 'playing' state (State: ${currentWaitingPlaybackState?.state}). Not considering for barge-in stop here.`);
+                if (currentWaitingPlaybackState?.state !== 'playing') call.waitingPlayback = undefined;
+            }
+        } catch (e:any) {
+            call.callLogger.warn(`VAD: Error getting state for waitingPlayback (ID: ${call.waitingPlayback.id}): ${e.message}. Assuming it's not stoppable.`);
+            call.waitingPlayback = undefined; // Playback likely gone
+        }
+    }
+
 
     if (playbackToStop) {
       try {
         call.callLogger.info(`VAD: Barge-in: Stopping ${playbackType} playback (ID: ${playbackToStop.id}) due to ChannelTalkingStarted.`);
-        await playbackToStop.stop(); // This will trigger its PlaybackFinished event
-        call.promptPlaybackStoppedForInterim = true; // Use this generic flag for any interrupted bot speech
+        await playbackToStop.stop();
+        call.promptPlaybackStoppedForInterim = true;
         if (playbackToStop === call.mainPlayback) call.mainPlayback = undefined;
         else if (playbackToStop === call.waitingPlayback) call.waitingPlayback = undefined;
       } catch (e: any) {
-        call.callLogger.warn(`VAD: Error stopping ${playbackType} playback (ID: ${playbackToStop.id}) for barge-in: ${e.message}`);
+         if (e.message && (e.message.includes("Playback not found") || e.message.includes("does not exist"))) {
+            call.callLogger.info(`VAD: Attempted to stop ${playbackType} (ID: ${playbackToStop.id}) for barge-in, but it was already gone: ${e.message}`);
+        } else {
+            call.callLogger.warn(`VAD: Error stopping ${playbackType} playback (ID: ${playbackToStop.id}) for barge-in: ${e.message}`);
+        }
+        // Ensure the local reference is cleared even if stop fails because it's not found
+        if (playbackToStop === call.mainPlayback) call.mainPlayback = undefined;
+        else if (playbackToStop === call.waitingPlayback) call.waitingPlayback = undefined;
       }
     }
 
@@ -1267,12 +1333,18 @@ export class AriClientService implements AriClientInterface {
   }
 
   private async onStasisStart(event: any, incomingChannel: Channel): Promise<void> {
-    const callId = incomingChannel.id;
-    const localCallConfig = getCallSpecificConfig(moduleLogger.child({ callId, channelName: incomingChannel.name, context: 'configLoad' }), incomingChannel);
-    const callLogger = moduleLogger.child({ callId, channelName: incomingChannel.name });
+    const callId = incomingChannel.id; // This is the UNIQUEID for the main channel
+    const callerNumber = incomingChannel.caller?.number || 'UnknownCaller';
+
+    // Pass callId and callerNumber to child logger for context
+    const callLogger = moduleLogger.child({ callId: callId, callerId: callerNumber });
+
+    const localCallConfig = getCallSpecificConfig(callLogger, incomingChannel); // Pass the already contextualized callLogger
 
     if (incomingChannel.name.startsWith('UnicastRTP/') || incomingChannel.name.startsWith('Snoop/')) {
-      callLogger.info(`StasisStart for utility channel ${incomingChannel.name} (${incomingChannel.id}). Answering if needed and ignoring further setup.`);
+      // For utility channels, use their own ID as callId for their specific logs, but mark callerId appropriately
+      const utilityCallLogger = moduleLogger.child({ callId: incomingChannel.id, callerId: `utility-${incomingChannel.name.split('/')[0]}` });
+      utilityCallLogger.info(`StasisStart for utility channel ${incomingChannel.name} (${incomingChannel.id}). Answering if needed and ignoring further setup.`);
       try {
         if (incomingChannel.state === 'RINGING' || incomingChannel.state === 'RING') {
           await incomingChannel.answer();
