@@ -126,6 +126,26 @@ Estas son las variables más críticas que generalmente se configuran en un arch
     *   Default: `audio,text` (controlado por `config.openAIRealtimeAPI.responseModalities`).
     *   Ejemplo: `APP_OPENAI_RESPONSE_MODALITIES=audio`
 
+### Variables de Entorno para Redis (Opcional):
+
+*   **`REDIS_HOST`**:
+    *   Descripción: Hostname o dirección IP del servidor Redis.
+    *   Default: `127.0.0.1`
+    *   Ejemplo: `REDIS_HOST=myredisserver.example.com`
+*   **`REDIS_PORT`**:
+    *   Descripción: Puerto del servidor Redis.
+    *   Default: `6379`
+    *   Ejemplo: `REDIS_PORT=6380`
+*   **`REDIS_PASSWORD`**:
+    *   Descripción: Contraseña para la autenticación con el servidor Redis (si está configurada).
+    *   Default: `undefined` (sin contraseña)
+    *   Ejemplo: `REDIS_PASSWORD=yourredispassword`
+*   **`REDIS_CONVERSATION_TTL_SECONDS`**:
+    *   Descripción: Tiempo de vida (TTL) en segundos para las conversaciones almacenadas en Redis.
+    *   Default: `3600` (1 hora)
+    *   Ejemplo: `REDIS_CONVERSATION_TTL_SECONDS=86400` (24 horas)
+
+
 ## Parámetros de Configuración en `config/default.json`
 
 El archivo `config/default.json` contiene una estructura jerárquica para estos parámetros y otros más detallados. Las variables de entorno listadas arriba generalmente sobrescriben los valores correspondientes en este archivo.
@@ -183,24 +203,128 @@ El archivo `config/default.json` contiene una estructura jerárquica para estos 
 }
 ```
 
-### Parámetros Notables en `default.json`:
+### Variables de Entorno para Modos de Reconocimiento y VAD:
 
-*   **`appConfig.appRecognitionConfig`**:
-    *   `recognitionActivationMode`: Cómo se activa el reconocimiento.
-        *   `IMMEDIATE`: Inicia el stream a OpenAI inmediatamente al contestar.
-        *   `FIXED_DELAY`: Espera un retardo fijo (`bargeInDelaySeconds`) después del saludo (o inmediatamente si no hay saludo) antes de activar el stream.
-        *   `VAD`: Utiliza Voice Activity Detection.
-    *   `vadConfig`: Parámetros para VAD (umbrales de silencio y habla).
-    *   `vadRecogActivation`: Para modo VAD, si la activación es `vadMode` (basada en delays y detección de habla directa) o `afterPrompt` (espera habla después de que el saludo termine).
-    *   `initialOpenAIStreamIdleTimeoutSeconds`: Cuánto tiempo esperar por el primer audio o evento de OpenAI una vez que el stream está activo, antes de considerar un timeout.
+Estas variables de entorno controlan los nuevos modos de activación del reconocimiento y el comportamiento del VAD local. Sobrescriben los valores en `config.appConfig.appRecognitionConfig`.
 
-*   **`appConfig.dtmfConfig`**:
-    *   `dtmfEnabled`: Habilita o deshabilita la detección DTMF.
-    *   `dtmfInterdigitTimeoutSeconds`, `dtmfMaxDigits`, `dtmfTerminatorDigit`, `dtmfFinalTimeoutSeconds`: Parámetros para la recolección de DTMF.
+*   **`RECOGNITION_ACTIVATION_MODE`**:
+    *   Descripción: Define cómo se inicia el reconocimiento de voz.
+    *   Valores: `"fixedDelay"`, `"Immediate"`, `"vad"`.
+    *   Default (en `default.json`): `"fixedDelay"`
+    *   Ejemplo: `RECOGNITION_ACTIVATION_MODE="vad"`
 
-*   **`openAIRealtimeAPI.tools`**:
-    *   Un array que puede contener las definiciones de "herramientas" (funciones) que el modelo de IA puede solicitar ejecutar. Cada herramienta se define con un esquema.
+*   **`BARGE_IN_DELAY_SECONDS`**:
+    *   Descripción: Para `RECOGNITION_ACTIVATION_MODE="fixedDelay"`. Retardo en segundos antes de activar el reconocimiento, permitiendo al llamante interrumpir el saludo.
+    *   Default (en `default.json`): `0.2`
+    *   Ejemplo: `BARGE_IN_DELAY_SECONDS=0.5`
+
+*   **`SPEECH_END_SILENCE_TIMEOUT_SECONDS`**:
+    *   Descripción: Tiempo máximo en segundos que la aplicación espera por una transcripción final de OpenAI después de cada turno de habla.
+    *   Default (en `default.json`): `1.5`
+    *   Ejemplo: `SPEECH_END_SILENCE_TIMEOUT_SECONDS=2.0`
+
+*   **`APP_APPRECOGNITION_VADSILENCETHRESHOLDMS`**:
+    *   Descripción: Para modo VAD. Umbral de silencio de Asterisk TALK_DETECT en milisegundos. Tiempo de silencio después del habla para disparar `ChannelTalkingFinished`.
+    *   Default (en `default.json`): `2500`
+    *   Ejemplo: `APP_APPRECOGNITION_VADSILENCETHRESHOLDMS=3000`
+
+*   **`APP_APPRECOGNITION_VADTALKTHRESHOLD`**:
+    *   Descripción: Para modo VAD. Umbral de nivel de energía de Asterisk TALK_DETECT por encima del cual el audio se considera habla, disparando `ChannelTalkingStarted`.
+    *   Default (en `default.json`): `256`
+    *   Ejemplo: `APP_APPRECOGNITION_VADTALKTHRESHOLD=300`
+
+*   **`APP_APPRECOGNITION_VADRECOGACTIVATION`**:
+    *   Descripción: Para modo VAD. Define cuándo se activa el reconocimiento basado en VAD.
+    *   Valores: `"vadMode"`, `"afterPrompt"`.
+    *   Default (en `default.json`): `"vadMode"`
+    *   Ejemplo: `APP_APPRECOGNITION_VADRECOGACTIVATION="afterPrompt"`
+
+*   **`APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`**:
+    *   Descripción: Para modo VAD. Tiempo máximo (segundos) a esperar por el habla después de que el saludo termine y después de que `vadInitialSilenceDelaySeconds` hayan pasado (si aplica).
+    *   Default (en `default.json`): `10.0`
+    *   Ejemplo: `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS=7.5`
+
+*   **`APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`**:
+    *   Descripción: Para modo VAD con `vadRecogActivation="vadMode"`. Retardo en segundos desde el inicio de la llamada antes de que el proceso VAD escuche activamente. El audio se almacena en búfer durante este retardo.
+    *   Default (en `default.json`): `0.0`
+    *   Ejemplo: `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS=1.0`
+
+### Variables de Entorno para DTMF:
+
+Estas variables controlan la funcionalidad DTMF. Sobrescriben los valores en `config.appConfig.dtmfConfig`.
+
+*   **`DTMF_ENABLED`**:
+    *   Descripción: Habilita (`true`) o deshabilita (`false`) el reconocimiento DTMF.
+    *   Default (en `default.json`, como `enableDtmfRecognition`): `true`
+    *   Ejemplo: `DTMF_ENABLED=false`
+
+*   **`DTMF_INTERDIGIT_TIMEOUT_SECONDS`**:
+    *   Descripción: Tiempo máximo en segundos entre dígitos DTMF antes de considerar la entrada completa.
+    *   Default (en `default.json`): `3.0`
+    *   Ejemplo: `DTMF_INTERDIGIT_TIMEOUT_SECONDS=2.5`
+
+*   **`DTMF_FINAL_TIMEOUT_SECONDS`**:
+    *   Descripción: Tiempo máximo en segundos después del último dígito DTMF para finalizar la entrada.
+    *   Default (en `default.json`): `5.0`
+    *   Ejemplo: `DTMF_FINAL_TIMEOUT_SECONDS=4.0`
+
+### Parámetros Notables en `default.json` (Actualizado):
+
+La estructura de `default.json` se ha actualizado para reflejar estas nuevas variables:
+
+```json
+{
+  "appConfig": {
+    "appRecognitionConfig": {
+      "recognitionActivationMode": "fixedDelay", // "fixedDelay", "Immediate", "vad"
+      "bargeInDelaySeconds": 0.2,
+      "noSpeechBeginTimeoutSeconds": 5.0,
+      "speechEndSilenceTimeoutSeconds": 1.5, // Nuevo, reemplaza speechCompleteTimeoutSeconds
+      "maxRecognitionDurationSeconds": 30.0,
+      "vadSilenceThresholdMs": 2500,         // Corresponde a APP_APPRECOGNITION_VADSILENCETHRESHOLDMS
+      "vadTalkThreshold": 256,             // Corresponde a APP_APPRECOGNITION_VADTALKTHRESHOLD
+      "vadRecogActivation": "vadMode",       // "vadMode", "afterPrompt"
+      "vadMaxWaitAfterPromptSeconds": 10.0,
+      "vadInitialSilenceDelaySeconds": 0.0,
+      // vadConfig anidado se mantiene por compatibilidad con la lógica de TALK_DETECT existente,
+      // pero sus valores deben ser consistentes con los de nivel superior.
+      "vadConfig": {
+        "vadSilenceThresholdMs": 2500, // Debería coincidir con vadSilenceThresholdMs arriba
+        "vadRecognitionActivationMs": 40 // Umbral de duración de habla para TALK_DETECT, no directamente el de energía.
+                                         // Este valor podría necesitar una variable de entorno dedicada si se quiere configurar.
+      },
+      "initialOpenAIStreamIdleTimeoutSeconds": 10 // Tiempo de espera si el stream de OpenAI está inactivo al inicio.
+    },
+    "dtmfConfig": {
+      "enableDtmfRecognition": true, // Corresponde a DTMF_ENABLED
+      "dtmfInterDigitTimeoutSeconds": 3.0,
+      "dtmfFinalTimeoutSeconds": 5.0,
+      "dtmfMaxDigits": 16, // Heredado, aún relevante
+      "dtmfTerminatorDigit": "#" // Heredado, aún relevante
+    },
+    // bargeInConfig podría estar obsoleto ya que bargeInDelaySeconds está ahora en appRecognitionConfig.
+    // Se mantiene por si alguna lógica interna aún lo referencia.
+    "bargeInConfig": {
+      "bargeInModeEnabled": true
+    }
+  },
+  "openAIRealtimeAPI": {
+    // ... sin cambios significativos aquí respecto a la funcionalidad principal ...
+    "model": "gpt-4o-mini-realtime-preview-2024-12-17",
+    "language": "en",
+    "inputAudioFormat": "g711_ulaw",
+    "inputAudioSampleRate": 8000,
+    "ttsVoice": "alloy",
+    "outputAudioFormat": "g711_ulaw",
+    "outputAudioSampleRate": 8000,
+    "responseModalities": ["audio", "text"],
+    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa.",
+    "tools": []
+  },
+  "logging": {
+    "level": "info"
+  }
+}
+```
 
 Es importante consultar `ari-client.ts` (específicamente la función `getCallSpecificConfig`) para ver exactamente cómo se leen y priorizan estas configuraciones desde el archivo JSON y las variables de entorno.
-
-Ahora actualizaré el `README.md`.

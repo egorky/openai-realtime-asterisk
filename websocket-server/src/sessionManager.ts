@@ -74,16 +74,35 @@ export function handleFrontendConnection(ws: WebSocket) {
 
 
 export function startOpenAISession(callId: string, ariClient: AriClientInterface, config: CallSpecificConfig): void {
-  const sessionLogger = ariClient.logger; // Asumir que ariClient siempre tiene un logger
-  sessionLogger.info(`SessionManager: Attempting to start OpenAI Realtime session for callId ${callId}.`);
+  const sessionLogger = ariClient.logger;
+  sessionLogger.info(`SessionManager: Request to ensure OpenAI Realtime session is active for callId ${callId}.`);
 
-  if (activeOpenAISessions.has(callId)) {
-    sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} already exists. Closing old one.`);
-    const oldSession = activeOpenAISessions.get(callId);
-    if (oldSession?.ws && oldSession.ws.readyState === WebSocket.OPEN) {
-      oldSession.ws.close(1000, "Starting new session");
+  const existingSession = activeOpenAISessions.get(callId);
+  if (existingSession && isOpen(existingSession.ws)) {
+    sessionLogger.info(`SessionManager: OpenAI Realtime session for ${callId} is already active and open. Re-sending session.update if config changed.`);
+    existingSession.config = config;
+    sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI);
+    return;
+  } else if (existingSession && existingSession.ws) {
+    // Store the readyState before the !isOpen check, as existingSession.ws is known to be a WebSocket here.
+    const currentState = existingSession.ws.readyState;
+    if (!isOpen(existingSession.ws)) {
+        sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} exists but WebSocket is not open (state: ${currentState}). Will attempt to create a new one.`);
+        activeOpenAISessions.delete(callId);
+    } else {
+        // This path implies isOpen(existingSession.ws) is true, which should have been caught by the first 'if'.
+        // This is anomalous. Log it and treat as if it's open.
+        sessionLogger.warn(`SessionManager: Anomaly - session for ${callId} (state: ${currentState}) was not caught by the primary 'isOpen' check but is open now. Proceeding as open.`);
+        existingSession.config = config;
+        sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI);
+        return;
     }
+  } else if (existingSession && !existingSession.ws) {
+    sessionLogger.warn(`SessionManager: OpenAI Realtime session data for ${callId} exists but WebSocket object is missing. Will attempt to create a new one.`);
     activeOpenAISessions.delete(callId);
+  }
+  else { // No existingSession at all
+     sessionLogger.info(`SessionManager: No active OpenAI session found for ${callId}. Creating new session.`);
   }
 
   const apiKey = process.env.OPENAI_API_KEY;

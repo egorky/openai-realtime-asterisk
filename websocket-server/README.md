@@ -122,6 +122,15 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `PORT`: Port for this WebSocket server (e.g., `8081`).
 *   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
 *   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`, `warn`, `error`, `silly`). Setting to `debug` or `silly` will enable verbose logging of OpenAI API interactions, including request/response payloads.
+    *   **Log Format**: Logs now include a timestamp and the caller's ID (or channel name/call ID if caller number is not available), e.g., `[2024-01-15T12:30:00.123Z] [callerId] [service=ServiceName] message...`
+
+### Redis for Conversation Logging (Optional)
+*   `REDIS_HOST`: Hostname/IP of the Redis server. Defaults to `127.0.0.1`.
+*   `REDIS_PORT`: Port of the Redis server. Defaults to `6379`.
+*   `REDIS_PASSWORD`: Password for Redis authentication (if needed).
+*   `REDIS_CONVERSATION_TTL_SECONDS`: Time-to-live (in seconds) for conversation logs stored in Redis. Defaults to `3600` (1 hour).
+
+If Redis is configured, the server will log conversation turns (caller speech, bot speech, DTMF, system messages) to Redis lists, keyed by `conversation:<callId>`.
 
 ## Audio Handling
 
@@ -154,124 +163,99 @@ Revisa los logs de Asterisk (`/var/log/asterisk/full` o similar) para errores de
 
 ## Operational Modes
 
-The `RECOGNITION_ACTIVATION_MODE` setting (from `appConfig.appRecognitionConfig` or environment variable `RECOGNITION_ACTIVATION_MODE`) controls how and when the OpenAI speech recognition stream is initiated. DTMF input acts as an interrupt to these modes.
+The `RECOGNITION_ACTIVATION_MODE` setting (from `appConfig.appRecognitionConfig` or environment variable `RECOGNITION_ACTIVATION_MODE`) controls how and when the OpenAI speech recognition stream is initiated for the caller's turn. DTMF input, if enabled (`DTMF_ENABLED` or `appConfig.dtmfConfig.enableDtmfRecognition`), acts as an interrupt to these modes.
 
-**Common Timers (Once OpenAI Stream is Active):**
-Regardless of the initial activation mode, once the OpenAI stream is active, the following timers typically govern the interaction:
-*   `noSpeechBeginTimer`: Ensures OpenAI detects speech (or sends first transcript) within `noSpeechBeginTimeoutSeconds`.
-*   `initialOpenAIStreamIdleTimer`: Ensures the OpenAI stream is responsive shortly after activation, within `initialOpenAIStreamIdleTimeoutSeconds`.
-*   `speechEndSilenceTimer`: Detects end-of-speech silence after an interim transcript, configured by `speechCompleteTimeoutSeconds`.
-*   `maxRecognitionDurationTimer`: Sets an overall limit for the call interaction, configured by `maxRecognitionDurationSeconds`. This timer is active across all modes *unless* DTMF mode is entered.
+**Common Timers (Once OpenAI Stream is Active for Speech Recognition):**
+Regardless of the initial activation mode, once the OpenAI stream is active and listening for the caller's speech, the following timers (from `appConfig.appRecognitionConfig`) typically govern the interaction:
+*   `noSpeechBeginTimeoutSeconds`: Max time to wait for OpenAI to detect speech (or send the first transcript event like `input_audio_buffer.speech_started`) after the stream is active. If this expires, the interaction for the current turn may end.
+*   `speechEndSilenceTimeoutSeconds`: Max time the application waits for a final transcript from OpenAI after the last interim transcript or speech activity. If OpenAI indicates speech has stopped and this timeout is reached without a final result, the current recognition attempt might be concluded. (This replaces `speechCompleteTimeoutSeconds`).
+*   `maxRecognitionDurationSeconds`: An absolute maximum duration for the entire speech recognition attempt for a single turn. This prevents excessively long recognition cycles.
 
----
-
-*   **`IMMEDIATE` Mode**:
-    *   **Purpose**: Starts OpenAI streaming as soon as the call is connected and media is set up, potentially even before or during the greeting playback.
-    *   **Behavior**: `_activateOpenAIStreaming` is called early in the `onStasisStart` handler after basic call resources are established.
-    *   **Key Governing Timers**: None specific to this mode for *initiating* the stream beyond basic setup. The common active stream timers apply immediately.
-    *   **Timers from other modes NOT valid**: VAD-specific timers (`vadInitialSilenceDelayTimer`, `vadActivationDelayTimer`, `vadMaxWaitAfterPromptTimer`) and `bargeInActivationTimer` (from FIXED_DELAY) are not used.
+These timers are generally managed within `ari-client.ts` when `_activateOpenAIStreaming` is called and during the processing of OpenAI events (`_onOpenAISpeechStarted`, `_onOpenAIInterimResult`).
 
 ---
 
-*   **`FIXED_DELAY` Mode**:
-    *   **Purpose**: Starts OpenAI streaming after a fixed delay, typically after a greeting message has finished playing (if configured).
+1.  **`fixedDelay` Mode**:
+    *   **Purpose**: To start sending audio to OpenAI after a fixed, short delay from when the system is ready for the caller to speak (e.g., after a prompt starts playing or if no prompt, immediately). This allows for barge-in.
     *   **Behavior**:
-        *   If a `greetingAudioPath` is configured, the system waits for the `PlaybackFinished` event (or failure) of this greeting.
-        *   It then checks `bargeInDelaySeconds` (from `appConfig.appRecognitionConfig`).
-        *   If `bargeInDelaySeconds > 0`, a `bargeInActivationTimer` is started. When it expires, `_activateOpenAIStreaming` is called.
-        *   If `bargeInDelaySeconds <= 0` (or not set), `_activateOpenAIStreaming` is called immediately after the greeting (or immediately in `onStasisStart` if no greeting).
-    *   **Key Governing Timers**: `bargeInActivationTimer` (if `bargeInDelaySeconds > 0`).
-    *   **Timers from other modes NOT valid**: VAD-specific timers are not used.
-    *   **Standard Active Timers**: Apply once stream is active.
+        *   The system waits for `bargeInDelaySeconds` (from `appConfig.appRecognitionConfig.bargeInDelaySeconds` or `BARGE_IN_DELAY_SECONDS` env var).
+        *   After this delay, audio captured from the caller is sent to OpenAI.
+        *   OpenAI's own VAD and speech processing then determine when speech starts and ends.
+    *   **Key Configuration**: `RECOGNITION_ACTIVATION_MODE="fixedDelay"`, `BARGE_IN_DELAY_SECONDS`.
+    *   **Relevant Timers**: `noSpeechBeginTimeoutSeconds`, `speechEndSilenceTimeoutSeconds`, `maxRecognitionDurationSeconds` (once OpenAI stream is active).
+    *   **Ignored Timers/Settings**: Local VAD settings (`APP_APPRECOGNITION_VADSILENCETHRESHOLDMS`, `APP_APPRECOGNITION_VADTALKTHRESHOLD`, `APP_APPRECOGNITION_VADRECOGACTIVATION`, `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`, `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`) are not used. DTMF timers are separate.
 
 ---
 
-*   **`VAD` (Voice Activity Detection) Mode**:
-    *   **Purpose**: Uses Asterisk's `TALK_DETECT` feature to start OpenAI streaming only when speech is detected on the line, offering more natural interaction.
+2.  **`Immediate` Mode**:
+    *   **Purpose**: To start sending audio to OpenAI immediately when the system is ready for the caller to speak.
     *   **Behavior**:
-        *   Asterisk's `TALK_DETECT(set)` is applied to the channel using `vadConfig.vadRecognitionActivationMs` (talk threshold) and `vadConfig.vadSilenceThresholdMs` (silence threshold). This allows Asterisk to send `ChannelTalkingStarted` and `ChannelTalkingFinished` events.
-        *   Audio from the RTP stream is actively buffered in `ari-client.ts` (`vadAudioBuffer`) while `isVADBufferingActive` is true, before OpenAI streaming starts.
-        *   **Prompt Interruption (Barge-in)**: If `ChannelTalkingStarted` is received *during* the main greeting playback (`mainPlayback`), the playback is stopped, and this speech event can trigger OpenAI activation.
-        *   **OpenAI Stream Activation**: Depends on the `vadRecogActivation` sub-mode:
-            *   **`vadRecogActivation: 'afterPrompt'` (Default VAD sub-mode)**:
-                *   If speech is detected (`ChannelTalkingStarted`) *during* the greeting playback, this is noted (`call.vadSpeechDetected = true`). When the greeting finishes, `_handlePostPromptVADLogic` is called. If speech was noted, it calls `_activateOpenAIStreaming` and schedules the VAD buffer to be flushed.
-                *   If no speech during the greeting, `_handlePostPromptVADLogic` starts `vadMaxWaitAfterPromptTimer`. If this timer expires before speech, the call is cleaned up. If speech occurs (`ChannelTalkingStarted`) before this timer expires, `_activateOpenAIStreaming` is called.
-            *   **`vadRecogActivation: 'vadMode'`**:
-                *   `vadInitialSilenceDelaySeconds`: If > 0, a `vadInitialSilenceDelayTimer` runs. Speech detected (`ChannelTalkingStarted`) during this delay sets `call.vadSpeechActiveDuringDelay = true` but does not immediately trigger OpenAI. TALK_DETECT is active.
-                *   `vadActivationDelaySeconds`: If > 0, a `vadActivationDelayTimer` runs, similarly deferring OpenAI activation if speech occurs during this period.
-                *   `_handleVADDelaysCompleted` is called when both these timers complete. If `vadSpeechActiveDuringDelay` is true (i.e., speech occurred during these initial delay windows), it then calls `_activateOpenAIStreaming`.
-                *   If delays complete with no prior speech, the system relies on a future `ChannelTalkingStarted` event to trigger `_activateOpenAIStreaming`.
-        *   **Buffer Flushing**: When `_activateOpenAIStreaming` is called due to VAD, `pendingVADBufferFlush` is set. Once the OpenAI session is confirmed by `sessionManager`, the buffered audio is sent to OpenAI to ensure the initial utterance is captured.
-    *   **Key Governing Timers**: `vadInitialSilenceDelayTimer`, `vadActivationDelayTimer` (for `vadMode`); `vadMaxWaitAfterPromptTimer` (for `afterPrompt` if no speech during prompt).
-    *   **Timers from other modes NOT valid**: `bargeInActivationTimer` (from FIXED_DELAY) is not used.
-    *   **Standard Active Timers**: Apply once stream is active.
+        *   As soon as the call is established and it's the caller's turn (e.g., after a prompt starts or if no prompt), audio is sent to OpenAI without any delay or local VAD.
+        *   OpenAI handles all VAD and speech detection.
+    *   **Key Configuration**: `RECOGNITION_ACTIVATION_MODE="Immediate"`.
+    *   **Relevant Timers**: `noSpeechBeginTimeoutSeconds`, `speechEndSilenceTimeoutSeconds`, `maxRecognitionDurationSeconds` (once OpenAI stream is active).
+    *   **Ignored Timers/Settings**: `BARGE_IN_DELAY_SECONDS` and all local VAD settings are not used. DTMF timers are separate.
 
 ---
 
-*   **`DTMF` Mode (Interrupts other modes)**:
+3.  **`vad` (Local Voice Activity Detection) Mode**:
+    *   **Purpose**: Uses Asterisk's `TALK_DETECT` feature (local VAD) to control when to start sending audio to OpenAI, aiming to reduce unnecessary audio transmission.
+    *   **Behavior**:
+        *   Asterisk's `TALK_DETECT(set)` is applied to the channel using `APP_APPRECOGNITION_VADTALKTHRESHOLD` (energy level) and `APP_APPRECOGNITION_VADSILENCETHRESHOLDMS` (silence duration). This allows Asterisk to send `ChannelTalkingStarted` and `ChannelTalkingFinished` events to the application.
+        *   Audio from the RTP stream can be buffered locally (`vadAudioBuffer`) before the OpenAI stream is activated, especially if `vadInitialSilenceDelaySeconds` is used.
+        *   The exact moment OpenAI streaming begins depends on `APP_APPRECOGNITION_VADRECOGACTIVATION`:
+            *   **`vadRecogActivation: "vadMode"`**:
+                *   The system waits for `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS` before actively listening for `ChannelTalkingStarted`.
+                *   Audio might be buffered during this initial silence delay.
+                *   If `ChannelTalkingStarted` is received *after* this delay (or if speech was ongoing when the delay expired), the prompt (if any) is stopped, and audio (including buffered audio) is sent to OpenAI.
+                *   If no speech is detected within `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS` (this timer starts after the initial silence delay and after any prompt finishes), the turn may end.
+            *   **`vadRecogActivation: "afterPrompt"`**:
+                *   The system waits for the current prompt to finish playing.
+                *   After the prompt, it listens for `ChannelTalkingStarted`.
+                *   Upon receiving `ChannelTalkingStarted`, audio is sent to OpenAI.
+                *   If no speech is detected within `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS` (timer starts after prompt finishes), the turn may end.
+        *   Once `ChannelTalkingStarted` triggers OpenAI activation, `TALK_DETECT` is typically removed from the channel for that turn, and OpenAI's VAD takes over.
+    *   **Key Configuration**: `RECOGNITION_ACTIVATION_MODE="vad"`, `APP_APPRECOGNITION_VADSILENCETHRESHOLDMS`, `APP_APPRECOGNITION_VADTALKTHRESHOLD`, `APP_APPRECOGNITION_VADRECOGACTIVATION`. Depending on `vadRecogActivation`: `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`, `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`.
+    *   **Relevant Timers**: `noSpeechBeginTimeoutSeconds`, `speechEndSilenceTimeoutSeconds`, `maxRecognitionDurationSeconds` (once OpenAI stream is active). Also, `vadInitialSilenceDelayTimer` and `vadMaxWaitAfterPromptTimer` for controlling VAD stages.
+    *   **Ignored Timers/Settings**: `BARGE_IN_DELAY_SECONDS`. DTMF timers are separate.
+
+---
+
+4.  **`DTMF` Mode (Interrupts other modes)**:
     *   **Purpose**: Allows user to input digits using their keypad, which takes precedence over and typically interrupts any active speech recognition or playback.
     *   **Behavior**:
-        *   Triggered by the `_onDtmfReceived` event handler when Asterisk sends a `ChannelDtmfReceived` event.
-        *   **Mode Activation**: `dtmfModeActive` is set to `true`. `speechRecognitionDisabledDueToDtmf` is set to `true`. VAD audio buffering (`isVADBufferingActive`) is stopped, and any existing `vadAudioBuffer` is cleared.
-        *   **Playback Interruption**: All active playbacks (`mainPlayback`, `waitingPlayback`, etc.) are stopped via `_stopAllPlaybacks`.
-        *   **OpenAI Stream Interruption**: If an OpenAI stream is active (`call.openAIStreamingActive`), `sessionManager.stopOpenAISession` is called.
-        *   **Timer Invalidation**: The following speech and VAD related timers are explicitly cleared/invalidated:
-            *   `noSpeechBeginTimer`
-            *   `initialOpenAIStreamIdleTimer`
-            *   `speechEndSilenceTimer`
-            *   `vadMaxWaitAfterPromptTimer`
-            *   `vadActivationDelayTimer`
-            *   `vadInitialSilenceDelayTimer`
-            *   `maxRecognitionDurationTimer` (crucially, the overall call timeout is also stopped as DTMF is a distinct interaction path).
-        *   **DTMF Collection**: Digits are collected in `collectedDtmfDigits`.
+        *   This mode is activated if `DTMF_ENABLED` (or `appConfig.dtmfConfig.enableDtmfRecognition`) is true and a DTMF digit is received.
+        *   **Interruption**: Any ongoing audio playback (prompts) is stopped. All other recognition modes (`fixedDelay`, `Immediate`, `vad`) are halted. Any active OpenAI stream is terminated. Local VAD (`TALK_DETECT`) is removed from the channel.
+        *   **Timer Invalidation**: All speech recognition timers (`noSpeechBeginTimeoutSeconds`, `speechEndSilenceTimeoutSeconds`, `maxRecognitionDurationSeconds`) and VAD-specific timers (`vadInitialSilenceDelayTimer`, `vadMaxWaitAfterPromptTimer`, `bargeInDelaySeconds`) are cleared.
+        *   **DTMF Collection**: Received digits are collected.
         *   **DTMF Timers**:
-            *   `dtmfInterDigitTimer`: Restarts with each new digit. Configured by `dtmfInterdigitTimeoutSeconds`.
-            *   `dtmfFinalTimer`: Restarts with each new digit. Configured by `dtmfFinalTimeoutSeconds`. If this expires, collected digits are processed (set as `DTMF_RESULT` channel variable on the Asterisk channel), and the call is then cleaned up via `_fullCleanup`.
-        *   **Termination**: Input sequence also terminates if `dtmfTerminatorDigit` is received or `dtmfMaxDigits` is reached, leading to immediate processing and cleanup.
-    *   **Key Governing Timers**: `dtmfInterDigitTimer`, `dtmfFinalTimer`.
+            *   `dtmfInterDigitTimeoutSeconds` (from `DTMF_INTERDIGIT_TIMEOUT_SECONDS`): Time to wait for the next digit. If it expires, the collected DTMF sequence is considered complete.
+            *   `dtmfFinalTimeoutSeconds` (from `DTMF_FINAL_TIMEOUT_SECONDS`): Overall timeout for DTMF input. If active and expires, the collected DTMF sequence is considered complete.
+        *   **Termination**: DTMF input also finalizes if a `dtmfTerminatorDigit` (from `config.appConfig.dtmfConfig.dtmfTerminatorDigit`) is received or if `dtmfMaxDigits` (from `config.appConfig.dtmfConfig.dtmfMaxDigits`) is reached.
+        *   **Result**: The collected DTMF string is set as the `DTMF_RESULT` channel variable on the Asterisk channel. The application then typically ends the current interaction phase, allowing the Asterisk dialplan to proceed based on `DTMF_RESULT`.
+    *   **Key Configuration**: `DTMF_ENABLED`, `DTMF_INTERDIGIT_TIMEOUT_SECONDS`, `DTMF_FINAL_TIMEOUT_SECONDS`. Also `dtmfTerminatorDigit` and `dtmfMaxDigits` from `config/default.json`.
     *   **Standard Active Timers**: The common speech-related timers are NOT active during DTMF mode.
 
 ## Timeout Management
 
-Several key timers in `ari-client.ts` control call flow and error conditions. These timers are crucial for preventing stuck calls and managing user interaction latency.
+Key timers from `appConfig.appRecognitionConfig` and `appConfig.dtmfConfig` control call flow and prevent stuck calls:
 
-*   **`maxRecognitionDurationTimer`**:
-    *   **Purpose**: Sets an overall maximum duration for the entire call interaction, including speech recognition and OpenAI processing.
-    *   **Started**: In `onStasisStart` for most modes.
-    *   **Callback**: Calls `_fullCleanup` (typically with `hangupMainChannel=true`).
-    *   **Config**: `appConfig.appRecognitionConfig.maxRecognitionDurationSeconds`.
-    *   **Note**: This timer is cleared and invalidated if the call transitions into DTMF mode.
+*   **General Speech Recognition Timers (used by `fixedDelay`, `Immediate`, `vad` once OpenAI is active):**
+    *   `noSpeechBeginTimeoutSeconds`: Prevents indefinite waiting if OpenAI doesn't detect speech.
+    *   `speechEndSilenceTimeoutSeconds`: Determines end-of-utterance based on silence after speech.
+    *   `maxRecognitionDurationSeconds`: Overall cap on a single speech recognition turn.
 
-*   **`noSpeechBeginTimer`**:
-    *   **Purpose**: Times out if, after the OpenAI stream is activated, no speech (or first transcript event like `speech_started`) is detected from OpenAI within a configured period.
-    *   **Started**: In `_activateOpenAIStreaming`.
-    *   **Cleared**: By `_onOpenAISpeechStarted` (when OpenAI signals speech or first transcript arrives).
-    *   **Callback**: Calls `sessionManager.stopOpenAISession` and then `_fullCleanup`.
-    *   **Config**: `appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds`.
+*   **Mode-Specific Timers:**
+    *   `fixedDelay` Mode:
+        *   `bargeInDelaySeconds`: Delays start of OpenAI streaming.
+    *   `vad` Mode:
+        *   `vadInitialSilenceDelaySeconds` (`APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`): Delays VAD activation in `vadMode="vadMode"`.
+        *   `vadMaxWaitAfterPromptSeconds` (`APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`): Max time to wait for speech after a prompt (in `vadMode="afterPrompt"`) or after initial delays (in `vadMode="vadMode"`).
+    *   `DTMF` Mode:
+        *   `dtmfInterDigitTimeoutSeconds` (`DTMF_INTERDIGIT_TIMEOUT_SECONDS`): Timeout between DTMF digits.
+        *   `dtmfFinalTimeoutSeconds` (`DTMF_FINAL_TIMEOUT_SECONDS`): Overall timeout for the DTMF sequence.
 
-*   **`initialOpenAIStreamIdleTimer`**:
-    *   **Purpose**: Times out if the OpenAI stream is activated but appears unresponsive (no events, specifically no `speech_started` or transcript events) for a defined period. This helps detect early issues with the stream connection or OpenAI's responsiveness.
-    *   **Started**: In `_activateOpenAIStreaming`.
-    *   **Cleared**: By `_onOpenAISpeechStarted` (when first speech event or transcript arrives).
-    *   **Callback**: Calls `sessionManager.stopOpenAISession` and then `_fullCleanup`.
-    *   **Config**: `appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds` (Default: 10s).
-
-*   **`speechEndSilenceTimer`**:
-    *   **Purpose**: After an interim transcript is received from OpenAI, this timer starts. If it expires before a new transcript (interim or final) arrives, it indicates a period of silence from the user.
-    *   **Started/Restarted**: In `_onOpenAIInterimResult`.
-    *   **Cleared**: By a subsequent `_onOpenAIInterimResult` or `_onOpenAIFinalResult`.
-    *   **Callback**: Calls `sessionManager.stopOpenAISession`. The call might then end via other timeouts (e.g., `maxRecognitionDurationTimer`) or if the application logic decides no further interaction is needed.
-    *   **Config**: `appConfig.appRecognitionConfig.speechCompleteTimeoutSeconds`.
-
-*   **VAD Timers**:
-    *   `vadInitialSilenceDelayTimer`, `vadActivationDelayTimer`: Control startup delays in VAD `vadMode`.
-    *   `vadMaxWaitAfterPromptTimer`: Max time to wait for speech after a prompt in VAD `afterPrompt` mode. Callbacks typically lead to cleanup if no speech.
-
-*   **DTMF Timers**:
-    *   `dtmfInterDigitTimer`: Timeout between individual DTMF digits.
-    *   `dtmfFinalTimer`: Timeout after the last DTMF digit to finalize the input. Callback processes collected DTMF and cleans up.
-
-All these timers are cleared automatically as part of `_fullCleanup`.
+All these timers are managed in `ari-client.ts` and are cleared during call cleanup (`_fullCleanup`) or when transitioning between modes (e.g., speech to DTMF).
 
 ## Asterisk Dialplan Integration
 
