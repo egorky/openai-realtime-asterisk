@@ -14,7 +14,8 @@ import {
   OpenAIRealtimeAPIConfig
 } from './types';
 import { sendGenericEventToFrontend } from './server';
-import { logConversationToRedis } from './redis-client';
+import { logConversationToRedis, ConversationTurn } from './redis-client'; // Added ConversationTurn
+import { transcribeAudioAsync } from './async-transcriber'; // Import the async transcriber
 
 dotenv.config();
 
@@ -213,7 +214,6 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   arc.recognitionActivationMode = getVar(logger, channel, 'RECOGNITION_ACTIVATION_MODE', arc.recognitionActivationMode) as "fixedDelay" | "Immediate" | "vad" || "fixedDelay";
   arc.bargeInDelaySeconds = getVarAsFloat(logger, channel, 'BARGE_IN_DELAY_SECONDS', arc.bargeInDelaySeconds) ?? 0.2;
   arc.noSpeechBeginTimeoutSeconds = getVarAsFloat(logger, channel, 'NO_SPEECH_BEGIN_TIMEOUT_SECONDS', arc.noSpeechBeginTimeoutSeconds) ?? 5.0;
-  // SPEECH_END_SILENCE_TIMEOUT_SECONDS maps to speechEndSilenceTimeoutSeconds
   arc.speechEndSilenceTimeoutSeconds = getVarAsFloat(logger, channel, 'SPEECH_END_SILENCE_TIMEOUT_SECONDS', arc.speechEndSilenceTimeoutSeconds) ?? 1.5;
   arc.maxRecognitionDurationSeconds = getVarAsFloat(logger, channel, 'MAX_RECOGNITION_DURATION_SECONDS', arc.maxRecognitionDurationSeconds) ?? 30.0;
 
@@ -223,6 +223,16 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   arc.vadRecogActivation = getVar(logger, channel, 'APP_APPRECOGNITION_VADRECOGACTIVATION', arc.vadRecogActivation) as "vadMode" | "afterPrompt" || "vadMode";
   arc.vadMaxWaitAfterPromptSeconds = getVarAsFloat(logger, channel, 'APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS', arc.vadMaxWaitAfterPromptSeconds) ?? 10.0;
   arc.vadInitialSilenceDelaySeconds = getVarAsFloat(logger, channel, 'APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS', arc.vadInitialSilenceDelaySeconds) ?? 0.0;
+
+  // Async STT settings
+  arc.asyncSttEnabled = getVarAsBoolean(logger, channel, 'ASYNC_STT_ENABLED', arc.asyncSttEnabled) ?? false;
+  arc.asyncSttProvider = getVar(logger, channel, 'ASYNC_STT_PROVIDER', arc.asyncSttProvider) ?? "openai_whisper_api";
+  arc.asyncSttOpenaiModel = getVar(logger, channel, 'ASYNC_STT_OPENAI_MODEL', arc.asyncSttOpenaiModel) ?? "whisper-1";
+  arc.asyncSttOpenaiApiKey = getVar(logger, channel, 'ASYNC_STT_OPENAI_API_KEY', arc.asyncSttOpenaiApiKey); // No default, rely on main OPENAI_API_KEY if empty
+  arc.asyncSttLanguage = getVar(logger, channel, 'ASYNC_STT_LANGUAGE', arc.asyncSttLanguage); // Optional
+  arc.asyncSttAudioFormat = getVar(logger, channel, 'ASYNC_STT_AUDIO_FORMAT', arc.asyncSttAudioFormat) as any ?? "mulaw";
+  arc.asyncSttAudioSampleRate = getVarAsInt(logger, channel, 'ASYNC_STT_AUDIO_SAMPLE_RATE', arc.asyncSttAudioSampleRate) ?? 8000;
+
 
   // Keep existing greeting audio logic
   const initialGreetingEnv = getVar(logger, channel, 'INITIAL_GREETING_AUDIO_PATH', undefined);
@@ -315,6 +325,16 @@ interface CallResources {
   waitingPlaybackFailedHandler?: ((event: any, playback: Playback) => void) | null;
   ttsAudioChunks: string[];
   currentTtsResponseId?: string;
+  callerAudioBufferForCurrentTurn: Buffer[]; // For async STT
+  currentTurnStartTime: string; // Timestamp for the start of the current caller turn
+}
+
+export interface ActiveCallInfo {
+  callId: string;
+  callerId: string | undefined;
+  startTime: string | undefined;
+  status: string; // e.g., 'active', 'ringing', 'ended' - needs to be defined by CallResources state
+  // Add other relevant details if needed by the frontend for selection display
 }
 
 export class AriClientService implements AriClientInterface {
@@ -323,10 +343,63 @@ export class AriClientService implements AriClientInterface {
   private appOwnedChannelIds = new Set<string>();
   public logger: LoggerInstance;
   private currentPrimaryCallId: string | null = null;
+  private onActiveCallsChangedCallback: ((activeCalls: ActiveCallInfo[]) => void) | null = null;
 
   constructor() {
     this.logger = moduleLogger.child({ service: 'AriClientService' });
     if (!baseConfig) { throw new Error("Base configuration was not loaded."); }
+  }
+
+  public setActiveCallsChangedCallback(callback: (activeCalls: ActiveCallInfo[]) => void) {
+    this.onActiveCallsChangedCallback = callback;
+  }
+
+  public getFormattedActiveCalls(): ActiveCallInfo[] {
+    const formattedCalls: ActiveCallInfo[] = [];
+    this.activeCalls.forEach((call, callId) => {
+      // Determine a more precise status based on CallResources
+      let status = 'active'; // Default
+      if (call.isCleanupCalled) {
+        status = 'ended';
+      } else if (call.channel.state !== 'UP') { // Example: could be 'RING', 'RINGING' etc.
+        status = call.channel.state.toLowerCase();
+      }
+      // Ensure creationtime is accessed safely and converted
+      let startTimeISO: string | undefined = undefined;
+      try {
+        if (call.channel && typeof call.channel.creationtime === 'string') {
+          // creationtime is typically an ISO 8601 string from ari-client
+          // Attempt to parse it to ensure it's valid and then re-format or use directly
+          const dateObj = new Date(call.channel.creationtime);
+          if (!isNaN(dateObj.getTime())) {
+            startTimeISO = dateObj.toISOString();
+          } else {
+            call.callLogger.warn(`Could not parse creationtime string: ${call.channel.creationtime}`);
+            startTimeISO = call.channel.creationtime; // Use as is if parsing fails but it's a string
+          }
+        } else if (call.channel && call.channel.creationtime) {
+           // Fallback for other potential (though less likely for 'ari-client') types
+           call.callLogger.warn(`Unexpected type for creationtime: ${typeof call.channel.creationtime}. Value: ${call.channel.creationtime}`);
+           startTimeISO = String(call.channel.creationtime);
+        }
+      } catch (e: any) {
+        call.callLogger.warn(`Error processing creationtime for call ${callId}: ${e.message}`);
+      }
+
+      formattedCalls.push({
+        callId: callId,
+        callerId: call.channel?.caller?.number || call.channel?.name || 'Unknown',
+        startTime: startTimeISO,
+        status: status
+      });
+    });
+    return formattedCalls;
+  }
+
+  private notifyActiveCallsChanged() {
+    if (this.onActiveCallsChangedCallback) {
+      this.onActiveCallsChangedCallback(this.getFormattedActiveCalls());
+    }
   }
 
   // Method to get a call resource, used by the logger
@@ -338,12 +411,8 @@ export class AriClientService implements AriClientInterface {
     // Add callId to all events sent from AriClientService for easier tracking, if not already present
     const eventToSend = { ...event };
     if (event.payload && !event.payload.callId && this.currentPrimaryCallId) {
-      // Prefer callId from payload if it exists, otherwise use currentPrimaryCallId
-      // This is a bit heuristic; ideally events should be constructed with callId where relevant.
       eventToSend.payload.callId = event.payload.callId || this.currentPrimaryCallId;
     } else if (!event.payload && this.currentPrimaryCallId) {
-      // If no payload, but we have a primary callId, create a payload for it.
-      // This might not be ideal for all event types.
       // eventToSend.payload = { callId: this.currentPrimaryCallId };
     }
     sendGenericEventToFrontend(eventToSend);
@@ -351,41 +420,134 @@ export class AriClientService implements AriClientInterface {
 
   public getCurrentPrimaryCallId(): string | null { return this.currentPrimaryCallId; }
 
-  public async updateActiveCallConfig(callId: string, newConfigData: { instructions?: string, ttsVoice?: string, tools?: any[] }) {
+  public getSpecificCallConfiguration(callId: string): CallSpecificConfig | null {
+    const call = this.activeCalls.get(callId);
+    if (call && call.config) {
+      // Return a deep copy to prevent direct modification of the active config by the caller
+      return JSON.parse(JSON.stringify(call.config));
+    }
+    this.logger.warn(`getSpecificCallConfiguration: No active call or config found for callId ${callId}`);
+    return null;
+  }
+
+  public async updateActiveCallConfig(
+    callId: string,
+    newConfigData: Partial<OpenAIRealtimeAPIConfig & AppRecognitionConfig & DtmfConfig & { tools?: any[] }>
+    // Using Partial for all combined makes it easier to send subsets of config
+  ) {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) {
       this.logger.warn(`updateActiveCallConfig: Call ${callId} not active or cleanup called.`);
       return;
     }
-    call.callLogger.info(`Updating active call config for ${callId} with new data.`);
+    call.callLogger.info(`Updating active call config for ${callId} with new data:`, newConfigData);
+
     let configChanged = false;
-    if (newConfigData.instructions && call.config.openAIRealtimeAPI.instructions !== newConfigData.instructions) {
+
+    // OpenAI Config
+    if (newConfigData.instructions !== undefined && call.config.openAIRealtimeAPI.instructions !== newConfigData.instructions) {
       call.config.openAIRealtimeAPI.instructions = newConfigData.instructions;
       configChanged = true;
-      call.callLogger.info(`Instructions updated for call ${callId}.`);
     }
-    if (newConfigData.ttsVoice && call.config.openAIRealtimeAPI.ttsVoice !== newConfigData.ttsVoice) {
+    if (newConfigData.ttsVoice !== undefined && call.config.openAIRealtimeAPI.ttsVoice !== newConfigData.ttsVoice) {
       call.config.openAIRealtimeAPI.ttsVoice = newConfigData.ttsVoice;
       configChanged = true;
-      call.callLogger.info(`TTS Voice updated to "${newConfigData.ttsVoice}" for call ${callId}.`);
     }
-    if (newConfigData.tools) {
+    if (newConfigData.model !== undefined && call.config.openAIRealtimeAPI.model !== newConfigData.model) {
+      call.config.openAIRealtimeAPI.model = newConfigData.model;
+      configChanged = true;
+    }
+    // TODO: Add other configurable OpenAIRealtimeAPIConfig fields if UI supports them (e.g., language, responseModalities)
+
+    // AppRecognitionConfig
+    const arc = call.config.appConfig.appRecognitionConfig;
+    if (newConfigData.recognitionActivationMode !== undefined && arc.recognitionActivationMode !== newConfigData.recognitionActivationMode) {
+      arc.recognitionActivationMode = newConfigData.recognitionActivationMode;
+      configChanged = true;
+    }
+    if (newConfigData.bargeInDelaySeconds !== undefined && arc.bargeInDelaySeconds !== newConfigData.bargeInDelaySeconds) {
+      arc.bargeInDelaySeconds = newConfigData.bargeInDelaySeconds;
+      configChanged = true;
+    }
+    if (newConfigData.vadRecogActivation !== undefined && arc.vadRecogActivation !== newConfigData.vadRecogActivation) {
+      arc.vadRecogActivation = newConfigData.vadRecogActivation;
+      configChanged = true;
+    }
+    if (newConfigData.vadInitialSilenceDelaySeconds !== undefined && arc.vadInitialSilenceDelaySeconds !== newConfigData.vadInitialSilenceDelaySeconds) {
+      arc.vadInitialSilenceDelaySeconds = newConfigData.vadInitialSilenceDelaySeconds;
+      configChanged = true;
+    }
+    if (newConfigData.noSpeechBeginTimeoutSeconds !== undefined && arc.noSpeechBeginTimeoutSeconds !== newConfigData.noSpeechBeginTimeoutSeconds) {
+        arc.noSpeechBeginTimeoutSeconds = newConfigData.noSpeechBeginTimeoutSeconds; configChanged = true;
+    }
+    if (newConfigData.speechEndSilenceTimeoutSeconds !== undefined && arc.speechEndSilenceTimeoutSeconds !== newConfigData.speechEndSilenceTimeoutSeconds) {
+        arc.speechEndSilenceTimeoutSeconds = newConfigData.speechEndSilenceTimeoutSeconds; configChanged = true;
+    }
+    if (newConfigData.maxRecognitionDurationSeconds !== undefined && arc.maxRecognitionDurationSeconds !== newConfigData.maxRecognitionDurationSeconds) {
+        arc.maxRecognitionDurationSeconds = newConfigData.maxRecognitionDurationSeconds; configChanged = true;
+    }
+    if (newConfigData.vadSilenceThresholdMs !== undefined && arc.vadSilenceThresholdMs !== newConfigData.vadSilenceThresholdMs) {
+        arc.vadSilenceThresholdMs = newConfigData.vadSilenceThresholdMs; arc.vadConfig.vadSilenceThresholdMs = newConfigData.vadSilenceThresholdMs; configChanged = true;
+    }
+    if (newConfigData.vadTalkThreshold !== undefined && arc.vadTalkThreshold !== newConfigData.vadTalkThreshold) {
+        arc.vadTalkThreshold = newConfigData.vadTalkThreshold; configChanged = true;
+    }
+    if (newConfigData.vadMaxWaitAfterPromptSeconds !== undefined && arc.vadMaxWaitAfterPromptSeconds !== newConfigData.vadMaxWaitAfterPromptSeconds) {
+        arc.vadMaxWaitAfterPromptSeconds = newConfigData.vadMaxWaitAfterPromptSeconds; configChanged = true;
+    }
+    // Note: greetingAudioPath, asyncStt settings are also in AppRecognitionConfig but might be less frequently updated during a call.
+
+    // DtmfConfig
+    const dtmfConf = call.config.appConfig.dtmfConfig;
+    if (newConfigData.enableDtmfRecognition !== undefined && dtmfConf.enableDtmfRecognition !== newConfigData.enableDtmfRecognition) {
+      dtmfConf.enableDtmfRecognition = newConfigData.enableDtmfRecognition;
+      configChanged = true;
+    }
+    if (newConfigData.dtmfInterDigitTimeoutSeconds !== undefined && dtmfConf.dtmfInterDigitTimeoutSeconds !== newConfigData.dtmfInterDigitTimeoutSeconds) {
+      dtmfConf.dtmfInterDigitTimeoutSeconds = newConfigData.dtmfInterDigitTimeoutSeconds;
+      configChanged = true;
+    }
+    if (newConfigData.dtmfFinalTimeoutSeconds !== undefined && dtmfConf.dtmfFinalTimeoutSeconds !== newConfigData.dtmfFinalTimeoutSeconds) {
+      dtmfConf.dtmfFinalTimeoutSeconds = newConfigData.dtmfFinalTimeoutSeconds;
+      configChanged = true;
+    }
+    // TODO: dtmfMaxDigits, dtmfTerminatorDigit if configurable from UI
+
+    // Tools
+    if (newConfigData.tools !== undefined) {
       if (JSON.stringify(call.config.openAIRealtimeAPI.tools) !== JSON.stringify(newConfigData.tools)) {
         call.config.openAIRealtimeAPI.tools = newConfigData.tools;
         configChanged = true;
-        call.callLogger.info(`Tools configuration updated locally for call ${callId}.`);
       }
     }
+
     if (configChanged) {
-      call.callLogger.info(`Configuration for call ${callId} has been updated. New relevant values -> Instructions: "${call.config.openAIRealtimeAPI.instructions}", Voice: "${call.config.openAIRealtimeAPI.ttsVoice}"`);
+      call.callLogger.info(`Configuration for call ${callId} has been updated locally.`);
+      call.callLogger.info(`OpenAI Cfg -> Model: "${call.config.openAIRealtimeAPI.model}", Instr: "${call.config.openAIRealtimeAPI.instructions}", Voice: "${call.config.openAIRealtimeAPI.ttsVoice}"`);
+      call.callLogger.info(`Recog Cfg -> Mode: ${arc.recognitionActivationMode}, BargeInDelay: ${arc.bargeInDelaySeconds}, VAD InitialDelay: ${arc.vadInitialSilenceDelaySeconds}`);
+      call.callLogger.info(`DTMF Cfg -> Enabled: ${dtmfConf.enableDtmfRecognition}, InterDigit: ${dtmfConf.dtmfInterDigitTimeoutSeconds}`);
+
+      // Here is where logic to re-apply modes or timers would go if a change necessitates it.
+      // For example, if recognitionActivationMode changes, timers or VAD setup might need to be reset/re-applied.
+      // This is complex and depends on the state of the call. For now, we assume changes apply to the *next* turn or interaction.
+
+      // Send relevant parts of the config to OpenAI via session.update
       try {
         const sessionManagerModule = await import('./sessionManager');
-        sessionManagerModule.sendSessionUpdateToOpenAI(callId, call.config.openAIRealtimeAPI);
+        const openAIConfigUpdatePayload: Partial<OpenAIRealtimeAPIConfig> = {
+            instructions: call.config.openAIRealtimeAPI.instructions,
+            ttsVoice: call.config.openAIRealtimeAPI.ttsVoice,
+            model: call.config.openAIRealtimeAPI.model,
+            tools: call.config.openAIRealtimeAPI.tools,
+            // Add other fields if OpenAI Realtime API supports them in session.update
+        };
+        sessionManagerModule.sendSessionUpdateToOpenAI(callId, openAIConfigUpdatePayload);
+        call.callLogger.info(`Sent session.update to OpenAI for call ${callId} after config change.`);
       } catch (e: any) {
-        call.callLogger.error(`Error trying to send session.update to OpenAI for call ${callId} after config change: ${e.message}`);
+        call.callLogger.error(`Error trying to send session.update to OpenAI for call ${callId}: ${e.message}`);
       }
     } else {
-      call.callLogger.info(`No effective changes applied to call ${callId} configuration.`);
+      call.callLogger.info(`No effective changes applied to call ${callId} configuration from UI.`);
     }
   }
 
@@ -705,11 +867,52 @@ export class AriClientService implements AriClientInterface {
     if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
 
-    if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive) {
-        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript, error, or DTMF. Call may continue or timeout, or new turn logic might apply.`);
+    if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive && reason !== 'dtmf_interrupt' && reason !== 'cleanup_DTMF_INTERDIGIT_TIMEOUT' && reason !== 'cleanup_DTMF_FINAL_TIMEOUT' && reason !== 'cleanup_DTMF_TERMINATOR_RECEIVED' && reason !== 'cleanup_DTMF_MAX_DIGITS_REACHED') {
+        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript from OpenAI, error, or DTMF completion. Checking for async STT.`);
+
+        const appRecogConf = call.config.appConfig.appRecognitionConfig;
+        if (appRecogConf.asyncSttEnabled && call.callerAudioBufferForCurrentTurn.length > 0) {
+          call.callLogger.info(`Initiating async STT as OpenAI did not provide a transcript for the last turn.`);
+          logConversationToRedis(callId, {
+            actor: 'system',
+            type: 'system_message',
+            content: `No transcript from OpenAI (reason: ${reason}). Attempting asynchronous STT.`,
+            originalTurnTimestamp: call.currentTurnStartTime,
+          } as ConversationTurn).catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+
+          const audioBufferToTranscribe = Buffer.concat(call.callerAudioBufferForCurrentTurn);
+          transcribeAudioAsync({
+            callId: callId,
+            audioBuffer: audioBufferToTranscribe,
+            audioFormat: appRecogConf.asyncSttAudioFormat as any || 'mulaw', // Ensure type safety or default
+            sampleRate: appRecogConf.asyncSttAudioSampleRate || 8000,
+            config: call.config,
+            callLogger: call.callLogger,
+            originalTurnTimestamp: call.currentTurnStartTime,
+          }).catch(e => { // Catch errors from the async function itself if not handled internally
+            call.callLogger.error(`Async STT initiation failed: ${e.message}`);
+            logConversationToRedis(callId, {
+              actor: 'system',
+              type: 'error_message',
+              content: `Async STT process initiation error: ${e.message}`,
+              originalTurnTimestamp: call.currentTurnStartTime,
+            } as ConversationTurn).catch(redisErr => call.callLogger.error(`RedisLog Error: ${redisErr.message}`));
+          });
+        } else if (appRecogConf.asyncSttEnabled && call.callerAudioBufferForCurrentTurn.length === 0) {
+          call.callLogger.warn(`Async STT enabled, but no audio was buffered for the last turn.`);
+           logConversationToRedis(callId, {
+            actor: 'system',
+            type: 'system_message',
+            content: `No transcript from OpenAI (reason: ${reason}). Async STT enabled but no audio buffered for this turn.`,
+            originalTurnTimestamp: call.currentTurnStartTime,
+          } as ConversationTurn).catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+        }
     } else {
-        call.callLogger.info(`OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result, DTMF, error, or explicit stop).`);
+        call.callLogger.info(`OpenAI session ended (reason: ${reason}). This is likely part of a normal flow (final result from OpenAI, DTMF, error, or explicit stop). Async STT not triggered.`);
     }
+    // Always clear buffer for the next turn, regardless of whether async STT was triggered for this one
+    call.callerAudioBufferForCurrentTurn = [];
+    // currentTurnStartTime will be reset when the next turn actually begins (e.g., after bot speaks)
   }
 
   private async _stopAllPlaybacks(call: CallResources): Promise<void> {
@@ -1344,7 +1547,11 @@ export class AriClientService implements AriClientInterface {
       // it should typically not be reset here unless each turn has its own max duration.
       // For now, assuming it persists for the overall user speaking phase of the call.
 
-      call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${activationMode}`);
+      // Reset current turn start time for the new caller turn
+      call.currentTurnStartTime = new Date().toISOString();
+      call.callerAudioBufferForCurrentTurn = []; // Clear buffer for the new turn
+
+      call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${activationMode}. New turn start time: ${call.currentTurnStartTime}`);
 
       switch (activationMode) {
         case 'fixedDelay':
@@ -1426,9 +1633,12 @@ export class AriClientService implements AriClientInterface {
       vadMaxWaitAfterPromptTimer: null, vadActivationDelayTimer: null, vadInitialSilenceDelayTimer: null,
       ttsAudioChunks: [],
       currentTtsResponseId: undefined,
+      callerAudioBufferForCurrentTurn: [],
+      currentTurnStartTime: new Date().toISOString(),
     };
     this.activeCalls.set(callId, callResources);
-    this.currentPrimaryCallId = callId;
+    this.currentPrimaryCallId = callId; // Mantener la lógica de llamada primaria por ahora
+    this.notifyActiveCallsChanged(); // Notificar cambio
     callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}. Set as current primary call.`);
 
     try {
@@ -1483,14 +1693,24 @@ export class AriClientService implements AriClientInterface {
         const call = this.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
           call.callLogger.silly?.(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
+
+          // Accumulate audio for potential async STT if OpenAI doesn't provide a transcript
+          if (call.openAIStreamingActive && !call.dtmfModeActive) { // Only buffer if we are expecting speech for OpenAI
+            if (call.callerAudioBufferForCurrentTurn.length < (MAX_VAD_BUFFER_PACKETS * 2) ) { // Increased buffer size for full turn
+               call.callerAudioBufferForCurrentTurn.push(audioPayload);
+            } else {
+               call.callLogger.warn(`Caller audio buffer for async STT reached limit for call ${callId}. Further audio for this turn might be truncated.`);
+            }
+          }
+
           // Audio is sent to OpenAI only if the stream is active AND not in a VAD buffering phase waiting for flush confirmation.
           if (call.openAIStreamingActive && !call.isVADBufferingActive && !call.pendingVADBufferFlush && !call.isFlushingVADBuffer) {
             sessionManager.sendAudioToOpenAI(callId, audioPayload);
           }
-          // VAD buffering logic: buffer if VAD mode is active, initial silence delay hasn't passed, or stream hasn't started yet for VAD.
+          // VAD buffering logic (for pre-OpenAI stream buffering in VAD mode)
           if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode === 'vad' &&
-              call.isVADBufferingActive && // This flag is set true initially for VAD mode
-              !call.openAIStreamingActive) { // Buffer only if stream is not yet active
+              call.isVADBufferingActive &&
+              !call.openAIStreamingActive) {
             if (call.vadAudioBuffer.length < MAX_VAD_BUFFER_PACKETS) {
               call.vadAudioBuffer.push(audioPayload);
             } else {
@@ -1824,6 +2044,7 @@ export class AriClientService implements AriClientInterface {
 
     if (call) {
         this.activeCalls.delete(channelId);
+        this.notifyActiveCallsChanged(); // Notificar cambio
         sessionManager.handleAriCallEnd(channelId);
         resolvedLogger.info(`Call resources fully cleaned up and removed from active sessions.`);
     } else if (!isAriClosing) {
@@ -1840,10 +2061,18 @@ export class AriClientService implements AriClientInterface {
         const call = this.activeCalls.get(callId);
         if (call) {
             call.callLogger.warn(`ARI connection closed, forcing cleanup for this call.`);
-            this._fullCleanup(callId, true, "ARI_CONNECTION_CLOSED");
+            this._fullCleanup(callId, true, "ARI_CONNECTION_CLOSED"); // _fullCleanup will eventually call notifyActiveCallsChanged
         }
     }
-    this.activeCalls.clear();
+    // _fullCleanup->cleanupCallResources->activeCalls.delete already calls notifyActiveCallsChanged
+    // So, an explicit activeCalls.clear() and notify here might be redundant or cause issues if _fullCleanup is async.
+    // However, if _fullCleanup is robust, this ensures a final state.
+    // Let's rely on _fullCleanup to manage individual deletions and notifications.
+    // If any calls remained (e.g. _fullCleanup failed for some), then clear and notify.
+    if (this.activeCalls.size > 0) {
+        this.activeCalls.clear();
+        this.notifyActiveCallsChanged(); // Notify that all calls are gone
+    }
     this.appOwnedChannelIds.clear();
    }
   public async playbackAudio(channelId: string, audioPayloadB64?: string | null, mediaUri?: string | null): Promise<void> {

@@ -15,7 +15,14 @@
         "vadSilenceThresholdMs": 2500,
         "vadRecognitionActivationMs": 40
       },
-      "initialOpenAIStreamIdleTimeoutSeconds": 10
+      "initialOpenAIStreamIdleTimeoutSeconds": 10,
+      "asyncSttEnabled": false,
+      "asyncSttProvider": "openai_whisper_api",
+      "asyncSttOpenaiModel": "whisper-1",
+      "asyncSttOpenaiApiKey": "",
+      "asyncSttLanguage": "en",
+      "asyncSttAudioFormat": "mulaw",
+      "asyncSttAudioSampleRate": 8000
     },
     "dtmfConfig": {
       "dtmfEnabled": true,

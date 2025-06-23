@@ -59,6 +59,15 @@ export interface AppRecognitionConfig {
   greetingAudioPath?: string; // Still relevant
   speechCompleteTimeoutSeconds?: number; // Replaced by speechEndSilenceTimeoutSeconds
   vadActivationDelaySeconds?: number; // This seems specific and might not be directly in new .env, review usage
+
+  // Async STT Configuration
+  asyncSttEnabled?: boolean;
+  asyncSttProvider?: "openai_whisper_api" | "google_speech_v1" | string; // string for extensibility
+  asyncSttOpenaiModel?: string;
+  asyncSttOpenaiApiKey?: string;
+  asyncSttLanguage?: string; // Optional language hint
+  asyncSttAudioFormat?: "mulaw" | "wav" | "pcm_s16le" | string; // Format of audio passed to async transcriber
+  asyncSttAudioSampleRate?: number;
 }
 
 export interface DtmfConfig {

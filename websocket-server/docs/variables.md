@@ -199,11 +199,20 @@ El archivo `config/default.json` contiene una estructura jerárquica para estos 
   },
   "logging": {
     "level": "info" // silly, debug, info, warn, error
+  },
+  "asyncSttConfig": { // Placeholder, actual values are under appRecognitionConfig in default.json
+      "asyncSttEnabled": false,
+      "asyncSttProvider": "openai_whisper_api",
+      "asyncSttOpenaiModel": "whisper-1",
+      "asyncSttOpenaiApiKey": "", // Should take from OPENAI_API_KEY if not set
+      "asyncSttLanguage": "en",
+      "asyncSttAudioFormat": "mulaw",
+      "asyncSttAudioSampleRate": 8000
   }
 }
 ```
 
-### Variables de Entorno para Modos de Reconocimiento y VAD:
+### Variables de Entorno para Modos de Reconocimiento, VAD y STT Asíncrono:
 
 Estas variables de entorno controlan los nuevos modos de activación del reconocimiento y el comportamiento del VAD local. Sobrescriben los valores en `config.appConfig.appRecognitionConfig`.
 
@@ -268,9 +277,43 @@ Estas variables controlan la funcionalidad DTMF. Sobrescriben los valores en `co
     *   Default (en `default.json`): `5.0`
     *   Ejemplo: `DTMF_FINAL_TIMEOUT_SECONDS=4.0`
 
+### Variables de Entorno para Transcripción Asíncrona (Async STT):
+
+Estas variables controlan el comportamiento del servicio de transcripción de respaldo si OpenAI no proporciona una transcripción. Se configuran en `config.appConfig.appRecognitionConfig` y pueden ser sobrescritas por variables de entorno.
+
+*   **`ASYNC_STT_ENABLED`**:
+    *   Descripción: Habilita (`true`) o deshabilita (`false`) la transcripción asíncrona.
+    *   Default (en `default.json` bajo `appRecognitionConfig`): `false`
+    *   Ejemplo: `ASYNC_STT_ENABLED=true`
+*   **`ASYNC_STT_PROVIDER`**:
+    *   Descripción: Proveedor del servicio STT asíncrono.
+    *   Valores: `"openai_whisper_api"`, (futuro: `"google_speech_v1"`)
+    *   Default (en `default.json`): `"openai_whisper_api"`
+    *   Ejemplo: `ASYNC_STT_PROVIDER="openai_whisper_api"`
+*   **`ASYNC_STT_OPENAI_MODEL`**:
+    *   Descripción: Modelo a usar si `ASYNC_STT_PROVIDER` es `openai_whisper_api`.
+    *   Default (en `default.json`): `"whisper-1"`
+    *   Ejemplo: `ASYNC_STT_OPENAI_MODEL="whisper-1"`
+*   **`ASYNC_STT_OPENAI_API_KEY`**:
+    *   Descripción: Clave API para el proveedor de STT asíncrono (ej. OpenAI). Si está vacía y el proveedor es OpenAI, intentará usar la variable global `OPENAI_API_KEY`.
+    *   Default (en `default.json`): `""` (vacío)
+    *   Ejemplo: `ASYNC_STT_OPENAI_API_KEY="sk-anotherKeyForWhisper"`
+*   **`ASYNC_STT_LANGUAGE`**:
+    *   Descripción: Código de idioma opcional como pista para el modelo STT asíncrono (ej. `en`, `es`).
+    *   Default (en `default.json`): `"en"`
+    *   Ejemplo: `ASYNC_STT_LANGUAGE="es"`
+*   **`ASYNC_STT_AUDIO_FORMAT`**:
+    *   Descripción: Formato del audio que se pasa al transcriptor asíncrono (actualmente `mulaw` es el formato del buffer interno).
+    *   Default (en `default.json`): `"mulaw"`
+    *   Ejemplo: `ASYNC_STT_AUDIO_FORMAT="mulaw"` (Nota: el transcriptor podría necesitar convertirlo a WAV para APIs como Whisper).
+*   **`ASYNC_STT_AUDIO_SAMPLE_RATE`**:
+    *   Descripción: Tasa de muestreo del audio para el STT asíncrono.
+    *   Default (en `default.json`): `8000`
+    *   Ejemplo: `ASYNC_STT_AUDIO_SAMPLE_RATE=8000`
+
 ### Parámetros Notables en `default.json` (Actualizado):
 
-La estructura de `default.json` se ha actualizado para reflejar estas nuevas variables:
+La estructura de `default.json` se ha actualizado para reflejar estas nuevas variables (dentro de `appRecognitionConfig`):
 
 ```json
 {
@@ -293,7 +336,14 @@ La estructura de `default.json` se ha actualizado para reflejar estas nuevas var
         "vadRecognitionActivationMs": 40 // Umbral de duración de habla para TALK_DETECT, no directamente el de energía.
                                          // Este valor podría necesitar una variable de entorno dedicada si se quiere configurar.
       },
-      "initialOpenAIStreamIdleTimeoutSeconds": 10 // Tiempo de espera si el stream de OpenAI está inactivo al inicio.
+      "initialOpenAIStreamIdleTimeoutSeconds": 10, // Tiempo de espera si el stream de OpenAI está inactivo al inicio.
+      "asyncSttEnabled": false,
+      "asyncSttProvider": "openai_whisper_api",
+      "asyncSttOpenaiModel": "whisper-1",
+      "asyncSttOpenaiApiKey": "",
+      "asyncSttLanguage": "en",
+      "asyncSttAudioFormat": "mulaw",
+      "asyncSttAudioSampleRate": 8000
     },
     "dtmfConfig": {
       "enableDtmfRecognition": true, // Corresponde a DTMF_ENABLED
