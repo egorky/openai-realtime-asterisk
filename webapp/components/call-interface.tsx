@@ -128,7 +128,8 @@ const CallInterface = () => {
 
         <div className="grid grid-cols-12 gap-4 h-full">
           {/* Left Column */}
-          <div className="col-span-3 flex flex-col h-full overflow-hidden">
+          {/* REMOVED overflow-hidden to allow child ScrollArea to manage its own overflow */}
+          <div className="col-span-3 flex flex-col h-full">
             <SessionConfigurationPanel
               callStatus={logsWsStatus}
               selectedCallId={selectedCallId}
