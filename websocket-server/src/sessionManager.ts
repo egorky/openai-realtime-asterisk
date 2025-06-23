@@ -83,15 +83,24 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     existingSession.config = config;
     sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI);
     return;
-  } else if (existingSession && existingSession.ws && !isOpen(existingSession.ws)) { // Added existingSession.ws check
-    // Now that we've confirmed existingSession.ws exists, existingSession.ws.readyState is safe to access.
-    sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} exists but WebSocket is not open (state: ${existingSession.ws.readyState}). Will attempt to create a new one.`);
-    activeOpenAISessions.delete(callId);
-  } else if (existingSession && !existingSession.ws) { // Case where session object exists but ws is somehow null/undefined
+  } else if (existingSession && existingSession.ws) {
+    // We know existingSession.ws exists here. Now check if it's NOT open.
+    if (!isOpen(existingSession.ws)) {
+        sessionLogger.warn(`SessionManager: OpenAI Realtime session for ${callId} exists but WebSocket is not open (state: ${existingSession.ws.readyState}). Will attempt to create a new one.`);
+        activeOpenAISessions.delete(callId);
+    } else {
+        // This case should ideally not be reached if the first `if` condition is `isOpen(existingSession.ws)`
+        // but as a fallback, if it's somehow not caught by the first `if` but `isOpen` is true here, it's an anomaly.
+        sessionLogger.warn(`SessionManager: Anomaly - session for ${callId} exists, ws exists, and isOpen is true, but not caught by first check. Treating as open.`);
+        existingSession.config = config;
+        sendSessionUpdateToOpenAI(callId, config.openAIRealtimeAPI);
+        return;
+    }
+  } else if (existingSession && !existingSession.ws) {
     sessionLogger.warn(`SessionManager: OpenAI Realtime session data for ${callId} exists but WebSocket object is missing. Will attempt to create a new one.`);
     activeOpenAISessions.delete(callId);
   }
-  else {
+  else { // No existingSession at all
      sessionLogger.info(`SessionManager: No active OpenAI session found for ${callId}. Creating new session.`);
   }
 
