@@ -2,12 +2,15 @@ import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
 import { CallSpecificConfig, OpenAIRealtimeAPIConfig, AriClientInterface } from "./types";
 import { AriClientService } from "./ari-client"; // Presumiblemente para tipos o instancias si es necesario
+import { executeTool, OpenAIToolCall, ToolResultPayload } from './toolExecutor';
+
 
 interface OpenAISession {
   ws: WebSocket;
   ariClient: AriClientInterface; // Usar la interfaz aquí
   callId: string;
   config: CallSpecificConfig;
+  processingToolCalls?: boolean; // Para rastrear si estamos en un ciclo de herramientas
 }
 
 const activeOpenAISessions = new Map<string, OpenAISession>();
@@ -186,15 +189,105 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
           case 'session.updated':
             msgSessionLogger.info(`[${callId}] OpenAI session.updated. Input: ${serverEvent.session?.input_audio_format}, Output: ${serverEvent.session?.output_audio_format}, Voice: ${serverEvent.session?.voice}`);
             break;
+
+          case 'response.delta': {
+            if (serverEvent.delta && serverEvent.delta.part) {
+              const part = serverEvent.delta.part;
+              if (part.type === 'text' && typeof part.text === 'string') {
+                // Este es el texto de la respuesta del LLM.
+                // _onOpenAIInterimResult se encarga de acumularlo.
+                // No es necesario loguear aquí si ya se loguea en _onOpenAIInterimResult.
+                // msgSessionLogger.debug(`[${callId}] OpenAI response.delta (text): "${part.text}"`);
+                currentAriClient._onOpenAIInterimResult(callId, part.text);
+              } else if (part.type === 'tool_calls' && Array.isArray(part.tool_calls) && part.tool_calls.length > 0) {
+                msgSessionLogger.info(`[${callId}] OpenAI response.delta (tool_calls) received. Count: ${part.tool_calls.length}`);
+                if (session) session.processingToolCalls = true; // Marcar que estamos procesando herramientas
+
+                const toolCallsFromOpenAI: OpenAIToolCall[] = part.tool_calls.map((tc: any) => ({
+                  call_id: tc.id,
+                  type: tc.type,
+                  function: {
+                    name: tc.function.name,
+                    arguments: tc.function.arguments,
+                  }
+                }));
+
+                Promise.allSettled(
+                  toolCallsFromOpenAI.map(tc =>
+                    executeTool(tc, callId, msgSessionLogger, session.config)
+                  )
+                ).then(results => {
+                  if (!isOpen(session.ws)) {
+                    msgSessionLogger.warn(`[${callId}] WebSocket closed before tool results could be sent.`);
+                    return;
+                  }
+                  const toolResultsPayload: ToolResultPayload[] = [];
+                  results.forEach(settledResult => {
+                    if (settledResult.status === 'fulfilled') {
+                      toolResultsPayload.push(settledResult.value);
+                    } else {
+                      msgSessionLogger.error(`[${callId}] executeTool promise was rejected:`, settledResult.reason);
+                      // Podríamos crear un ToolResultPayload de error aquí si un tool_call_id específico falló
+                      // y OpenAI espera una respuesta para cada tool_call_id.
+                      // Por ahora, solo incluimos los exitosos.
+                    }
+                  });
+
+                  if (toolResultsPayload.length > 0) {
+                    msgSessionLogger.info(`[${callId}] Sending ${toolResultsPayload.length} tool results back to OpenAI.`);
+                    const toolResultsEvent = {
+                      type: "conversation.item.create",
+                      item: { type: "tool_results", tool_results: toolResultsPayload }
+                    };
+                    session.ws.send(JSON.stringify(toolResultsEvent));
+                    msgSessionLogger.debug(`[${callId}] OpenAI Realtime: Sent conversation.item.create (tool_results): ${JSON.stringify(toolResultsEvent)}`);
+
+                    const responseCreateEvent = {
+                      type: "response.create",
+                      response: { modalities: session.config.openAIRealtimeAPI?.responseModalities || ["audio", "text"] }
+                    };
+                    session.ws.send(JSON.stringify(responseCreateEvent));
+                    msgSessionLogger.debug(`[${callId}] OpenAI Realtime: Sent response.create after tool_results.`);
+                  } else {
+                     msgSessionLogger.warn(`[${callId}] No tool results were successfully generated or all failed. Not sending tool_results to OpenAI.`);
+                     if (session) session.processingToolCalls = false; // Resetear si no se envían resultados
+                     // Considerar si se debe enviar un error o finalizar el turno aquí.
+                  }
+                }).catch(error => {
+                    msgSessionLogger.error(`[${callId}] Critical error in Promise.allSettled for tool execution: ${error}`);
+                    if (session) session.processingToolCalls = false;
+                    currentAriClient._onOpenAIError(callId, new Error("Failed to process tool calls."));
+                });
+                // Si hemos manejado tool_calls, no deberíamos procesar más partes de este delta como texto normal.
+                // El flujo de 'response.text.delta' separado se encargará de los deltas de texto.
+              } else if (part.type === 'tool_calls' && Array.isArray(part.tool_calls) && part.tool_calls.length === 0) {
+                // OpenAI indicó tool_calls pero la lista está vacía. Esto es inusual.
+                msgSessionLogger.warn(`[${callId}] OpenAI response.delta (tool_calls) received but the tool_calls array is empty.`);
+              }
+            }
+            break;
+          }
+          // El case 'response.text.delta' original ya no es necesario si 'response.delta' con part.type === 'text' lo maneja.
+          // Lo comentaré para evitar doble procesamiento. Si hay problemas, se puede restaurar.
+          /*
           case 'response.text.delta':
             if (serverEvent.delta && typeof serverEvent.delta.text === 'string') {
               currentAriClient._onOpenAIInterimResult(callId, serverEvent.delta.text);
             }
             break;
+          */
           case 'response.done':
-            msgSessionLogger.info(`[${callId}] OpenAI response.done. ID: ${serverEvent.response?.id}`);
-            let finalTranscriptText = "";
-             if (serverEvent.response?.output?.length > 0) {
+            msgSessionLogger.info(`[${callId}] OpenAI response.done. ID: ${serverEvent.response?.id}. Current processingToolCalls: ${session.processingToolCalls || false}`);
+
+            if (session.processingToolCalls) {
+              msgSessionLogger.info(`[${callId}] response.done received while/after processing tool calls. Resetting flag, awaiting final LLM response or audio.`);
+              session.processingToolCalls = false;
+              // No llamar a _onOpenAIFinalResult aquí, porque la respuesta final de texto/audio vendrá en eventos subsiguientes.
+              // 'response.done' aquí significa que OpenAI terminó de procesar los tool_results y *comenzará* a generar la respuesta final.
+            } else {
+              // Esta es la respuesta final al usuario (o un turno sin herramientas)
+              let finalTranscriptText = "";
+              if (serverEvent.response?.output?.length > 0) {
                 const textOutput = serverEvent.response.output.find((item: any) => item.type === 'text_content' || (item.content && item.content.find((c:any) => c.type === 'text')));
                 if (textOutput) {
                     if (textOutput.type === 'text_content') finalTranscriptText = textOutput.text;
