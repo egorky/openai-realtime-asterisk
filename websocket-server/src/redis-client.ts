@@ -82,15 +82,16 @@ try {
 export interface ConversationTurn {
   timestamp: string;
   actor: "caller" | "bot" | "system" | "error" | "dtmf" | "tool_call" | "tool_response";
-  type: "transcript" | "tts_prompt" | "dtmf_input" | "error_message" | "system_message" | "tool_log";
+  type: "transcript" | "tts_prompt" | "dtmf_input" | "error_message" | "system_message" | "tool_log" | "async_transcript_result";
   content: string;
   tool_name?: string;
   callId?: string; // Optional, as it's part of the key
+  originalTurnTimestamp?: string; // For correlating async transcripts
 }
 
 export async function logConversationToRedis(
   callId: string,
-  turnData: Omit<ConversationTurn, 'timestamp' | 'callId'>
+  turnData: Omit<ConversationTurn, 'timestamp' | 'callId'> & { originalTurnTimestamp?: string } // Allow originalTurnTimestamp
 ): Promise<void> {
   if (!redisClient || !redisAvailable) {
     // console.warn('[RedisClient] Redis client not available. Skipping conversation log for callId:', callId);
@@ -138,3 +139,25 @@ export async function disconnectRedis(): Promise<void> {
 // logConversationToRedis('some-call-id', { actor: 'caller', type: 'transcript', content: 'Hello world' });
 // logConversationToRedis('some-call-id', { actor: 'bot', type: 'tts_prompt', content: 'Hi there, how can I help?' });
 // logConversationToRedis('some-call-id', { actor: 'dtmf', type: 'dtmf_input', content: '1234#' });
+
+export async function getConversationHistory(callId: string): Promise<ConversationTurn[] | null> {
+  if (!redisClient || !redisAvailable) {
+    console.warn('[RedisClient] Redis client not available. Cannot get conversation history for callId:', callId);
+    return null;
+  }
+
+  const redisKey = `conversation:${callId}`;
+  try {
+    const historyJsonStrings = await redisClient.lrange(redisKey, 0, -1);
+    if (historyJsonStrings && historyJsonStrings.length > 0) {
+      const historyTurns = historyJsonStrings.map(jsonString => JSON.parse(jsonString) as ConversationTurn);
+      console.debug(`[RedisClient] Retrieved ${historyTurns.length} turns from Redis for callId ${callId}.`);
+      return historyTurns;
+    }
+    console.debug(`[RedisClient] No conversation history found in Redis for callId ${callId}.`);
+    return []; // Return empty array if key exists but no items, or if key doesn't exist (lrange returns empty list)
+  } catch (error: any) {
+    console.error(`[RedisClient] Error getting conversation history from Redis for callId ${callId}:`, error.message);
+    return null;
+  }
+}

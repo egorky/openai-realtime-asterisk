@@ -1,18 +1,29 @@
 import { Item } from "@/components/types";
 
-// Definir el tipo para la información de la llamada ARI
+// Define the structure of the ARI call information (might be for a single primary/selected call)
 export interface AriCallInfo {
-  status: "idle" | "active" | "ended" | "error"; // Added 'error' status
+  status: "idle" | "active" | "ringing" | "ended" | "error";
   callId: string | null;
   callerId: string | null;
-  errorMessage?: string; // Optional error message
-  reason?: string; // Optional reason for ending
+  errorMessage?: string;
+  reason?: string;
 }
+
+// Define the structure for items in the active calls list from the backend
+export interface ActiveCallListItem {
+  callId: string;
+  callerId: string | undefined;
+  startTime: string | undefined;
+  status: string; // From backend: 'active', 'ringing', 'ended', etc.
+}
+
 
 export default function handleRealtimeEvent(
   ev: any,
   setItems: React.Dispatch<React.SetStateAction<Item[]>>,
-  setAriCallInfo: React.Dispatch<React.SetStateAction<AriCallInfo>> // Nuevo setter
+  setAriCallInfo: React.Dispatch<React.SetStateAction<AriCallInfo>>,
+  setActiveCallsList?: React.Dispatch<React.SetStateAction<ActiveCallListItem[]>>,
+  currentSelectedCallId?: string | null // Nuevo parámetro
 ) {
   // Helper function to create a new item with default fields
   function createNewItem(base: Partial<Item>): Item {
@@ -56,25 +67,58 @@ export default function handleRealtimeEvent(
 
 
   switch (eventType) {
-    case "ari_call_status_update": {
+    case "active_calls_list": {
+      if (setActiveCallsList && Array.isArray(payload)) {
+        console.log("Active Calls List Update:", payload);
+        setActiveCallsList(payload);
+      } else if (!setActiveCallsList) {
+          console.warn("Received active_calls_list but setActiveCallsList is not provided to handleRealtimeEvent.");
+      } else {
+        console.warn("Received active_calls_list with invalid payload:", payload);
+      }
+      break;
+    }
+    case "ari_call_status_update": { // This event might update a specific call in the list or the main selected call.
       if (payload) {
-        console.log("ARI Call Status Update:", payload);
-        setAriCallInfo({
-          status: payload.status,
-          callId: payload.callId,
-          callerId: payload.callerId,
-          errorMessage: payload.errorMessage,
-          reason: payload.reason,
+        console.log("ARI Call Status Update (individual):", payload);
+        // Option 1: Update the global/primary AriCallInfo if it matches.
+        // This might be relevant if the UI always shows one "main" call's status prominently.
+        setAriCallInfo(prev => {
+          if (prev.callId === payload.callId || !prev.callId) { // Update if it's the current primary or no primary yet
+            return {
+              status: payload.status,
+              callId: payload.callId,
+              callerId: payload.callerId,
+              errorMessage: payload.errorMessage,
+              reason: payload.reason,
+            };
+          }
+          return prev; // Otherwise, keep the existing primary call info
         });
-        // If call ended or errored, maybe clear transcription items or add a system message
+
+        // Option 2: Update the specific call in the activeCallsList.
+        // This is more robust for a multi-call display.
+        if (setActiveCallsList) {
+            setActiveCallsList(prevList =>
+                prevList.map(call =>
+                    call.callId === payload.callId
+                        ? { ...call, status: payload.status, callerId: payload.callerId, errorMessage: payload.errorMessage, reason: payload.reason }
+                        : call
+                )
+            );
+        }
+
+        // If call ended or errored, maybe clear transcription items or add a system message *if this is the selected call*.
+        // This logic needs to be tied to a selectedCallId state in CallInterface.
+        // For now, let's keep the original system message logic but it should be conditional.
         if (payload.status === "ended" || payload.status === "error") {
           setItems((prev) => [
             ...prev,
             createNewItem({
-              id: `call_status_${Date.now()}`,
-              type: "system_message", // Custom type for system messages
+              id: `call_status_${payload.callId}_${Date.now()}`, // Include callId in message id
+              type: "system_message",
               role: "system",
-              content: [{ type: "text", text: `Call ${payload.status}. ${payload.reason ? `Reason: ${payload.reason}` : ''} ${payload.errorMessage ? `Error: ${payload.errorMessage}`: ''}`.trim() }],
+              content: [{ type: "text", text: `Call ${payload.callId} ${payload.status}. ${payload.reason ? `Reason: ${payload.reason}` : ''} ${payload.errorMessage ? `Error: ${payload.errorMessage}`: ''}`.trim() }],
               status: "completed",
             }),
           ]);
@@ -82,10 +126,36 @@ export default function handleRealtimeEvent(
       }
       break;
     }
-    case "session.created": {
+    case "session.created": { // This typically implies a new OpenAI session, often tied to a new call context.
       setItems([]);
-      // Reset ARI call info as well, as a new OpenAI session implies a new context
+      // Reset global/primary ARI call info. The specific call will get its status via active_calls_list or ari_call_status_update.
       setAriCallInfo({ status: "idle", callId: null, callerId: null });
+      // It might also be prudent to clear the active calls list here if a "session.created" means a full backend reset,
+      // but that depends on backend logic. For now, assume it's per-call or global.
+      // if (setActiveCallsList) setActiveCallsList([]);
+      break;
+    }
+    case "conversation_history": {
+      if (payload && Array.isArray(payload) && ev.callId === currentSelectedCallId) {
+        console.log(`Received conversation history for selected call ${ev.callId}:`, payload);
+        // Convert backend ConversationTurn[] to frontend Item[]
+        // This mapping might need to be more sophisticated depending on type differences
+        const historyItems: Item[] = payload.map((turn: any) => ({ // 'any' for backend turn type flexibility
+          id: `${turn.actor}_${turn.timestamp}_${Math.random().toString(36).substring(7)}`, // Create a unique enough ID
+          object: "realtime.item", // Or map from turn if available
+          type: turn.type === "tts_prompt" ? "message" : (turn.type === "transcript" ? "message" : turn.type), // Map backend types to frontend types
+          role: turn.actor === "dtmf" ? "system" : turn.actor, // Map 'dtmf' actor to 'system' role for display
+          content: [{ type: "text", text: turn.content }],
+          status: "completed",
+          timestamp: new Date(turn.timestamp).toLocaleTimeString(),
+          // Potentially map other fields if Item has them (e.g. call_id for function calls)
+        }));
+        setItems(historyItems);
+      } else if (ev.callId !== currentSelectedCallId) {
+        console.log(`Received conversation history for non-selected call ${ev.callId}. Ignoring.`);
+      } else {
+        console.warn("Received conversation_history with invalid payload or mismatched callId:", ev);
+      }
       break;
     }
     case "config_update_ack": {

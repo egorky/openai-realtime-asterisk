@@ -130,7 +130,17 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `REDIS_PASSWORD`: Password for Redis authentication (if needed).
 *   `REDIS_CONVERSATION_TTL_SECONDS`: Time-to-live (in seconds) for conversation logs stored in Redis. Defaults to `3600` (1 hour).
 
-If Redis is configured, the server will log conversation turns (caller speech, bot speech, DTMF, system messages) to Redis lists, keyed by `conversation:<callId>`.
+If Redis is configured, the server will log conversation turns (caller speech, bot speech, DTMF, system messages, errors) to Redis lists, keyed by `conversation:<callId>`. Each turn is stored as a JSON string with fields like `timestamp`, `actor`, `type`, and `content`. If asynchronous STT is enabled and OpenAI does not provide a transcript, the system will attempt to transcribe the caller's audio using a secondary STT service and log the result.
+
+### Asynchronous Speech-to-Text (Async STT) Configuration (Optional)
+These settings control the fallback STT service if OpenAI doesn't provide a transcript for the caller's audio.
+*   `ASYNC_STT_ENABLED`: Set to `true` to enable asynchronous STT. Defaults to `false`.
+*   `ASYNC_STT_PROVIDER`: Specifies the STT provider. Currently supports `openai_whisper_api`. Defaults to `openai_whisper_api`.
+*   `ASYNC_STT_OPENAI_MODEL`: The OpenAI Whisper model to use (e.g., `whisper-1`). Defaults to `whisper-1`.
+*   `ASYNC_STT_OPENAI_API_KEY`: API key for the async STT provider. If using OpenAI Whisper and this is empty, it will try to use the main `OPENAI_API_KEY`.
+*   `ASYNC_STT_LANGUAGE`: Optional language code (e.g., `en`, `es`) as a hint for the STT model.
+*   `ASYNC_STT_AUDIO_FORMAT`: The format of the audio buffer passed to the async transcriber. Defaults to `mulaw`.
+*   `ASYNC_STT_AUDIO_SAMPLE_RATE`: The sample rate of the audio buffer. Defaults to `8000`.
 
 ## Audio Handling
 
