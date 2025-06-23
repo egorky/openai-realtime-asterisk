@@ -1136,8 +1136,7 @@ export class AriClientService implements AriClientInterface {
         const mainPlaybackId = call.mainPlayback.id; // Store ID before any async op
         try {
             const currentMainPlaybackState = await this.client?.playbacks.get({playbackId: mainPlaybackId});
-            // Ensure call.mainPlayback hasn't been changed by another async operation before checking its state or assigning it.
-            if (call.mainPlayback && call.mainPlayback.id === mainPlaybackId && !call.promptPlaybackStoppedForInterim) { // Re-check promptPlaybackStoppedForInterim
+            if (call.mainPlayback && call.mainPlayback.id === mainPlaybackId && !call.promptPlaybackStoppedForInterim) {
                 if (currentMainPlaybackState && currentMainPlaybackState.state === 'playing') {
                     playbackToStop = call.mainPlayback;
                     playbackType = "main greeting";
@@ -1150,10 +1149,7 @@ export class AriClientService implements AriClientInterface {
             }
         } catch (e:any) {
             call.callLogger.warn(`VAD: Error getting state for mainPlayback (ID: ${mainPlaybackId}): ${e.message}. Assuming it's not stoppable or gone.`);
-            // If there's an error fetching state (e.g., playback already gone from ARI), clear our reference if it still matches.
-            if (call.mainPlayback && call.mainPlayback.id === mainPlaybackId) {
-                call.mainPlayback = undefined;
-            }
+            if (call.mainPlayback && call.mainPlayback.id === mainPlaybackId) call.mainPlayback = undefined;
         }
     }
 
@@ -1162,7 +1158,7 @@ export class AriClientService implements AriClientInterface {
         const waitingPlaybackId = call.waitingPlayback.id;
         try {
             const currentWaitingPlaybackState = await this.client?.playbacks.get({playbackId: waitingPlaybackId});
-            if (call.waitingPlayback && call.waitingPlayback.id === waitingPlaybackId && !call.promptPlaybackStoppedForInterim) { // Re-check promptPlaybackStoppedForInterim
+            if (call.waitingPlayback && call.waitingPlayback.id === waitingPlaybackId && !call.promptPlaybackStoppedForInterim) {
                 if (currentWaitingPlaybackState && currentWaitingPlaybackState.state === 'playing') {
                     playbackToStop = call.waitingPlayback;
                     playbackType = "OpenAI TTS";
@@ -1196,9 +1192,6 @@ export class AriClientService implements AriClientInterface {
             call.callLogger.warn(`VAD: Error stopping ${playbackType} playback (ID: ${playbackToStopId}) for barge-in: ${e.message}`);
         }
       } finally {
-        // Always clear the local reference if it matches the one we tried to stop.
-        // This handles cases where stop() might throw an error for an already-gone playback,
-        // but we still need to ensure our local state reflects it's no longer the active playback.
         if (call.mainPlayback && call.mainPlayback.id === playbackToStopId) {
             call.mainPlayback = undefined;
         } else if (call.waitingPlayback && call.waitingPlayback.id === playbackToStopId) {
@@ -1209,11 +1202,22 @@ export class AriClientService implements AriClientInterface {
 
     // Clear timers that were waiting for this speech event
     if(call.vadMaxWaitAfterPromptTimer) { clearTimeout(call.vadMaxWaitAfterPromptTimer); call.vadMaxWaitAfterPromptTimer = null; }
-    // vadInitialSilenceDelayTimer should have already expired if we are here in 'vadMode' post-delay.
+
+    // If speech barge-in happened (playbackToStop was defined and stopped),
+    // we need to ensure any VAD audio captured *during* that playback is flagged for sending.
+    if (playbackToStop) { // This implies a barge-in occurred
+        call.pendingVADBufferFlush = true;
+        call.callLogger.info(`VAD: Barge-in on ${playbackType} detected. Flagging VAD buffer for flush.`);
+    }
 
     // Activate OpenAI stream
     this._activateOpenAIStreaming(call.channel.id, "vad_channel_talking_started");
-    call.pendingVADBufferFlush = true; // Buffer VAD audio if any was captured before this point
+    // Note: pendingVADBufferFlush is now set above if barge-in happened.
+    // If this ChannelTalkingStarted is not a barge-in (e.g. speech after prompt),
+    // and VAD buffering was active, it should also be flushed.
+    // The existing logic in _activateOpenAIStreaming handles call.pendingVADBufferFlush.
+    // We might need to ensure isVADBufferingActive is true leading up to this if it's not a barge-in but VAD-triggered.
+    // However, isVADBufferingActive is set in playbackAudio for TTS, and in onStasisStart for initial VAD.
 
     // Once speech is confirmed and stream is activating, remove TALK_DETECT. OpenAI will handle VAD.
     try {
@@ -1314,16 +1318,21 @@ export class AriClientService implements AriClientInterface {
       // Reset flags for the new turn
       call.speechHasBegun = false;
       call.finalTranscription = "";
-      call.openAIStreamingActive = false; // Ensure it's false before trying to activate for user.
-      call.vadRecognitionTriggeredAfterInitialDelay = false; // Reset VAD trigger for the new turn.
-      call.promptPlaybackStoppedForInterim = false; // Reset barge-in flag for prompts.
+      // CRITICAL: Ensure openAIStreamingActive is false now that bot's turn is ending.
+      call.openAIStreamingActive = false;
+      call.vadRecognitionTriggeredAfterInitialDelay = false;
+      call.promptPlaybackStoppedForInterim = false;
+      call.isVADBufferingActive = false; // Ensure VAD buffering is reset if it was on
+      call.pendingVADBufferFlush = false;
+      call.isFlushingVADBuffer = false;
 
-      // Clear previous turn's speech timers
-      if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
-      if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
-      // MaxRecognitionDurationTimer for the *overall interaction* might still be running or might be reset/re-evaluated here.
-      // For now, let's assume it continues unless a new interaction "turn" starts a fresh one.
-      // The existing onStasisStart sets a global one. This might need refinement for multi-turn.
+      // Clear previous turn's speech timers explicitly
+      if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; call.callLogger.debug("Cleared noSpeechBeginTimer post-TTS.");}
+      if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; call.callLogger.debug("Cleared speechEndSilenceTimer post-TTS.");}
+      if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; call.callLogger.debug("Cleared initialOpenAIStreamIdleTimer post-TTS.");}
+      // The maxRecognitionDurationTimer is for the whole call interaction with user speech,
+      // it should typically not be reset here unless each turn has its own max duration.
+      // For now, assuming it persists for the overall user speaking phase of the call.
 
       call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${activationMode}`);
 
@@ -1847,25 +1856,30 @@ export class AriClientService implements AriClientInterface {
     }
 
     // Ensure TALK_DETECT is active before playing TTS if barge-in is desired
-    // This applies if any form of VAD-based barge-in is expected during this playback.
-    // We'll make it conditional based on a general "barge-in enabled" idea, which might come from a new config
-    // or be implicit in the modes. For now, let's assume if not in DTMF mode, VAD barge-in is possible.
-    if (!call.dtmfModeActive) { // Only set TALK_DETECT if not in DTMF mode.
+    const appRecogConf = call.config.appConfig.appRecognitionConfig;
+    if (!call.dtmfModeActive && appRecogConf.recognitionActivationMode === 'vad') {
+        // Only set TALK_DETECT if not in DTMF mode AND current overall mode is 'vad'.
+        // For 'fixedDelay' or 'Immediate', barge-in during TTS via VAD is not standard; DTMF is the primary interrupt.
+        // If VAD-based barge-in is desired for those modes too, this condition needs adjustment.
         try {
-            // Check if TALK_DETECT is already set. This is a simplification; real check might be more complex.
-            // For now, we'll re-apply it to ensure it's active with correct params.
-            const appRecogConf = call.config.appConfig.appRecognitionConfig;
             const talkThresholdForAri = appRecogConf.vadTalkThreshold;
             const silenceThresholdMsForAri = appRecogConf.vadSilenceThresholdMs;
             const talkDetectValue = `${talkThresholdForAri},${silenceThresholdMsForAri}`;
 
-            call.callLogger.info(`Ensuring TALK_DETECT is active for TTS playback barge-in. Value: '${talkDetectValue}'`);
+            call.callLogger.info(`VAD Mode: Ensuring TALK_DETECT is active for TTS playback barge-in. Value: '${talkDetectValue}'`);
             await call.channel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+            call.isVADBufferingActive = true; // Enable buffering for potential speech during TTS
+            call.vadAudioBuffer = []; // Clear any old buffer
+            call.pendingVADBufferFlush = false;
+            call.isFlushingVADBuffer = false;
         } catch (e: any) {
             call.callLogger.warn(`Error setting TALK_DETECT for TTS barge-in on channel ${call.channel.id}: ${e.message}. Speech barge-in might not work.`);
         }
+    } else {
+        // If not in VAD mode, or if in DTMF mode, ensure VAD buffering is off.
+        call.isVADBufferingActive = false;
+        call.vadAudioBuffer = [];
     }
-
 
     try {
       if (call.waitingPlayback) {
