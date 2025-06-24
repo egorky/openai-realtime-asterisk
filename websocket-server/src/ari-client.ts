@@ -1650,8 +1650,10 @@ export class AriClientService implements AriClientInterface {
     let currentActivationMode = appRecogConf.recognitionActivationMode;
 
     // Override with first interaction mode if applicable
-    if (call.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
-      currentActivationMode = appRecogConf.firstInteractionRecognitionMode;
+    //if (call.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
+    if (call.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode !== "") {
+      //currentActivationMode = appRecogConf.firstInteractionRecognitionMode;
+      currentActivationMode = appRecogConf.firstInteractionRecognitionMode as "fixedDelay" | "Immediate" | "vad";
       call.callLogger.info(`Using FIRST_INTERACTION_RECOGNITION_MODE: ${currentActivationMode}`);
     } else {
       call.callLogger.info(`Using global RECOGNITION_ACTIVATION_MODE: ${currentActivationMode}`);
@@ -1732,9 +1734,11 @@ export class AriClientService implements AriClientInterface {
       call.currentTurnStartTime = new Date().toISOString();
       call.callerAudioBufferForCurrentTurn = []; // Clear buffer for the new turn
 
-      call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${activationMode}. New turn start time: ${call.currentTurnStartTime}`);
+      //call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${activationMode}. New turn start time: ${call.currentTurnStartTime}`);
+      call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${currentActivationMode}. New turn start time: ${call.currentTurnStartTime}`);
 
-      switch (activationMode) {
+      //switch (activationMode) {
+      switch (currentActivationMode) {
         case 'fixedDelay':
           const delaySeconds = appRecogConf.bargeInDelaySeconds;
           call.callLogger.info(`fixedDelay mode: Post-TTS. Activating OpenAI stream after ${delaySeconds}s.`);
@@ -1760,7 +1764,8 @@ export class AriClientService implements AriClientInterface {
           this._handlePostPromptVADLogic(callId); // This will set up vadMaxWaitAfterPromptSeconds if applicable.
           break;
         default:
-          call.callLogger.warn(`Unhandled RECOGNITION_ACTIVATION_MODE: ${activationMode} after OpenAI TTS.`);
+          //call.callLogger.warn(`Unhandled RECOGNITION_ACTIVATION_MODE: ${activationMode} after OpenAI TTS.`);
+        call.callLogger.warn(`Unhandled RECOGNITION_ACTIVATION_MODE: ${currentActivationMode} after OpenAI TTS.`);
       }
     } else {
       call.callLogger.debug(`_handlePlaybackFinished called for other reason: ${reason}`);
@@ -1934,8 +1939,10 @@ export class AriClientService implements AriClientInterface {
       // callLogger.info(`Effective Activation Mode for this turn: ${effectiveActivationMode}`);
       // For now, we use the global activationMode. This will be refined.
       let effectiveActivationMode = activationMode;
-      if (callResources.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
-        effectiveActivationMode = appRecogConf.firstInteractionRecognitionMode;
+      //if (callResources.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
+      if (callResources.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode !== "") {
+      //  effectiveActivationMode = appRecogConf.firstInteractionRecognitionMode;
+        effectiveActivationMode = appRecogConf.firstInteractionRecognitionMode as "fixedDelay" | "Immediate" | "vad";
         callLogger.info(`Using FIRST_INTERACTION_RECOGNITION_MODE for StasisStart: ${effectiveActivationMode}`);
       } else {
         callLogger.info(`Using global RECOGNITION_ACTIVATION_MODE for StasisStart: ${effectiveActivationMode}`);
