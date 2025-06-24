@@ -237,6 +237,9 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   arc.asyncSttGoogleLanguageCode = getVar(logger, channel, 'ASYNC_STT_GOOGLE_LANGUAGE_CODE', arc.asyncSttGoogleLanguageCode) ?? "es-ES"; // Default to Spanish for Google
   arc.asyncSttGoogleCredentials = getVar(logger, channel, 'ASYNC_STT_GOOGLE_CREDENTIALS', arc.asyncSttGoogleCredentials); // Path to JSON key file, optional
 
+  // Initial User Prompt
+  arc.initialUserPrompt = getVar(logger, channel, 'INITIAL_USER_PROMPT', arc.initialUserPrompt);
+
 
   // Keep existing greeting audio logic
   const initialGreetingEnv = getVar(logger, channel, 'INITIAL_GREETING_AUDIO_PATH', undefined);
@@ -1144,64 +1147,57 @@ export class AriClientService implements AriClientInterface {
     this._fullCleanup(call.channel.id, false, reason);
   }
 
-  private async _activateOpenAIStreaming(callId: string, reason: string): Promise<void> {
+  private async _activateOpenAIStreaming(callId: string, reason: string, isExpectingUserSpeechNext: boolean = true): Promise<void> {
     const call = this.activeCalls.get(callId);
 
     // Ensure call object exists before proceeding
     if (!call) {
-      this.logger.error(`_activateOpenAIStreaming: Call object not found for callId ${callId}. Cannot activate stream. Reason: ${reason}`);
+      this.logger.error(`[${callId}] _activateOpenAIStreaming: Call object not found. Cannot activate stream. Reason: ${reason}`);
       return;
     }
 
     // If already streaming and this is not just a buffer flush attempt, log and return.
     if (call.openAIStreamingActive && reason !== "vad_speech_during_delay_window_flush_attempt") {
-        call.callLogger.debug(`_activateOpenAIStreaming called (Reason: ${reason}), but stream already active. No action.`);
+        call.callLogger.debug(`[${callId}] _activateOpenAIStreaming called (Reason: ${reason}, ExpectUser: ${isExpectingUserSpeechNext}), but stream already active. No action.`);
         return;
     }
     // If cleanup is called, abort.
     if (call.isCleanupCalled) {
-        call.callLogger.warn(`_activateOpenAIStreaming called (Reason: ${reason}), but cleanup already in progress. Aborting activation.`);
+        call.callLogger.warn(`[${callId}] _activateOpenAIStreaming called (Reason: ${reason}, ExpectUser: ${isExpectingUserSpeechNext}), but cleanup already in progress. Aborting activation.`);
         return;
     }
 
-    call.callLogger.info(`_activateOpenAIStreaming called. Reason: ${reason}. Current stream active: ${call.openAIStreamingActive}`);
+    call.callLogger.info(`[${callId}] _activateOpenAIStreaming called. Reason: ${reason}, ExpectUser: ${isExpectingUserSpeechNext}. Current stream active: ${call.openAIStreamingActive}`);
 
     try {
       // sessionManager.startOpenAISession will now ensure a session is active,
       // or start a new one if necessary. It won't close an existing healthy session.
+      // It will also send INITIAL_USER_PROMPT if configured.
       await sessionManager.startOpenAISession(callId, this, call.config);
-      call.callLogger.info(`Session manager ensured OpenAI session is active for ${callId}.`);
+      call.callLogger.info(`[${callId}] Session manager ensured OpenAI session is active.`);
 
       // Mark as active only after successful session start/confirmation.
-      // This is important because startOpenAISession might return if session is already open.
       call.openAIStreamingActive = true;
 
       if (call.pendingVADBufferFlush && call.vadAudioBuffer.length > 0) {
-        call.callLogger.info(`Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
+        call.callLogger.info(`[${callId}] Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
         call.isVADBufferingActive = false; // Stop further buffering
         for (const audioPayload of call.vadAudioBuffer) {
           sessionManager.sendAudioToOpenAI(callId, audioPayload);
         }
         call.vadAudioBuffer = [];
-        call.pendingVADBufferFlush = false; // Explicitly reset after attempted flush
-        call.isFlushingVADBuffer = false;
-      } else {
-        // If no flush was performed (e.g. buffer empty or pendingVADBufferFlush was false),
-        // still ensure these flags are correctly set for subsequent audio sending.
         call.pendingVADBufferFlush = false;
         call.isFlushingVADBuffer = false;
-        // isVADBufferingActive should be false if we are now actively streaming to OpenAI for recognition,
-        // unless a specific VAD mode requires it to remain true for some other reason (currently not the case).
-        // It's typically set to true before playing TTS to buffer barge-in speech.
-        // When _activateOpenAIStreaming is called, VAD has done its job of detection or delay period is over.
+      } else {
+        call.pendingVADBufferFlush = false;
+        call.isFlushingVADBuffer = false;
         call.isVADBufferingActive = false;
       }
 
-      // Only set up these timers if we are truly starting a new listening phase for this turn,
-      // not if we are just flushing a buffer to an already active stream that might be processing prior audio.
-      // The 'reason' can help differentiate.
-      // If speechHasBegun is already true for this turn, these timers might not be needed or should be re-evaluated.
-      if (!call.speechHasBegun) { // Timers are for the start of user speech detection in a turn
+      // Only set these timers if we are expecting the USER to speak next and OpenAI to detect it.
+      // If an INITIAL_USER_PROMPT was just sent, we are waiting for the ASSISTANT, so these timers are not applicable yet.
+      if (isExpectingUserSpeechNext && !call.speechHasBegun) {
+        call.callLogger.info(`[${callId}] Setting up timers for user speech detection.`);
         const noSpeechTimeout = call.config.appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds;
         if (noSpeechTimeout > 0) {
           if (call.noSpeechBeginTimer) {
@@ -1243,12 +1239,14 @@ export class AriClientService implements AriClientInterface {
                this._fullCleanup(callId, true, "OPENAI_STREAM_IDLE_TIMEOUT");
             }, streamIdleTimeout * 1000);
         }
-      } else {
+      } else if (!isExpectingUserSpeechNext) {
+        call.callLogger.info(`[${callId}] Not expecting user speech next (e.g., initial prompt sent). Timers for user speech detection are deferred.`);
+      } else if (call.speechHasBegun) {
         call.callLogger.info(`[${callId}] Speech already begun for this turn, not starting NoSpeechBeginTimer or InitialOpenAIStreamIdleTimer.`);
       }
 
     } catch (error: any) {
-        call.callLogger.error(`Error during _activateOpenAIStreaming for ${callId} (reason: ${reason}): ${(error instanceof Error ? error.message : String(error))}`);
+        call.callLogger.error(`[${callId}] Error during _activateOpenAIStreaming (Reason: ${reason}, ExpectUser: ${isExpectingUserSpeechNext}): ${(error instanceof Error ? error.message : String(error))}`);
         logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Error activating OpenAI stream: ${error.message}`})
           .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
         call.openAIStreamingActive = false; // Ensure it's marked inactive on error
@@ -1434,6 +1432,8 @@ export class AriClientService implements AriClientInterface {
     call.vadSpeechDetected = true;
     call.vadRecognitionTriggeredAfterInitialDelay = true;
 
+    const initialUserPromptIsSet = !!call.config.appConfig.appRecognitionConfig.initialUserPrompt && call.config.appConfig.appRecognitionConfig.initialUserPrompt.trim() !== "";
+
     let playbackToStop: Playback | undefined = undefined;
     let playbackType = "";
 
@@ -1513,11 +1513,14 @@ export class AriClientService implements AriClientInterface {
     // we need to ensure any VAD audio captured *during* that playback is flagged for sending.
     if (playbackToStop) { // This implies a barge-in occurred
         call.pendingVADBufferFlush = true;
-        call.callLogger.info(`VAD: Barge-in on ${playbackType} detected. Flagging VAD buffer for flush.`);
+        call.callLogger.info(`[${channel.id}] VAD: Barge-in on ${playbackType} detected. Flagging VAD buffer for flush.`);
     }
 
     // Activate OpenAI stream
-    this._activateOpenAIStreaming(call.channel.id, "vad_channel_talking_started");
+    // If an initialUserPrompt is set, this first activation is to get the assistant's response, not for user speech yet.
+    call.callLogger.info(`[${channel.id}] VAD: Activating OpenAI stream. ExpectingUserSpeechNext: ${!initialUserPromptIsSet}`);
+    this._activateOpenAIStreaming(call.channel.id, "vad_channel_talking_started", !initialUserPromptIsSet);
+
     // Note: pendingVADBufferFlush is now set above if barge-in happened.
     // If this ChannelTalkingStarted is not a barge-in (e.g. speech after prompt),
     // and VAD buffering was active, it should also be flushed.
@@ -1833,10 +1836,11 @@ export class AriClientService implements AriClientInterface {
       }
 
       const activationMode = appRecogConf.recognitionActivationMode;
-      callLogger.info(`Recognition Activation Mode: ${activationMode}`);
+      const initialUserPromptIsSet = !!appRecogConf.initialUserPrompt && appRecogConf.initialUserPrompt.trim() !== "";
+      callLogger.info(`Recognition Activation Mode: ${activationMode}, InitialUserPrompt Set: ${initialUserPromptIsSet}`);
 
       if (activationMode === 'Immediate') {
-        this._activateOpenAIStreaming(callId, "Immediate_mode_on_start");
+        this._activateOpenAIStreaming(callId, "Immediate_mode_on_start", !initialUserPromptIsSet);
       } else if (activationMode === 'fixedDelay') {
         const delaySeconds = appRecogConf.bargeInDelaySeconds;
         callLogger.info(`fixedDelay mode: bargeInDelaySeconds = ${delaySeconds}s.`);
@@ -1844,11 +1848,14 @@ export class AriClientService implements AriClientInterface {
           callResources.bargeInActivationTimer = setTimeout(() => {
             if (callResources.isCleanupCalled || callResources.openAIStreamingActive) return;
             callLogger.info(`fixedDelay: bargeInDelaySeconds (${delaySeconds}s) elapsed. Activating OpenAI stream.`);
-            this._activateOpenAIStreaming(callId, "fixedDelay_barge_in_timer_expired");
+            // Check again for initial prompt, though less likely to change state here.
+            const currentAppRecogConf = this.activeCalls.get(callId)?.config.appConfig.appRecognitionConfig;
+            const stillExpectInitialPrompt = !!currentAppRecogConf?.initialUserPrompt && currentAppRecogConf.initialUserPrompt.trim() !== "";
+            this._activateOpenAIStreaming(callId, "fixedDelay_barge_in_timer_expired", !stillExpectInitialPrompt);
           }, delaySeconds * 1000);
         } else {
           // If delay is 0, activate immediately.
-          this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation (delay is 0)");
+          this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation (delay is 0)", !initialUserPromptIsSet);
         }
       } else if (activationMode === 'vad') {
         callResources.isVADBufferingActive = true; // Start buffering audio immediately in VAD mode

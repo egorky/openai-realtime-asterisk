@@ -71,6 +71,8 @@ export interface AppRecognitionConfig {
   // Google Specific Async STT settings
   asyncSttGoogleLanguageCode?: string; // e.g., "en-US", "es-ES"
   asyncSttGoogleCredentials?: string; // Optional: Path to Google Cloud credentials JSON file
+
+  initialUserPrompt?: string; // Optional synthetic first user message
 }
 
 export interface DtmfConfig {
