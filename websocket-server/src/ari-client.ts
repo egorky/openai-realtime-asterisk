@@ -318,13 +318,27 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
 
   const baseModalities = baseConfig.openAIRealtimeAPI?.responseModalities?.join(',') || 'audio,text';
   const modalitiesStr = getVar(logger, channel, 'OPENAI_RESPONSE_MODALITIES', baseModalities, 'APP_OPENAI_RESPONSE_MODALITIES');
+  let finalModalities: ("audio" | "text")[] = ["audio", "text"]; // Default to a valid combination
+
   if (modalitiesStr) {
     const validModalitiesSet = new Set(["audio", "text"]);
     const parsedModalities = modalitiesStr.split(',').map(m => m.trim().toLowerCase()).filter(m => validModalitiesSet.has(m)) as ("audio" | "text")[];
-    if (parsedModalities.length > 0) { oaiConf.responseModalities = parsedModalities; }
-    else { oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"]; }
-  } else { oaiConf.responseModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"]; }
-  if (!oaiConf.responseModalities) { oaiConf.responseModalities = ["audio", "text"]; }
+
+    if (parsedModalities.length === 1 && parsedModalities[0] === 'audio') {
+      logger.warn(`OPENAI_RESPONSE_MODALITIES was resolved to ['audio'], which is invalid. Forcing to ['audio', 'text'].`);
+      finalModalities = ["audio", "text"];
+    } else if (parsedModalities.length > 0) {
+      finalModalities = parsedModalities;
+    } else {
+      // Fallback to baseConfig or absolute default if parsing results in empty
+      finalModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"];
+    }
+  } else {
+    // Fallback to baseConfig or absolute default if no env var
+    finalModalities = baseConfig.openAIRealtimeAPI?.responseModalities || ["audio", "text"];
+  }
+  oaiConf.responseModalities = finalModalities;
+
   if (oaiConf.tools === undefined) { oaiConf.tools = []; }
   if (!process.env.OPENAI_API_KEY) { logger.error("CRITICAL: OPENAI_API_KEY is not set."); }
   return currentCallSpecificConfig;
