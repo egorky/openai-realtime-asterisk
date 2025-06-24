@@ -304,11 +304,25 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
 
     // Tools from agent config should be compatible with OpenAIRealtimeAPIConfig.tools
     // The `Tool` type from `app/types.ts` and `FunctionTool` from `@openai/agents/realtime` might need careful mapping if not directly compatible.
-    // For now, let's assume they are structurally compatible or RealtimeAgent's tools are a subset of OpenAIRealtimeAPIConfig.tools.
-    oaiConf.tools = primaryAgentConfig.tools as any[] || []; // Cast as any[] if types are not perfectly matching but structurally compatible.
+    if (primaryAgentConfig.tools && Array.isArray(primaryAgentConfig.tools)) {
+      oaiConf.tools = primaryAgentConfig.tools.map((t: any) => {
+        // Ensure we only pass API-compliant properties for the tool's function definition
+        const { name, description, parameters } = t.function || t; // The tool() helper might nest it under 'function' or have it at top level
+        return {
+          type: "function",
+          function: {
+            name,
+            description,
+            parameters,
+          },
+        };
+      });
+    } else {
+      oaiConf.tools = [];
+    }
     // Ensure instructions is a string for logging
-    const instructionsForLog = oaiConf.instructions || "";
-    logger.info(`Loaded agent configuration for key: ${activeAgentKey}. Instructions: "${instructionsForLog.substring(0,50)}...", Tools count: ${oaiConf.tools.length}`);
+    const instructionsForLog = typeof oaiConf.instructions === 'string' ? oaiConf.instructions : "";
+    logger.info(`Loaded agent configuration for key: ${activeAgentKey}. Instructions: "${instructionsForLog.substring(0,50)}...", Tools count: ${oaiConf.tools?.length || 0}`);
   } else {
     logger.warn(`Agent configuration for key "${activeAgentKey}" not found or is empty. Falling back to default instructions and no tools.`);
     // Fallback to default instructions if agent config is missing
