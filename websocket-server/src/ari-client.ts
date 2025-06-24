@@ -306,15 +306,15 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
     // The `Tool` type from `app/types.ts` and `FunctionTool` from `@openai/agents/realtime` might need careful mapping if not directly compatible.
     if (primaryAgentConfig.tools && Array.isArray(primaryAgentConfig.tools)) {
       oaiConf.tools = primaryAgentConfig.tools.map((t: any) => {
-        // Ensure we only pass API-compliant properties for the tool's function definition
-        const { name, description, parameters } = t.function || t; // The tool() helper might nest it under 'function' or have it at top level
+        // The @openai/agents tool helper might structure it as { type: 'function', function: {name, description, parameters} }
+        // Or the schema might be directly { type: 'function', name, description, parameters }
+        // We need to ensure the final structure sent to OpenAI API is { type: 'function', name, description, parameters }
+        let toolDetails = t.function || t;
         return {
           type: "function",
-          function: {
-            name,
-            description,
-            parameters,
-          },
+          name: toolDetails.name,
+          description: toolDetails.description,
+          parameters: toolDetails.parameters,
         };
       });
     } else {
