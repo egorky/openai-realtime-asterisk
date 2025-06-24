@@ -2,336 +2,276 @@
 
 Este documento describe las variables de entorno y los parámetros de configuración JSON utilizados por la aplicación `websocket-server`. La configuración se carga principalmente desde `config/default.json` y puede ser sobrescrita individualmente por variables de entorno.
 
-## Variables de Entorno Principales (`.env`)
+**Prioridad de Configuración:**
+1.  Variables de Canal de Asterisk (si se implementa la lectura en `getCallSpecificConfig` para una variable específica).
+2.  Variables de Entorno (archivo `.env` o seteadas en el sistema).
+3.  Valores del archivo `config/default.json`.
+4.  Valores por defecto codificados en la aplicación (como último recurso).
 
-Estas son las variables más críticas que generalmente se configuran en un archivo `.env` en la raíz del directorio `websocket-server`.
+## Variables de Entorno (`.env`)
 
+Estas variables se definen en un archivo `.env` en la raíz del directorio `websocket-server`.
+
+### Configuración General del Servidor
 *   **`PORT`**:
-    *   Descripción: El puerto en el que el servidor WebSocket/HTTP escuchará las conexiones.
+    *   Descripción: Puerto en el que el servidor WebSocket/HTTP escuchará.
     *   Default (en `server.ts` si no está seteado): `8081`
-    *   Ejemplo: `PORT=8081`
-
+    *   Ejemplo: `PORT="8081"`
 *   **`WEBSOCKET_SERVER_HOST_IP`**:
-    *   Descripción: La dirección IP en la que el servidor WebSocket/HTTP se enlazará.
-    *   Default (en `server.ts` si no está seteado): `0.0.0.0` (escucha en todas las interfaces de red disponibles)
-    *   Ejemplo: `WEBSOCKET_SERVER_HOST_IP=0.0.0.0`
-
+    *   Descripción: Dirección IP a la que se enlazará el servidor WebSocket/HTTP.
+    *   Default (en `server.ts` si no está seteado): `0.0.0.0` (escucha en todas las interfaces)
+    *   Ejemplo: `WEBSOCKET_SERVER_HOST_IP="0.0.0.0"`
 *   **`PUBLIC_URL`**:
-    *   Descripción: La URL pública base del servidor. Puede ser utilizada por otros servicios o para generar URLs completas si es necesario.
+    *   Descripción: (Opcional) URL pública base del servidor. Usada por otros servicios o para generar URLs completas.
     *   Default: `""` (vacío)
-    *   Ejemplo: `PUBLIC_URL=http://localhost:8081`
-
-*   **`OPENAI_API_KEY`**:
-    *   **Descripción**: **Requerida**. Tu clave API secreta de OpenAI.
-    *   Default: No hay (la aplicación fallará si no se provee).
-    *   Ejemplo: `OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx`
-
-*   **`ASTERISK_ARI_URL`**:
-    *   Descripción: La URL base para la Asterisk REST Interface (ARI).
-    *   Default (en `ari-client.ts`): `http://localhost:8088`
-    *   Ejemplo: `ASTERISK_ARI_URL=http://asterisk.example.com:8088`
-
-*   **`ASTERISK_ARI_USERNAME`**:
-    *   Descripción: El nombre de usuario para la conexión ARI.
-    *   Default (en `ari-client.ts`): `asterisk`
-    *   Ejemplo: `ASTERISK_ARI_USERNAME=ari_user`
-
-*   **`ASTERISK_ARI_PASSWORD`**:
-    *   Descripción: La contraseña para la conexión ARI.
-    *   Default (en `ari-client.ts`): `asterisk`
-    *   Ejemplo: `ASTERISK_ARI_PASSWORD=securepassword`
-
-*   **`ASTERISK_ARI_APP_NAME`**:
-    *   Descripción: El nombre de la aplicación Stasis que Asterisk debe invocar. Debe coincidir con la configuración en `stasis.conf` o `extensions.conf` de Asterisk.
-    *   Default (en `ari-client.ts`): `openai-ari-app`
-    *   Ejemplo: `ASTERISK_ARI_APP_NAME=my-custom-ari-app`
-
-*   **`RTP_HOST_IP`**:
-    *   Descripción: La dirección IP que el `RtpServer` usará para enlazar el socket UDP. Generalmente es la IP local del servidor donde corre la aplicación Node.js, accesible desde Asterisk.
-    *   Default (en `ari-client.ts`): `127.0.0.1`
-    *   Ejemplo: `RTP_HOST_IP=192.168.1.100`
-
+    *   Ejemplo: `PUBLIC_URL="http://yourdomain.com:8081"`
 *   **`CONFIG_FILE_PATH`**:
     *   Descripción: Ruta al archivo de configuración JSON base.
-    *   Default (en `ari-client.ts`): `../config/default.json` (relativo al directorio `src`)
-    *   Ejemplo: `CONFIG_FILE_PATH=/etc/my-app/config.json`
-
+    *   Default: `config/default.json` (relativo a la raíz del proyecto `websocket-server`)
+    *   Ejemplo: `CONFIG_FILE_PATH="config/custom-config.json"`
 *   **`LOG_LEVEL`**:
-    *   Descripción: Nivel de logging para la aplicación. Puede ser `silly`, `debug`, `info`, `warn`, `error`.
-    *   Default: El valor en `config.logging.level` del archivo JSON (que es `info` por defecto).
-    *   Ejemplo: `LOG_LEVEL=debug`
+    *   Descripción: Nivel de logging para la aplicación.
+    *   Valores: `silly`, `debug`, `info`, `warn`, `error`.
+    *   Default: Valor en `config.logging.level` (`info`). `debug` o `silly` son útiles para diagnóstico detallado.
+    *   Ejemplo: `LOG_LEVEL="debug"`
 
-*   **`INITIAL_GREETING_AUDIO_PATH`** / **`GREETING_AUDIO_PATH`**:
-    *   Descripción: Ruta al archivo de audio para el saludo inicial. Puede ser una ruta de archivo local de Asterisk (ej. `sound:hello-world`) o una ruta absoluta. `INITIAL_GREETING_AUDIO_PATH` tiene precedencia.
-    *   Default: `sound:hello-world` (controlado por `config.appConfig.appRecognitionConfig.greetingAudioPath`).
-    *   Ejemplo: `GREETING_AUDIO_PATH=sound:custom/my-greeting`
-
-*   **`MAX_RECOGNITION_DURATION_SECONDS`**:
-    *   Descripción: Duración máxima en segundos para un turno de reconocimiento de voz.
-    *   Default: `30` (controlado por `config.appConfig.appRecognitionConfig.maxRecognitionDurationSeconds`).
-    *   Ejemplo: `MAX_RECOGNITION_DURATION_SECONDS=60`
-
-*   **`NO_SPEECH_BEGIN_TIMEOUT_SECONDS`**:
-    *   Descripción: Segundos a esperar por el inicio del habla (desde que se activa el stream a OpenAI) antes de considerar un timeout.
-    *   Default: `3` (controlado por `config.appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds`).
-    *   Ejemplo: `NO_SPEECH_BEGIN_TIMEOUT_SECONDS=5`
-
-*   **`SPEECH_COMPLETE_TIMEOUT_SECONDS`**:
-    *   Descripción: Segundos de silencio después de que el usuario deja de hablar antes de considerar que la entrada de voz está completa.
-    *   Default: `5` (controlado por `config.appConfig.appRecognitionConfig.speechCompleteTimeoutSeconds`).
-    *   Ejemplo: `SPEECH_COMPLETE_TIMEOUT_SECONDS=3`
-
+### Configuración de OpenAI
+*   **`OPENAI_API_KEY`**:
+    *   **Descripción**: **REQUERIDA**. Tu clave API secreta de OpenAI.
+    *   Default: No hay (la aplicación fallará si no se provee).
+    *   Ejemplo: `OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
 *   **`OPENAI_REALTIME_MODEL`**:
-    *   Descripción: El modelo de OpenAI a utilizar para la API Realtime.
+    *   **Descripción**: **REQUERIDA**. El ID del modelo Realtime de OpenAI a utilizar.
     *   Default: `gpt-4o-mini-realtime-preview-2024-12-17` (controlado por `config.openAIRealtimeAPI.model`).
-    *   Ejemplo: `OPENAI_REALTIME_MODEL=gpt-4o-realtime-preview-2024-07-01`
-
-*   **`OPENAI_LANGUAGE`**:
-    *   Descripción: Código de idioma para OpenAI (puede afectar STT y TTS).
-    *   Default: `en` (controlado por `config.openAIRealtimeAPI.language`).
-    *   Ejemplo: `OPENAI_LANGUAGE=es`
-
-*   **`OPENAI_INPUT_AUDIO_FORMAT`**:
-    *   Descripción: Formato de audio que se enviará a OpenAI. Ej: `g711_ulaw`, `pcm_s16le_8000hz`, `pcm_s16le_16000hz`.
-    *   Default: `mulaw_8000hz` (controlado por `config.openAIRealtimeAPI.inputAudioFormat`).
-    *   Ejemplo: `OPENAI_INPUT_AUDIO_FORMAT=pcm_s16le_8000hz`
-
-*   **`OPENAI_INPUT_AUDIO_SAMPLE_RATE`**:
-    *   Descripción: Tasa de muestreo del audio enviado a OpenAI (en Hz). Debe coincidir con `OPENAI_INPUT_AUDIO_FORMAT`.
-    *   Default: `8000` (controlado por `config.openAIRealtimeAPI.inputAudioSampleRate`).
-    *   Ejemplo: `OPENAI_INPUT_AUDIO_SAMPLE_RATE=8000`
-
-*   **`APP_OPENAI_TTS_VOICE`** (o `OPENAI_TTS_VOICE` en `default.json`):
-    *   Descripción: La voz a utilizar para la síntesis de Text-to-Speech (TTS) de OpenAI.
-    *   Default: `alloy` (controlado por `config.openAIRealtimeAPI.ttsVoice`).
-    *   Ejemplo: `APP_OPENAI_TTS_VOICE=nova`
-
-*   **`OPENAI_OUTPUT_AUDIO_FORMAT`**:
-    *   Descripción: Formato de audio solicitado a OpenAI para el TTS. Ej: `g711_ulaw`, `pcm_s16le_8000hz`, `pcm_s16le_16000hz`, `pcm_s16le_24000hz`, `mp3`, `opus`.
-    *   Default: `g711_ulaw` (controlado por `config.openAIRealtimeAPI.outputAudioFormat`).
-    *   Ejemplo: `OPENAI_OUTPUT_AUDIO_FORMAT=pcm_s16le_8000hz` (Recomendado para la nueva lógica de WAV).
-
-*   **`OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`**:
-    *   Descripción: Tasa de muestreo del audio TTS solicitado a OpenAI (en Hz). **Importante que coincida con `OPENAI_OUTPUT_AUDIO_FORMAT` si es PCM, para la correcta generación del encabezado WAV.**
-    *   Default: `8000` (si `outputAudioFormat` es uLaw) o `24000` (fallback en `ari-client.ts` si no, pero el `default.json` puede tener otro valor). Idealmente, si se usa PCM, este valor debe ser explícitamente la tasa del PCM (ej. 8000 o 16000).
-    *   Ejemplo: `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE=8000`
-
+    *   Ejemplo: `OPENAI_REALTIME_MODEL="gpt-4o-realtime-..."`
 *   **`ACTIVE_AGENT_CONFIG_KEY`**:
-    *   Descripción: La clave que identifica qué configuración de agente (escenario) se cargará desde `config/agentConfigs/index.ts`. Las instrucciones y herramientas para el modelo de IA provendrán de esta configuración.
+    *   Descripción: Clave que identifica la configuración de agente (escenario) a cargar desde `config/agentConfigs/index.ts`. Determina las instrucciones, herramientas y personalidad del asistente.
     *   Default: `chatSupervisor` (definido en `config/agentConfigs/index.ts` como `defaultAgentSetKey`).
-    *   Ejemplo: `ACTIVE_AGENT_CONFIG_KEY=customerServiceRetail`
-
-*   **~~`APP_OPENAI_INSTRUCTIONS`~~** / **~~`OPENAI_INSTRUCTIONS`~~**:
-    *   Descripción: Esta variable ha sido **eliminada**. Las instrucciones para el modelo de IA ahora se cargan desde el escenario del agente seleccionado mediante `ACTIVE_AGENT_CONFIG_KEY`.
-
-*   **`APP_OPENAI_RESPONSE_MODALITIES`** (o `OPENAI_RESPONSE_MODALITIES` en `default.json`):
-    *   Descripción: Modalidades de respuesta solicitadas a OpenAI, separadas por coma. Ej: `audio,text`.
+    *   Ejemplo: `ACTIVE_AGENT_CONFIG_KEY="customerServiceRetail"`
+*   **`OPENAI_RESPONSE_MODALITIES`**:
+    *   Descripción: Modalidades de respuesta solicitadas a OpenAI, separadas por coma.
+    *   Valores: `audio`, `text`. Combinaciones válidas: `"audio,text"`, `"text"`.
     *   Default: `audio,text` (controlado por `config.openAIRealtimeAPI.responseModalities`).
-    *   Ejemplo: `APP_OPENAI_RESPONSE_MODALITIES=audio`
+    *   Ejemplo: `OPENAI_RESPONSE_MODALITIES="text"`
+*   **`OPENAI_TTS_MODEL`**:
+    *   Descripción: Modelo TTS de OpenAI (ej. `tts-1`, `tts-1-hd`). Usado si la API Realtime no maneja TTS como parte de la sesión, o para funcionalidades TTS separadas/de respaldo.
+    *   Default: `tts-1` (controlado por `config.openAIRealtimeAPI.ttsModel`, aunque no existe explícitamente esta variable en `default.json`, se usa el valor de `.env.example`).
+    *   Ejemplo: `OPENAI_TTS_MODEL="tts-1-hd"`
+*   **`OPENAI_TTS_VOICE`**:
+    *   Descripción: Voz para TTS de OpenAI (ej. `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`).
+    *   Default: `alloy` (controlado por `config.openAIRealtimeAPI.ttsVoice`).
+    *   Ejemplo: `OPENAI_TTS_VOICE="nova"`
+*   **`OPENAI_LANGUAGE`**:
+    *   Descripción: Código de idioma para STT (ej. `en`, `es`). Para la API Realtime, el soporte de idioma a menudo está ligado a las capacidades del modelo específico y puede manejarse implícitamente o configurarse de manera diferente.
+    *   Default: `en` (controlado por `config.openAIRealtimeAPI.language`).
+    *   Ejemplo: `OPENAI_LANGUAGE="es"`
+*   **`OPENAI_INPUT_AUDIO_FORMAT`**:
+    *   Descripción: Formato de audio de entrada enviado a OpenAI. Para passthrough directo de u-law (8kHz) desde Asterisk, usar `"g711_ulaw"` o el string exacto que OpenAI espere. **VERIFICAR CON DOCUMENTACIÓN DE OPENAI.**
+    *   Default: `g711_ulaw` (controlado por `config.openAIRealtimeAPI.inputAudioFormat`).
+    *   Ejemplo: `OPENAI_INPUT_AUDIO_FORMAT="pcm_s16le_16000hz"` (si se transcodifica a PCM 16kHz)
+*   **`OPENAI_INPUT_AUDIO_SAMPLE_RATE`**:
+    *   Descripción: Tasa de muestreo para la entrada STT (ej. `8000`, `16000`). Para formatos como `"g711_ulaw"`, la tasa (típicamente 8000 Hz) a menudo está implícita en el string del formato.
+    *   Default: `8000` (controlado por `config.openAIRealtimeAPI.inputAudioSampleRate`).
+    *   Ejemplo: `OPENAI_INPUT_AUDIO_SAMPLE_RATE="16000"`
+*   **`OPENAI_OUTPUT_AUDIO_FORMAT`**:
+    *   Descripción: Formato de audio TTS deseado de OpenAI. Para reproducción directa de u-law (8kHz) en Asterisk, se recomienda `"g711_ulaw"`. **VERIFICAR CON DOCUMENTACIÓN DE OPENAI.**
+    *   Default: `g711_ulaw` (controlado por `config.openAIRealtimeAPI.outputAudioFormat`).
+    *   Ejemplo: `OPENAI_OUTPUT_AUDIO_FORMAT="pcm_s16le_8000hz"` (para WAV 8kHz)
+*   **`OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`**:
+    *   Descripción: Tasa de muestreo para la salida TTS (ej. `8000`, `24000`). Para formatos como `"g711_ulaw"`, la tasa (típicamente 8000 Hz) a menudo está implícita.
+    *   Default: `8000` (controlado por `config.openAIRealtimeAPI.outputAudioSampleRate`).
+    *   Ejemplo: `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE="16000"` (si se solicita TTS en 16kHz PCM)
 
-### Variables de Entorno para Redis (Opcional):
+### Configuración de Asterisk ARI
+*   **`ASTERISK_ARI_URL`**:
+    *   Descripción: URL para la Asterisk REST Interface (ARI).
+    *   Default (en `ari-client.ts`): `http://localhost:8088`
+    *   Ejemplo: `ASTERISK_ARI_URL="http://asterisk.example.com:8088"`
+*   **`ASTERISK_ARI_USERNAME`**:
+    *   Descripción: Nombre de usuario para ARI.
+    *   Default (en `ari-client.ts`): `asterisk`
+    *   Ejemplo: `ASTERISK_ARI_USERNAME="ari_user"`
+*   **`ASTERISK_ARI_PASSWORD`**:
+    *   Descripción: Contraseña para ARI.
+    *   Default (en `ari-client.ts`): `asterisk`
+    *   Ejemplo: `ASTERISK_ARI_PASSWORD="securepassword"`
+*   **`ASTERISK_ARI_APP_NAME`**:
+    *   Descripción: Nombre de la aplicación Stasis en Asterisk (debe coincidir con el plan de marcado).
+    *   Default (en `ari-client.ts`): `openai-ari-app`
+    *   Ejemplo: `ASTERISK_ARI_APP_NAME="my-voice-assistant"`
+*   **`ASTERISK_INBOUND_CONTEXT`**:
+    *   Descripción: (Opcional, informativo) Contexto del plan de marcado de Asterisk donde las llamadas entrantes se enrutan a esta aplicación ARI.
+    *   Ejemplo: `ASTERISK_INBOUND_CONTEXT="from-pstn"`
+*   **`ASTERISK_DIAL_EXTENSION`**:
+    *   Descripción: (Opcional, informativo) Extensión dentro de `ASTERISK_INBOUND_CONTEXT` que invoca esta aplicación ARI.
+    *   Ejemplo: `ASTERISK_DIAL_EXTENSION="s"`
 
+### Configuración del Servidor RTP (Media)
+*   **`RTP_HOST_IP`**:
+    *   Descripción: Dirección IP de este servidor que Asterisk debe usar para enviar media RTP. Usar la IP real del host si Asterisk está en una máquina diferente o en Docker.
+    *   Default (en `ari-client.ts`): `127.0.0.1`
+    *   Ejemplo: `RTP_HOST_IP="192.168.1.100"`
+*   **`RTP_MIN_PORT`**:
+    *   Descripción: Puerto mínimo para los listeners RTP.
+    *   Default: `10000`
+    *   Ejemplo: `RTP_MIN_PORT="20000"`
+*   **`RTP_MAX_PORT`**:
+    *   Descripción: Puerto máximo para los listeners RTP.
+    *   Default: `10010`
+    *   Ejemplo: `RTP_MAX_PORT="20020"`
+
+### Configuración del Comportamiento de la Aplicación y Modos de Reconocimiento
+*   **`RECOGNITION_ACTIVATION_MODE`**:
+    *   Descripción: Cómo se activa el reconocimiento de voz para la mayoría de las interacciones.
+    *   Valores: `"vad"`, `"Immediate"`, `"fixedDelay"`.
+    *   Default: `"vad"` (controlado por `.env.example`, o `fixedDelay` en `default.json`).
+    *   Ejemplo: `RECOGNITION_ACTIVATION_MODE="Immediate"`
+*   **`FIRST_INTERACTION_RECOGNITION_MODE`**:
+    *   Descripción: (Opcional) Anula `RECOGNITION_ACTIVATION_MODE` solo para la primera interacción del llamante. Mismas opciones que `RECOGNITION_ACTIVATION_MODE`. Si está vacío o no se establece, se usa el modo global.
+    *   Default: `""` (vacío)
+    *   Ejemplo: `FIRST_INTERACTION_RECOGNITION_MODE="Immediate"`
+*   **`OPENAI_TTS_PLAYBACK_MODE`**:
+    *   Descripción: (Opcional) Cómo se reproduce el audio TTS. `"full_chunk"` espera a que llegue todo el audio antes de reproducir. `"stream"` intenta reproducir los chunks de audio a medida que llegan (experimental, puede requerir ajustes).
+    *   Valores: `"full_chunk"`, `"stream"`.
+    *   Default: `"full_chunk"`
+    *   Ejemplo: `OPENAI_TTS_PLAYBACK_MODE="stream"`
+*   **`INITIAL_USER_PROMPT`**:
+    *   Descripción: (Opcional) Un mensaje de "usuario" sintético inicial para hacer que el asistente hable primero al inicio de la llamada. Si se establece, este texto se envía al modelo de OpenAI como el primer turno del usuario.
+    *   Default: `""` (vacío)
+    *   Ejemplo: `INITIAL_USER_PROMPT="Hola, por favor preséntate."`
+*   **`GREETING_AUDIO_PATH`**:
+    *   Descripción: (Opcional) Ruta a un archivo de audio para el saludo inicial, reconocible por Asterisk (ej. `sound:hello-world` o una ruta absoluta). Anula el saludo por defecto en `default.json`.
+    *   Default: `sound:hello-world` (en `default.json`).
+    *   Ejemplo: `GREETING_AUDIO_PATH="sound:custom/my-greeting"`
+*   **`INITIAL_GREETING_AUDIO_PATH`**:
+    *   Descripción: (Opcional) Similar a `GREETING_AUDIO_PATH` pero tiene mayor precedencia si ambos están definidos.
+    *   Default: `""` (vacío)
+    *   Ejemplo: `INITIAL_GREETING_AUDIO_PATH="sound:urgent-greeting"`
+
+### Configuración de VAD (Voice Activity Detection)
+*(Usado cuando `RECOGNITION_ACTIVATION_MODE` o `FIRST_INTERACTION_RECOGNITION_MODE` es `"vad"`)*
+*   **`APP_APPRECOGNITION_VADSILENCETHRESHOLDMS`**:
+    *   Descripción: Umbral de silencio de Asterisk `TALK_DETECT` en milisegundos. Tiempo de silencio después del habla para disparar `ChannelTalkingFinished`.
+    *   Default: `2500` (controlado por `default.json`).
+    *   Ejemplo: `APP_APPRECOGNITION_VADSILENCETHRESHOLDMS="3000"`
+*   **`APP_APPRECOGNITION_VADTALKTHRESHOLD`**:
+    *   Descripción: Umbral de nivel de energía de Asterisk `TALK_DETECT`. Audio por encima de este nivel se considera habla, disparando `ChannelTalkingStarted`.
+    *   Default: `256` (controlado por `default.json`).
+    *   Ejemplo: `APP_APPRECOGNITION_VADTALKTHRESHOLD="300"`
+*   **`APP_APPRECOGNITION_VADRECOGACTIVATION`**:
+    *   Descripción: Para el modo VAD: define cuándo se activa el reconocimiento basado en VAD.
+    *   Valores: `"vadMode"` (escucha después de un retardo inicial), `"afterPrompt"` (escucha después de que termine el saludo/prompt).
+    *   Default: `"vadMode"` (controlado por `default.json`).
+    *   Ejemplo: `APP_APPRECOGNITION_VADRECOGACTIVATION="afterPrompt"`
+*   **`APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`**:
+    *   Descripción: Para el modo VAD: Tiempo máximo (segundos) a esperar por el habla después de que el saludo termine (y después de `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS` si está en modo `"vadMode"`).
+    *   Default: `10.0` (controlado por `default.json`).
+    *   Ejemplo: `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS="7.5"`
+*   **`APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`**:
+    *   Descripción: Para el modo VAD con `vadRecogActivation="vadMode"`: Retardo (segundos) desde el inicio de la llamada/turno antes de que el VAD escuche activamente los eventos `TALK_DETECT`. El audio se almacena en búfer durante este retardo.
+    *   Default: `0.0` (controlado por `default.json`).
+    *   Ejemplo: `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS="1.0"`
+*   **`VAD_TALK_DURATION_THRESHOLD_MS`**:
+    *   Descripción: (Avanzado) Duración (ms) del habla para la configuración interna `vadRecognitionActivationMs` de `TALK_DETECT` en `default.json`.
+    *   Default: `40` (controlado por `default.json` bajo `vadConfig.vadRecognitionActivationMs`).
+    *   Ejemplo: `VAD_TALK_DURATION_THRESHOLD_MS="50"`
+
+### Temporizadores de Reconocimiento de Voz (Segundos)
+*(Aplican a los modos `fixedDelay`, `Immediate`, y `vad` una vez que el stream de OpenAI está activo y escuchando al usuario)*
+*   **`NO_SPEECH_BEGIN_TIMEOUT_SECONDS`**:
+    *   Descripción: Tiempo máximo que la aplicación espera a que OpenAI detecte el inicio del habla (evento `speech_started` o primer transcript intermedio).
+    *   Default: `5.0` (controlado por `default.json`).
+    *   Ejemplo: `NO_SPEECH_BEGIN_TIMEOUT_SECONDS="7.0"`
+*   **`SPEECH_END_SILENCE_TIMEOUT_SECONDS`**:
+    *   Descripción: Tiempo máximo que la aplicación espera por un transcript final de OpenAI después del último transcript intermedio o actividad de habla.
+    *   Default: `1.5` (controlado por `default.json`).
+    *   Ejemplo: `SPEECH_END_SILENCE_TIMEOUT_SECONDS="2.0"`
+*   **`MAX_RECOGNITION_DURATION_SECONDS`**:
+    *   Descripción: Duración máxima absoluta (segundos) para todo el intento de reconocimiento de voz para un solo turno de llamada.
+    *   Default: `30.0` (controlado por `default.json`).
+    *   Ejemplo: `MAX_RECOGNITION_DURATION_SECONDS="45.0"`
+*   **`INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS`**:
+    *   Descripción: (Avanzado) Timeout en segundos para que el stream inicial de OpenAI se vuelva responsivo (ej. envíe el primer evento). En gran medida reemplazado por `NO_SPEECH_BEGIN_TIMEOUT_SECONDS` para propósitos prácticos, pero se mantiene para diagnósticos más profundos.
+    *   Default: `10` (controlado por `default.json`).
+    *   Ejemplo: `INITIAL_OPENAI_STREAM_IDLE_TIMEOUT_SECONDS="15"`
+
+### Configuración de DTMF
+*   **`DTMF_ENABLED`**:
+    *   Descripción: Habilita (`"true"`) o deshabilita (`"false"`) el reconocimiento DTMF.
+    *   Default: `"true"` (controlado por `default.json` como `enableDtmfRecognition`).
+    *   Ejemplo: `DTMF_ENABLED="false"`
+*   **`DTMF_INTERDIGIT_TIMEOUT_SECONDS`**:
+    *   Descripción: Timeout en segundos entre dígitos DTMF.
+    *   Default: `3.0` (controlado por `default.json`).
+    *   Ejemplo: `DTMF_INTERDIGIT_TIMEOUT_SECONDS="2.5"`
+*   **`DTMF_FINAL_TIMEOUT_SECONDS`**:
+    *   Descripción: Timeout en segundos después del último dígito DTMF para finalizar la entrada.
+    *   Default: `5.0` (controlado por `default.json`).
+    *   Ejemplo: `DTMF_FINAL_TIMEOUT_SECONDS="4.0"`
+*   *Nota: `DTMF_MAX_DIGITS` y `DTMF_TERMINATOR_DIGIT` se configuran en `config/default.json` (actualmente `16` y `"#"` respectivamente) y no suelen anularse mediante `.env`.*
+
+### Configuración de Barge-In (Modo `fixedDelay`)
+*   **`BARGE_IN_DELAY_SECONDS`**:
+    *   Descripción: Retardo (segundos) antes de activar el reconocimiento en modo `"fixedDelay"`. Permite al llamante hablar después de que comience el saludo/prompt.
+    *   Default: `0.2` (controlado por `default.json`).
+    *   Ejemplo: `BARGE_IN_DELAY_SECONDS="0.5"`
+*   **`BARGE_IN_MODE_ENABLED`**:
+    *   Descripción: (Legado, mayormente informativo ya que el barge-in es implícito en los modos).
+    *   Default: `"true"` (controlado por `default.json`).
+    *   Ejemplo: `BARGE_IN_MODE_ENABLED="true"`
+
+### Configuración de Redis (Opcional - para logueo de conversaciones)
 *   **`REDIS_HOST`**:
-    *   Descripción: Hostname o dirección IP del servidor Redis.
-    *   Default: `127.0.0.1`
-    *   Ejemplo: `REDIS_HOST=myredisserver.example.com`
+    *   Descripción: Hostname/IP del servidor Redis.
+    *   Default: `"127.0.0.1"`
+    *   Ejemplo: `REDIS_HOST="my-redis-instance.example.com"`
 *   **`REDIS_PORT`**:
     *   Descripción: Puerto del servidor Redis.
     *   Default: `6379`
-    *   Ejemplo: `REDIS_PORT=6380`
+    *   Ejemplo: `REDIS_PORT="6380"`
 *   **`REDIS_PASSWORD`**:
-    *   Descripción: Contraseña para la autenticación con el servidor Redis (si está configurada).
+    *   Descripción: Contraseña para el servidor Redis (si se requiere).
     *   Default: `undefined` (sin contraseña)
-    *   Ejemplo: `REDIS_PASSWORD=yourredispassword`
+    *   Ejemplo: `REDIS_PASSWORD="yourSecurePassword"`
 *   **`REDIS_CONVERSATION_TTL_SECONDS`**:
-    *   Descripción: Tiempo de vida (TTL) en segundos para las conversaciones almacenadas en Redis.
+    *   Descripción: Tiempo de vida (TTL) en segundos para los logs de conversación almacenados en Redis.
     *   Default: `3600` (1 hora)
-    *   Ejemplo: `REDIS_CONVERSATION_TTL_SECONDS=86400` (24 horas)
+    *   Ejemplo: `REDIS_CONVERSATION_TTL_SECONDS="86400"` (24 horas)
 
+### Configuración de STT Asíncrono (Fallback STT)
+*   **`ASYNC_STT_ENABLED`**:
+    *   Descripción: Habilita (`"true"`) o deshabilita (`"false"`) el STT asíncrono.
+    *   Default: `"false"` (controlado por `default.json`).
+    *   Ejemplo: `ASYNC_STT_ENABLED="true"`
+*   **`ASYNC_STT_PROVIDER`**:
+    *   Descripción: Proveedor para el STT asíncrono.
+    *   Valores: `"openai_whisper_api"`, `"google_speech_v1"`, `"vosk"`.
+    *   Default: `"openai_whisper_api"` (controlado por `default.json`).
+    *   Ejemplo: `ASYNC_STT_PROVIDER="vosk"`
+*   **Configuración Específica de Proveedor Async STT:**
+    *   **OpenAI Whisper API:**
+        *   `ASYNC_STT_OPENAI_MODEL`: Modelo para OpenAI Whisper (ej. `"whisper-1"`). Default: `"whisper-1"`.
+        *   `ASYNC_STT_OPENAI_API_KEY`: Clave API de OpenAI para STT asíncrono. Si está vacía, intenta usar `OPENAI_API_KEY`. Default: `""`.
+        *   `ASYNC_STT_LANGUAGE`: Código de idioma opcional para OpenAI Whisper (ej. `"en"`, `"es"`). Default: `"en"`.
+    *   **Google Cloud Speech-to-Text V1:**
+        *   `ASYNC_STT_GOOGLE_LANGUAGE_CODE`: Código de idioma para Google Speech (ej. `"en-US"`, `"es-ES"`). Default: `"es-ES"`.
+        *   `ASYNC_STT_GOOGLE_CREDENTIALS`: (Opcional) Ruta al archivo JSON de credenciales de Google Cloud. Si no se establece, se usarán las Credenciales Predeterminadas de la Aplicación (ADC). Default: `""`.
+    *   **Vosk Offline STT:**
+        *   `VOSK_SERVER_URL`: URL del WebSocket para la instancia del servidor Vosk.
+        *   Ejemplo: `VOSK_SERVER_URL="ws://localhost:2700"`
+*   **Configuración Común de Audio para Async STT:**
+    *   `ASYNC_STT_AUDIO_FORMAT`: Formato del audio interno pasado al transcriptor asíncrono desde el búfer. Típicamente `"mulaw"` o `"wav"` (si se convierte).
+    *   Default: `"mulaw"` (controlado por `default.json`).
+    *   Ejemplo: `ASYNC_STT_AUDIO_FORMAT="wav"`
+    *   `ASYNC_STT_AUDIO_SAMPLE_RATE`: Tasa de muestreo del búfer de audio para STT asíncrono.
+    *   Default: `8000` (controlado por `default.json`).
+    *   Ejemplo: `ASYNC_STT_AUDIO_SAMPLE_RATE="16000"`
 
 ## Parámetros de Configuración en `config/default.json`
 
-El archivo `config/default.json` contiene una estructura jerárquica para estos parámetros y otros más detallados. Las variables de entorno listadas arriba generalmente sobrescriben los valores correspondientes en este archivo.
+El archivo `config/default.json` (ubicado en `websocket-server/config/default.json`) define los parámetros operativos predeterminados. Su estructura incluye secciones para `appConfig` (con `appRecognitionConfig`, `dtmfConfig`, `bargeInConfig`), `openAIRealtimeAPI`, y `logging`.
 
-### Estructura General de `default.json`:
-
-```json
-{
-  "appConfig": {
-    "appRecognitionConfig": {
-      "recognitionActivationMode": "VAD", // "IMMEDIATE", "FIXED_DELAY", "VAD"
-      "noSpeechBeginTimeoutSeconds": 3,
-      "speechCompleteTimeoutSeconds": 5,
-      "vadConfig": {
-        "vadSilenceThresholdMs": 250,
-        "vadRecognitionActivationMs": 40
-      },
-      "maxRecognitionDurationSeconds": 30,
-      "greetingAudioPath": "sound:hello-world",
-      "bargeInDelaySeconds": 0.5, // Para FIXED_DELAY
-      "vadRecogActivation": "afterPrompt", // "vadMode", "afterPrompt"
-      "vadInitialSilenceDelaySeconds": 0,
-      "vadActivationDelaySeconds": 0,
-      "vadMaxWaitAfterPromptSeconds": 5,
-      "initialOpenAIStreamIdleTimeoutSeconds": 10 // Nuevo timeout potencial
-    },
-    "dtmfConfig": {
-      "dtmfEnabled": true,
-      "dtmfInterdigitTimeoutSeconds": 2,
-      "dtmfMaxDigits": 16,
-      "dtmfTerminatorDigit": "#",
-      "dtmfFinalTimeoutSeconds": 3
-    },
-    "bargeInConfig": { // Puede estar parcialmente obsoleto o integrado en appRecognitionConfig
-      "bargeInModeEnabled": true,
-      "bargeInDelaySeconds": 0.5,
-      "noSpeechBargeInTimeoutSeconds": 5
-    }
-  },
-  "openAIRealtimeAPI": {
-    "model": "gpt-4o-mini-realtime-preview-2024-12-17",
-    "language": "en",
-    "inputAudioFormat": "mulaw_8000hz", // Opciones: g711_ulaw, pcm_s16le_8000hz, etc.
-    "inputAudioSampleRate": 8000,
-    "ttsVoice": "alloy", // Opciones: alloy, echo, fable, onyx, nova, shimmer
-    "outputAudioFormat": "g711_ulaw", // Opciones: g711_ulaw, pcm_s16le_8000hz, pcm_s16le_16000hz, pcm_s16le_24000hz, mp3, opus
-    "outputAudioSampleRate": 8000, // Importante para PCM -> WAV. Debe coincidir con la tasa real del audio de OpenAI.
-    "responseModalities": ["audio", "text"], // "audio", "text"
-    // "instructions" y "tools" se cargan dinámicamente desde la configuración del agente seleccionada por ACTIVE_AGENT_CONFIG_KEY
-    // "instructions": "Este valor se sobrescribe.",
-    // "tools": [] // Este valor se sobrescribe.
-  },
-  "logging": {
-    "level": "info" // silly, debug, info, warn, error
-  },
-  "asyncSttConfig": { // Placeholder, actual values are under appRecognitionConfig in default.json
-      "asyncSttEnabled": false,
-      "asyncSttProvider": "openai_whisper_api",
-      "asyncSttOpenaiModel": "whisper-1",
-      "asyncSttOpenaiApiKey": "", // Should take from OPENAI_API_KEY if not set
-      "asyncSttLanguage": "en",
-      "asyncSttAudioFormat": "mulaw",
-      "asyncSttAudioSampleRate": 8000
-  }
-}
-```
-
-### Variables de Entorno para Modos de Reconocimiento, VAD y STT Asíncrono:
-
-Estas variables de entorno controlan los nuevos modos de activación del reconocimiento y el comportamiento del VAD local. Sobrescriben los valores en `config.appConfig.appRecognitionConfig`.
-
-*   **`RECOGNITION_ACTIVATION_MODE`**:
-    *   Descripción: Define cómo se inicia el reconocimiento de voz.
-    *   Valores: `"fixedDelay"`, `"immediate"`, `"vad"`, `"manual"`. (Nota: "manual" no está completamente implementado en la lógica actual pero es una opción teórica).
-    *   Default (en `default.json`): `"fixedDelay"` (El código en `ari-client.ts` usa `"fixedDelay"` como fallback si la config no lo especifica, pero `.env.example` ahora sugiere `"vad"`).
-    *   Ejemplo: `RECOGNITION_ACTIVATION_MODE="vad"`
-
-*   **`BARGE_IN_DELAY_SECONDS`**:
-    *   Descripción: Para `RECOGNITION_ACTIVATION_MODE="fixedDelay"`. Retardo en segundos antes de activar el reconocimiento, permitiendo al llamante interrumpir el saludo.
-    *   Default (en `default.json`): `0.2`
-    *   Ejemplo: `BARGE_IN_DELAY_SECONDS=0.5`
-
-*   **`SPEECH_END_SILENCE_TIMEOUT_SECONDS`**:
-    *   Descripción: Tiempo máximo en segundos que la aplicación espera por una transcripción final de OpenAI después de cada turno de habla.
-    *   Default (en `default.json`): `1.5`
-    *   Ejemplo: `SPEECH_END_SILENCE_TIMEOUT_SECONDS=2.0`
-
-*   **`APP_APPRECOGNITION_VADSILENCETHRESHOLDMS`**:
-    *   Descripción: Para modo VAD. Umbral de silencio de Asterisk TALK_DETECT en milisegundos. Tiempo de silencio después del habla para disparar `ChannelTalkingFinished`.
-    *   Default (en `default.json`): `2500`
-    *   Ejemplo: `APP_APPRECOGNITION_VADSILENCETHRESHOLDMS=3000`
-
-*   **`APP_APPRECOGNITION_VADTALKTHRESHOLD`**:
-    *   Descripción: Para modo VAD. Umbral de nivel de energía de Asterisk TALK_DETECT por encima del cual el audio se considera habla, disparando `ChannelTalkingStarted`.
-    *   Default (en `default.json`): `256`
-    *   Ejemplo: `APP_APPRECOGNITION_VADTALKTHRESHOLD=300`
-
-*   **`APP_APPRECOGNITION_VADRECOGACTIVATION`**:
-    *   Descripción: Para modo VAD. Define cuándo se activa el reconocimiento basado en VAD.
-    *   Valores: `"vadMode"`, `"afterPrompt"`.
-    *   Default (en `default.json`): `"vadMode"`
-    *   Ejemplo: `APP_APPRECOGNITION_VADRECOGACTIVATION="afterPrompt"`
-
-*   **`APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`**:
-    *   Descripción: Para modo VAD. Tiempo máximo (segundos) a esperar por el habla después de que el saludo termine y después de que `vadInitialSilenceDelaySeconds` hayan pasado (si aplica).
-    *   Default (en `default.json`): `10.0`
-    *   Ejemplo: `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS=7.5`
-
-*   **`APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`**:
-    *   Descripción: Para modo VAD con `vadRecogActivation="vadMode"`. Retardo en segundos desde el inicio de la llamada antes de que el proceso VAD escuche activamente. El audio se almacena en búfer durante este retardo.
-    *   Default (en `default.json`): `0.0`
-    *   Ejemplo: `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS=1.0`
-
-### Variables de Entorno para DTMF:
-
-Estas variables controlan la funcionalidad DTMF. Sobrescriben los valores en `config.appConfig.dtmfConfig`.
-
-*   **`DTMF_ENABLED`**:
-    *   Descripción: Habilita (`true`) o deshabilita (`false`) el reconocimiento DTMF.
-    *   Default (en `default.json`, como `enableDtmfRecognition`): `true`
-    *   Ejemplo: `DTMF_ENABLED=false`
-
-*   **`DTMF_INTERDIGIT_TIMEOUT_SECONDS`**:
-    *   Descripción: Tiempo máximo en segundos entre dígitos DTMF antes de considerar la entrada completa.
-    *   Default (en `default.json`): `3.0`
-    *   Ejemplo: `DTMF_INTERDIGIT_TIMEOUT_SECONDS=2.5`
-
-*   **`DTMF_FINAL_TIMEOUT_SECONDS`**:
-    *   Descripción: Tiempo máximo en segundos después del último dígito DTMF para finalizar la entrada.
-    *   Default (en `default.json`): `5.0`
-    *   Ejemplo: `DTMF_FINAL_TIMEOUT_SECONDS=4.0`
-
-### Variables de Entorno para Transcripción Asíncrona (Async STT):
-
-Estas variables controlan el comportamiento del servicio de transcripción de respaldo si OpenAI no proporciona una transcripción. Se configuran en `config.appConfig.appRecognitionConfig` y pueden ser sobrescritas por variables de entorno.
-
-*   **`ASYNC_STT_ENABLED`**:
-    *   Descripción: Habilita (`true`) o deshabilita (`false`) la transcripción asíncrona.
-    *   Default (en `default.json` bajo `appRecognitionConfig`): `false`
-    *   Ejemplo: `ASYNC_STT_ENABLED=true`
-*   **`ASYNC_STT_PROVIDER`**:
-    *   Descripción: Proveedor del servicio STT asíncrono.
-    *   Valores: `"openai_whisper_api"`, (futuro: `"google_speech_v1"`)
-    *   Default (en `default.json`): `"openai_whisper_api"`
-    *   Ejemplo: `ASYNC_STT_PROVIDER="openai_whisper_api"`
-*   **`ASYNC_STT_OPENAI_MODEL`**:
-    *   Descripción: Modelo a usar si `ASYNC_STT_PROVIDER` es `openai_whisper_api`.
-    *   Default (en `default.json`): `"whisper-1"`
-    *   Ejemplo: `ASYNC_STT_OPENAI_MODEL="whisper-1"`
-*   **`ASYNC_STT_OPENAI_API_KEY`**:
-    *   Descripción: Clave API para el proveedor de STT asíncrono (ej. OpenAI). Si está vacía y el proveedor es OpenAI, intentará usar la variable global `OPENAI_API_KEY`.
-    *   Default (en `default.json`): `""` (vacío)
-    *   Ejemplo: `ASYNC_STT_OPENAI_API_KEY="sk-anotherKeyForWhisper"`
-*   **`ASYNC_STT_LANGUAGE`**:
-    *   Descripción: Código de idioma opcional como pista para el modelo STT asíncrono (ej. `en`, `es`).
-    *   Default (en `default.json`): `"en"`
-    *   Ejemplo: `ASYNC_STT_LANGUAGE="es"`
-*   **`ASYNC_STT_AUDIO_FORMAT`**:
-    *   Descripción: Formato del audio que se pasa al transcriptor asíncrono (actualmente `mulaw` es el formato del buffer interno).
-    *   Default (en `default.json`): `"mulaw"`
-    *   Ejemplo: `ASYNC_STT_AUDIO_FORMAT="mulaw"` (Nota: el transcriptor podría necesitar convertirlo a WAV para APIs como Whisper).
-*   **`ASYNC_STT_AUDIO_SAMPLE_RATE`**:
-    *   Descripción: Tasa de muestreo del audio para el STT asíncrono.
-    *   Default (en `default.json`): `8000`
-    *   Ejemplo: `ASYNC_STT_AUDIO_SAMPLE_RATE=8000`
-*   **`ASYNC_STT_GOOGLE_LANGUAGE_CODE`**:
-    *   Descripción: Código de idioma para Google Cloud Speech-to-Text (ej. `en-US`, `es-ES`).
-    *   Default (en `ari-client.ts` si no está seteado): `"es-ES"`
-    *   Ejemplo: `ASYNC_STT_GOOGLE_LANGUAGE_CODE="en-US"`
-*   **`ASYNC_STT_GOOGLE_CREDENTIALS`**:
-    *   Descripción: (Opcional) Ruta al archivo JSON de credenciales de Google Cloud. Si no se establece, se utilizarán las Credenciales Predeterminadas de la Aplicación (ADC), por ejemplo, si la variable de entorno `GOOGLE_APPLICATION_CREDENTIALS` está configurada globalmente.
-    *   Default: `undefined` (vacío)
-    *   Ejemplo: `ASYNC_STT_GOOGLE_CREDENTIALS="/path/to/your/google-credentials.json"`
-
-*   **`INITIAL_USER_PROMPT`**:
-    *   Descripción: (Opcional) Un mensaje sintético inicial del "usuario" para hacer que el asistente hable primero al inicio de la llamada. Si se establece, este texto se enviará al modelo de OpenAI como el primer turno del usuario.
-    *   Default: `undefined` (vacío)
-    *   Ejemplo: `INITIAL_USER_PROMPT="Hola"` o `INITIAL_USER_PROMPT="Comenzar la conversación."`
-
-### Parámetros Notables en `default.json` (Actualizado):
-
-La estructura de `default.json` se ha actualizado para reflejar estas nuevas variables (dentro de `appRecognitionConfig`):
-
+**Extracto de la Estructura de `default.json`:**
 ```json
 {
   "appConfig": {
@@ -339,44 +279,42 @@ La estructura de `default.json` se ha actualizado para reflejar estas nuevas var
       "recognitionActivationMode": "fixedDelay", // "fixedDelay", "Immediate", "vad"
       "bargeInDelaySeconds": 0.2,
       "noSpeechBeginTimeoutSeconds": 5.0,
-      "speechEndSilenceTimeoutSeconds": 1.5, // Nuevo, reemplaza speechCompleteTimeoutSeconds
+      "speechEndSilenceTimeoutSeconds": 1.5,
       "maxRecognitionDurationSeconds": 30.0,
-      "vadSilenceThresholdMs": 2500,         // Corresponde a APP_APPRECOGNITION_VADSILENCETHRESHOLDMS
-      "vadTalkThreshold": 256,             // Corresponde a APP_APPRECOGNITION_VADTALKTHRESHOLD
-      "vadRecogActivation": "vadMode",       // "vadMode", "afterPrompt"
+      "vadSilenceThresholdMs": 2500,
+      "vadTalkThreshold": 256,
+      "vadRecogActivation": "vadMode", // "vadMode", "afterPrompt"
       "vadMaxWaitAfterPromptSeconds": 10.0,
       "vadInitialSilenceDelaySeconds": 0.0,
-      // vadConfig anidado se mantiene por compatibilidad con la lógica de TALK_DETECT existente,
-      // pero sus valores deben ser consistentes con los de nivel superior.
-      "vadConfig": {
-        "vadSilenceThresholdMs": 2500, // Debería coincidir con vadSilenceThresholdMs arriba
-        "vadRecognitionActivationMs": 40 // Umbral de duración de habla para TALK_DETECT, no directamente el de energía.
-                                         // Este valor podría necesitar una variable de entorno dedicada si se quiere configurar.
+      "vadConfig": { // Configuración interna para TALK_DETECT
+        "vadSilenceThresholdMs": 2500,
+        "vadRecognitionActivationMs": 40 // Duración del habla para TALK_DETECT
       },
-      "initialOpenAIStreamIdleTimeoutSeconds": 10, // Tiempo de espera si el stream de OpenAI está inactivo al inicio.
+      "greetingAudioPath": "sound:hello-world", // Saludo por defecto
+      "initialOpenAIStreamIdleTimeoutSeconds": 10,
+      // Configuración Async STT por defecto
       "asyncSttEnabled": false,
       "asyncSttProvider": "openai_whisper_api",
       "asyncSttOpenaiModel": "whisper-1",
       "asyncSttOpenaiApiKey": "",
       "asyncSttLanguage": "en",
       "asyncSttAudioFormat": "mulaw",
-      "asyncSttAudioSampleRate": 8000
+      "asyncSttAudioSampleRate": 8000,
+      "asyncSttGoogleLanguageCode": "es-ES",
+      "asyncSttGoogleCredentials": ""
     },
     "dtmfConfig": {
-      "enableDtmfRecognition": true, // Corresponde a DTMF_ENABLED
+      "enableDtmfRecognition": true,
       "dtmfInterDigitTimeoutSeconds": 3.0,
       "dtmfFinalTimeoutSeconds": 5.0,
-      "dtmfMaxDigits": 16, // Heredado, aún relevante
-      "dtmfTerminatorDigit": "#" // Heredado, aún relevante
+      "dtmfMaxDigits": 16,
+      "dtmfTerminatorDigit": "#"
     },
-    // bargeInConfig podría estar obsoleto ya que bargeInDelaySeconds está ahora en appRecognitionConfig.
-    // Se mantiene por si alguna lógica interna aún lo referencia.
-    "bargeInConfig": {
+    "bargeInConfig": { // Legado, bargeInDelaySeconds está ahora en appRecognitionConfig
       "bargeInModeEnabled": true
     }
   },
   "openAIRealtimeAPI": {
-    // ... sin cambios significativos aquí respecto a la funcionalidad principal ...
     "model": "gpt-4o-mini-realtime-preview-2024-12-17",
     "language": "en",
     "inputAudioFormat": "g711_ulaw",
@@ -385,13 +323,13 @@ La estructura de `default.json` se ha actualizado para reflejar estas nuevas var
     "outputAudioFormat": "g711_ulaw",
     "outputAudioSampleRate": 8000,
     "responseModalities": ["audio", "text"],
-    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa.",
-    "tools": []
+    "instructions": "Este valor se sobrescribirá por la configuración del agente activo.", // Placeholder
+    "tools": [] // Placeholder, cargado desde la configuración del agente
   },
   "logging": {
-    "level": "info"
+    "level": "info" // silly, debug, info, warn, error
   }
 }
 ```
 
-Es importante consultar `ari-client.ts` (específicamente la función `getCallSpecificConfig`) para ver exactamente cómo se leen y priorizan estas configuraciones desde el archivo JSON y las variables de entorno.
+Es importante consultar `ari-client.ts` (específicamente la función `getCallSpecificConfig`) y `config/default.json` para ver exactamente cómo se leen y priorizan estas configuraciones.

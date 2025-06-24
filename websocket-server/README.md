@@ -94,54 +94,56 @@ Este archivo (ubicado en `websocket-server/config/default.json`) define los par√
 
 ### Environment Variables
 
-Create a `.env` file in the root of the `websocket-server` directory by copying `.env.example` (`cp .env.example .env`) and then fill in the values.
+Create a `.env` file in the root of the `websocket-server` directory by copying `.env.example` (`cp .env.example .env`) and then filling in the values. Refer to `websocket-server/docs/variables.md` for a detailed explanation of all variables.
 
-### Required
-*   `OPENAI_API_KEY`: Your OpenAI API key.
-*   `OPENAI_REALTIME_MODEL`: The OpenAI Realtime model ID to be used for both Speech-to-Text and Text-to-Speech within a session (e.g., `gpt-4o-mini-realtime-preview-2024-12-17`).
+**Key Environment Variables:**
 
-### OpenAI Optional (Defaults are provided in `config/default.json`)
-*   `ACTIVE_AGENT_CONFIG_KEY`: Specifies which agent configuration (scenario) to load from `config/agentConfigs/index.ts`. This determines the assistant's instructions, tools, and personality. Example: `"customerServiceRetail"`. Defaults to `chatSupervisor` if not set.
-*   `INITIAL_USER_PROMPT`: Optional. If set, this text will be sent as a synthetic first "user" message to the OpenAI model, prompting the assistant to speak first. Example: `"Hola"`.
-*   `OPENAI_RESPONSE_MODALITIES`: Optional. Comma-separated list of desired response types from OpenAI. Can include "audio" and/or "text". Defaults to `"audio,text"` if not set. Example: `"text"` for text-only responses.
-*   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`). Primarily used if the Realtime API does not handle TTS as part of the session, or for separate/fallback TTS functionalities.
-*   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`). Used for any TTS audio generation.
-*   `OPENAI_LANGUAGE`: Language code for STT (e.g., `en`, `es`). For the Realtime API, language support is often tied to the specific model capabilities and might be implicitly handled or configured differently.
-*   `OPENAI_INPUT_AUDIO_FORMAT`: Specifies the exact string format identifier that the OpenAI Realtime API expects for the input audio stream (for STT). For the recommended u-law passthrough strategy (Asterisk sends 8kHz u-law, no in-app transcoding), set this to `"g711_ulaw"` (or the precise equivalent from OpenAI documentation). This value is sent in the `session.update` event to OpenAI.
-*   `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Sample rate for STT input (e.g., `8000`, `16000`). Note: For Realtime API audio formats like `g711_ulaw`, the sample rate (typically 8000 Hz) is often implied by the format string itself. This variable primarily informs internal logic if any, but the string sent to OpenAI in `input_audio_format` is key.
-*   `OPENAI_OUTPUT_AUDIO_FORMAT`: Specifies the exact string format identifier for the desired TTS audio output from OpenAI. For direct playback of 8kHz u-law in Asterisk, set this to `"g711_ulaw"` (or the precise equivalent from OpenAI documentation). This value is sent in the `session.update` event to OpenAI.
-*   `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Desired sample rate for TTS output (e.g., `8000`, `24000`). Note: For Realtime API audio formats like `g711_ulaw`, the sample rate (typically 8000 Hz) is often implied by the format string itself.
+*   **OpenAI Configuration:**
+    *   `OPENAI_API_KEY`: **Required.** Your OpenAI API key.
+    *   `OPENAI_REALTIME_MODEL`: **Required.** The OpenAI Realtime model ID.
+    *   `ACTIVE_AGENT_CONFIG_KEY`: Specifies the agent configuration (instructions, tools) to use.
+    *   `OPENAI_RESPONSE_MODALITIES`: Desired response types from OpenAI (e.g., "audio,text").
+    *   `OPENAI_TTS_VOICE`: Voice for Text-to-Speech.
+    *   `OPENAI_INPUT_AUDIO_FORMAT`, `OPENAI_INPUT_AUDIO_SAMPLE_RATE`: Configuration for audio sent to OpenAI STT.
+    *   `OPENAI_OUTPUT_AUDIO_FORMAT`, `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE`: Configuration for audio received from OpenAI TTS.
 
-### Asterisk ARI
-*   `ASTERISK_ARI_URL`: URL for the Asterisk ARI interface (e.g., `http://localhost:8088`).
-*   `ASTERISK_ARI_USERNAME`: Username for ARI.
-*   `ASTERISK_ARI_PASSWORD`: Password for ARI.
-*   `ASTERISK_ARI_APP_NAME`: The name of your Stasis application in Asterisk (must match dialplan).
+*   **Asterisk ARI Configuration:**
+    *   `ASTERISK_ARI_URL`, `ASTERISK_ARI_USERNAME`, `ASTERISK_ARI_PASSWORD`: Connection details for Asterisk ARI.
+    *   `ASTERISK_ARI_APP_NAME`: Name of your Stasis application in Asterisk.
 
-### Server & Media
-*   `RTP_HOST_IP`: The IP address of this server that Asterisk should use for sending RTP media. Defaults to `127.0.0.1`. If Asterisk is on a different host or in a container, set this to an IP reachable by Asterisk.
-*   `PORT`: Port for this WebSocket server (e.g., `8081`).
-*   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this WebSocket server to bind to (e.g., `0.0.0.0` for all interfaces).
-*   `LOG_LEVEL`: Logging level for the application (e.g., `info`, `debug`, `warn`, `error`, `silly`). Setting to `debug` or `silly` will enable verbose logging of OpenAI API interactions, including request/response payloads.
-    *   **Log Format**: Logs now include a timestamp and the caller's ID (or channel name/call ID if caller number is not available), e.g., `[2024-01-15T12:30:00.123Z] [callerId] [service=ServiceName] message...`
+*   **Server & Media Configuration:**
+    *   `PORT`: Port for this WebSocket server.
+    *   `WEBSOCKET_SERVER_HOST_IP`: Host IP for this server to bind to.
+    *   `RTP_HOST_IP`: IP address of this server for Asterisk to send RTP media to.
+    *   `RTP_MIN_PORT`, `RTP_MAX_PORT`: Port range for RTP listeners.
+    *   `LOG_LEVEL`: Logging verbosity (e.g., `info`, `debug`).
 
-### Redis for Conversation Logging (Optional)
-*   `REDIS_HOST`: Hostname/IP of the Redis server. Defaults to `127.0.0.1`.
-*   `REDIS_PORT`: Port of the Redis server. Defaults to `6379`.
-*   `REDIS_PASSWORD`: Password for Redis authentication (if needed).
-*   `REDIS_CONVERSATION_TTL_SECONDS`: Time-to-live (in seconds) for conversation logs stored in Redis. Defaults to `3600` (1 hour).
+*   **Application Behavior:**
+    *   `RECOGNITION_ACTIVATION_MODE`: Default mode for activating speech recognition (e.g., `vad`, `Immediate`, `fixedDelay`).
+    *   `FIRST_INTERACTION_RECOGNITION_MODE`: (Optional) Overrides `RECOGNITION_ACTIVATION_MODE` for the first interaction.
+    *   `OPENAI_TTS_PLAYBACK_MODE`: (Optional) How TTS audio is played (`full_chunk` or `stream`).
+    *   `INITIAL_USER_PROMPT`: (Optional) Text to make the assistant speak first.
+    *   `GREETING_AUDIO_PATH`: (Optional) Path to an initial greeting audio file.
 
-If Redis is configured, the server will log conversation turns (caller speech, bot speech, DTMF, system messages, errors) to Redis lists, keyed by `conversation:<callId>`. Each turn is stored as a JSON string with fields like `timestamp`, `actor`, `type`, and `content`. If asynchronous STT is enabled and OpenAI does not provide a transcript, the system will attempt to transcribe the caller's audio using a secondary STT service and log the result.
+*   **VAD (Voice Activity Detection) Settings (for `vad` mode):**
+    *   `APP_APPRECOGNITION_VADSILENCETHRESHOLDMS`, `APP_APPRECOGNITION_VADTALKTHRESHOLD`: Asterisk TALK_DETECT parameters.
+    *   `APP_APPRECOGNITION_VADRECOGACTIVATION`: Sub-mode for VAD (`vadMode` or `afterPrompt`).
+    *   `APP_APPRECOGNITION_VADMAXWAITAFTERPROMPTSECONDS`, `APP_APPRECOGNITION_VADINITIALSILENCEDELAYSECONDS`: Timers for VAD logic.
 
-### Asynchronous Speech-to-Text (Async STT) Configuration (Optional)
-These settings control the fallback STT service if OpenAI doesn't provide a transcript for the caller's audio.
-*   `ASYNC_STT_ENABLED`: Set to `true` to enable asynchronous STT. Defaults to `false`.
-*   `ASYNC_STT_PROVIDER`: Specifies the STT provider. Currently supports `openai_whisper_api`. Defaults to `openai_whisper_api`.
-*   `ASYNC_STT_OPENAI_MODEL`: The OpenAI Whisper model to use (e.g., `whisper-1`). Defaults to `whisper-1`.
-*   `ASYNC_STT_OPENAI_API_KEY`: API key for the async STT provider. If using OpenAI Whisper and this is empty, it will try to use the main `OPENAI_API_KEY`.
-*   `ASYNC_STT_LANGUAGE`: Optional language code (e.g., `en`, `es`) as a hint for the STT model.
-*   `ASYNC_STT_AUDIO_FORMAT`: The format of the audio buffer passed to the async transcriber. Defaults to `mulaw`.
-*   `ASYNC_STT_AUDIO_SAMPLE_RATE`: The sample rate of the audio buffer. Defaults to `8000`.
+*   **DTMF Settings:**
+    *   `DTMF_ENABLED`: Enable/disable DTMF recognition.
+    *   `DTMF_INTERDIGIT_TIMEOUT_SECONDS`, `DTMF_FINAL_TIMEOUT_SECONDS`: Timers for DTMF input.
+
+*   **Asynchronous STT (Fallback):**
+    *   `ASYNC_STT_ENABLED`: Enable/disable fallback STT.
+    *   `ASYNC_STT_PROVIDER`: Provider for async STT (`openai_whisper_api`, `google_speech_v1`, `vosk`).
+    *   Provider-specific settings like API keys, models, language codes (e.g., `ASYNC_STT_OPENAI_MODEL`, `VOSK_SERVER_URL`).
+
+*   **Redis for Conversation Logging (Optional):**
+    *   `REDIS_HOST`, `REDIS_PORT`, `REDIS_PASSWORD`: Connection details for Redis.
+    *   `REDIS_CONVERSATION_TTL_SECONDS`: TTL for conversation logs in Redis.
+
+If Redis is configured, the server will log conversation turns (caller speech, bot speech, DTMF, system messages, errors, async STT results) to Redis lists.
 
 ## Audio Handling
 

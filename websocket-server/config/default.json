@@ -22,7 +22,12 @@
       "asyncSttOpenaiApiKey": "",
       "asyncSttLanguage": "en",
       "asyncSttAudioFormat": "mulaw",
-      "asyncSttAudioSampleRate": 8000
+      "asyncSttAudioSampleRate": 8000,
+      "asyncSttGoogleLanguageCode": "es-ES",
+      "asyncSttGoogleCredentials": "",
+      "voskServerUrl": "ws://localhost:2700",
+      "ttsPlaybackMode": "full_chunk",
+      "firstInteractionRecognitionMode": ""
     },
     "dtmfConfig": {
       "dtmfEnabled": true,

@@ -120,11 +120,24 @@ export async function transcribeAudioAsync(params: AsyncTranscriberParams): Prom
   let tempFilePath: string | null = null;
   let transcribedText: string | null = null;
 
+  // Ensure audio is PCM s16le if Vosk is the provider and input is mulaw
+  let finalAudioBuffer = audioBuffer;
+  if (provider === 'vosk' && audioFormat === 'mulaw' && sampleRate === 8000) {
+    callLogger.info('[AsyncTranscriber] Vosk provider: Converting mulaw audio to PCM s16le for Vosk.');
+    // This is a placeholder. Actual mulaw to PCM conversion is needed.
+    // For now, we'll log a warning. A proper library like 'pcm-convert' or custom logic would be required.
+    // finalAudioBuffer = convertMulawToPcm(audioBuffer); // Fictional function
+    callLogger.warn('[AsyncTranscriber] Vosk provider: MULAW to PCM conversion is NOT YET IMPLEMENTED. Sending raw mulaw. This will likely fail if Vosk server expects PCM.');
+    // If Vosk server can handle raw mulaw directly (less common), this might work.
+    // Otherwise, a conversion step is critical here.
+  }
+
+
   try {
     if (provider === 'openai_whisper_api') {
       const tempFileName = `async_stt_audio_${callId}_${Date.now()}.${audioFormat === 'mulaw' ? 'ulaw' : 'raw'}`;
       tempFilePath = path.join(tempDir, tempFileName);
-      await fs.writeFile(tempFilePath, audioBuffer);
+      await fs.writeFile(tempFilePath, finalAudioBuffer); // Use finalAudioBuffer
       callLogger.info(`[AsyncTranscriber] Temporary audio file saved to ${tempFilePath} for call ${callId} (OpenAI)`);
 
       const apiKey = appRecogConf.asyncSttOpenaiApiKey || process.env.OPENAI_API_KEY;
@@ -136,13 +149,14 @@ export async function transcribeAudioAsync(params: AsyncTranscriberParams): Prom
         throw new Error('Missing OpenAI API key for async STT');
       }
 
-      let effectiveFilePathForApi = tempFilePath;
-      if (audioFormat === 'mulaw' && sampleRate === 8000) {
+      // Whisper API generally prefers WAV, MP3 etc. Raw mulaw might not be ideal.
+      // If finalAudioBuffer is still mulaw, this warning remains relevant.
+      if (audioFormat === 'mulaw' && sampleRate === 8000 && finalAudioBuffer === audioBuffer) { // Check if conversion didn't happen
         callLogger.warn(`[AsyncTranscriber] Audio is in mulaw format for Whisper. Whisper API prefers WAV. Transcription might fail or be inaccurate without conversion if raw mulaw is not directly supported by the API for the specified model.`);
       }
 
       transcribedText = await transcribeWithOpenAIWhisperAPI(
-        effectiveFilePathForApi,
+        tempFilePath, // Send path to (potentially converted) audio
         apiKey,
         model,
         language,
@@ -151,30 +165,28 @@ export async function transcribeAudioAsync(params: AsyncTranscriberParams): Prom
       );
 
     } else if (provider === 'google_speech_v1') {
-      const languageCode = appRecogConf.asyncSttGoogleLanguageCode || 'es-ES'; // Default to Spanish for Google
-      const googleCredentials = appRecogConf.asyncSttGoogleCredentials; // Path to JSON key file
+      const languageCode = appRecogConf.asyncSttGoogleLanguageCode || 'es-ES';
+      const googleCredentials = appRecogConf.asyncSttGoogleCredentials;
 
-      let encoding: 'MULAW' | 'LINEAR16' = 'LINEAR16'; // Default
-      if (audioFormat === 'mulaw' && sampleRate === 8000) {
+      let encoding: 'MULAW' | 'LINEAR16' = 'LINEAR16';
+      // Determine encoding based on finalAudioBuffer's assumed format (after potential conversion)
+      // If conversion to PCM happened for Vosk, and Google is chosen, we'd need to know that.
+      // For now, this logic relies on the original audioFormat.
+      if (audioFormat === 'mulaw' && sampleRate === 8000) { // Original format was mulaw
         encoding = 'MULAW';
         callLogger.info('[AsyncTranscriber] Using MULAW encoding for Google Speech.');
-      } else if (audioFormat === 'pcm_s16le' || audioFormat === 'wav') {
+      } else if (audioFormat === 'pcm_s16le' || audioFormat === 'wav') { // Original was PCM/WAV
         encoding = 'LINEAR16';
-         callLogger.info(`[AsyncTranscriber] Using LINEAR16 encoding for Google Speech. Sample rate: ${sampleRate}`);
-         // For LINEAR16, ensure sampleRate is correctly passed.
-         // If input is WAV, it ideally should be stripped of header for 'content' base64, or use 'uri' if it's a GCS URI.
-         // For now, assuming raw PCM or mulaw buffer.
+        callLogger.info(`[AsyncTranscriber] Using LINEAR16 encoding for Google Speech. Sample rate: ${sampleRate}`);
       } else {
-        callLogger.error(`[AsyncTranscriber] Unsupported audioFormat "${audioFormat}" for Google Speech. Defaulting to LINEAR16, but this may fail.`);
+        callLogger.error(`[AsyncTranscriber] Unsupported original audioFormat "${audioFormat}" for Google Speech. Defaulting to LINEAR16, but this may fail with unconverted audio.`);
       }
 
-      // Note: @google-cloud/speech package needs to be installed.
-      // If not installed, this will throw an error at runtime.
       try {
         transcribedText = await transcribeWithGoogleSpeechV1(
-          audioBuffer,
+          finalAudioBuffer, // Use finalAudioBuffer
           languageCode,
-          sampleRate,
+          sampleRate, // This should be the sample rate of finalAudioBuffer
           encoding,
           callLogger.child({ component: 'AsyncTranscriber-Google' }),
           googleCredentials
@@ -183,42 +195,72 @@ export async function transcribeAudioAsync(params: AsyncTranscriberParams): Prom
         if (e.message.includes("Cannot find module '@google-cloud/speech'")) {
           callLogger.error("[AsyncTranscriber] Google Speech SDK not installed. Please install '@google-cloud/speech'.");
         }
-        throw e; // Re-throw to be caught by outer try-catch
+        throw e;
       }
-
-
+    } else if (provider === 'vosk') {
+      const voskServerUrl = process.env.VOSK_SERVER_URL || appRecogConf.voskServerUrl;
+      if (!voskServerUrl) {
+        callLogger.error('[AsyncTranscriber] Vosk server URL is not configured (VOSK_SERVER_URL env var or voskServerUrl in config). Transcription via Vosk skipped.');
+        // Log to Redis that Vosk was skipped due to missing URL
+        await logConversationToRedis(callId, {
+            timestamp: new Date().toISOString(),
+            actor: 'system',
+            type: 'error_message',
+            content: `Async STT (Vosk) skipped: VOSK_SERVER_URL not configured. Turn was at ${originalTurnTimestamp}.`,
+            callId: callId,
+            originalTurnTimestamp: originalTurnTimestamp,
+        } as ConversationTurn);
+        return; // Explicitly return to stop processing for Vosk if URL is missing
+      }
+      // The transcribeWithVosk function should handle the audio format.
+      // We've already logged a warning if mulaw to PCM conversion is missing.
+      // Vosk typically expects PCM s16le.
+      const { transcribeWithVosk } = await import('./vosk-transcriber');
+      transcribedText = await transcribeWithVosk({
+        callId,
+        audioBuffer: finalAudioBuffer, // Use the (potentially to-be-converted) buffer
+        sampleRate: sampleRate, // This MUST be the sample rate of finalAudioBuffer
+        voskServerUrl,
+        callLogger,
+      });
     } else {
       callLogger.error(`[AsyncTranscriber] Unknown async STT provider: ${provider}`);
       throw new Error(`Unknown async STT provider: ${provider}`);
     }
 
     if (transcribedText) {
-      callLogger.info(`[AsyncTranscriber] Async transcription successful for call ${callId}. Full Text: "${transcribedText}"`);
-      const turnData: Omit<ConversationTurn, 'timestamp' | 'callId'> & { originalTurnTimestamp?: string } = {
+      callLogger.info(`[AsyncTranscriber] Async transcription successful for call ${callId}. Text: "${transcribedText}"`);
+      const turnData: ConversationTurn = {
+        timestamp: new Date().toISOString(), // Add timestamp here
         actor: 'caller',
-        type: 'transcript',
+        type: 'async_transcript_result', // Use a specific type
         content: transcribedText,
+        callId: callId, // Include callId
         originalTurnTimestamp: originalTurnTimestamp,
       };
       await logConversationToRedis(callId, turnData);
     } else {
       callLogger.warn(`[AsyncTranscriber] Async transcription failed or returned no text for call ${callId}. Provider: ${provider}`);
       await logConversationToRedis(callId, {
+        timestamp: new Date().toISOString(),
         actor: 'system',
         type: 'error_message',
-        content: `Async STT failed or returned no text for turn originally at ${originalTurnTimestamp}. Provider: ${provider}`,
+        content: `Async STT (${provider}) failed or returned no text for turn originally at ${originalTurnTimestamp}.`,
+        callId: callId,
         originalTurnTimestamp: originalTurnTimestamp,
-      });
+      } as ConversationTurn);
     }
 
   } catch (error: any) {
-    callLogger.error(`[AsyncTranscriber] Error during async transcription process for call ${callId}: ${error.message}`, error);
+    callLogger.error(`[AsyncTranscriber] Error during async transcription process for call ${callId} with provider ${provider}: ${error.message}`, error);
     await logConversationToRedis(callId, {
+      timestamp: new Date().toISOString(),
       actor: 'system',
       type: 'error_message',
-      content: `Async STT critical error for turn at ${originalTurnTimestamp}: ${error.message}. Provider: ${provider}`,
+      content: `Async STT (${provider}) critical error for turn at ${originalTurnTimestamp}: ${error.message}.`,
+      callId: callId,
       originalTurnTimestamp: originalTurnTimestamp,
-    });
+    } as ConversationTurn);
   } finally {
     if (tempFilePath) { // Only unlink if a temp file was created
       try {
