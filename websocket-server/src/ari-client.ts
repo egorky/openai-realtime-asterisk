@@ -635,9 +635,17 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAISpeechStarted(callId: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.info(`OpenAI speech recognition started (or first transcript received).`);
-    if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
-    if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+    call.callLogger.info(`[${callId}] _onOpenAISpeechStarted: OpenAI speech recognition started (or first transcript received).`);
+    if (call.noSpeechBeginTimer) {
+      call.callLogger.info(`[${callId}] Clearing noSpeechBeginTimer due to speech started.`);
+      clearTimeout(call.noSpeechBeginTimer);
+      call.noSpeechBeginTimer = null;
+    }
+    if (call.initialOpenAIStreamIdleTimer) {
+      call.callLogger.info(`[${callId}] Clearing initialOpenAIStreamIdleTimer due to speech started.`);
+      clearTimeout(call.initialOpenAIStreamIdleTimer);
+      call.initialOpenAIStreamIdleTimer = null;
+    }
     call.speechHasBegun = true;
     // For 'fixedDelay' and 'Immediate' modes, OpenAI dictates speech end.
     // For 'vad' mode, local VAD (TALK_DETECT) might have already stopped the stream if Asterisk detected silence.
@@ -647,13 +655,21 @@ export class AriClientService implements AriClientInterface {
   public _onOpenAIInterimResult(callId: string, transcript: string): void {
     const call = this.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.debug(`OpenAI interim transcript: "${transcript}"`);
+    call.callLogger.debug(`[${callId}] _onOpenAIInterimResult: OpenAI interim transcript: "${transcript}"`);
 
     if (!call.speechHasBegun) {
-        if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; }
-        if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; }
+        if (call.noSpeechBeginTimer) {
+            call.callLogger.info(`[${callId}] Clearing noSpeechBeginTimer due to interim transcript.`);
+            clearTimeout(call.noSpeechBeginTimer);
+            call.noSpeechBeginTimer = null;
+        }
+        if (call.initialOpenAIStreamIdleTimer) {
+            call.callLogger.info(`[${callId}] Clearing initialOpenAIStreamIdleTimer due to interim transcript.`);
+            clearTimeout(call.initialOpenAIStreamIdleTimer);
+            call.initialOpenAIStreamIdleTimer = null;
+        }
         call.speechHasBegun = true;
-        call.callLogger.info(`Speech implicitly started with first interim transcript.`);
+        call.callLogger.info(`[${callId}] Speech implicitly started with first interim transcript.`);
     }
 
     // Barge-in logic: If prompt is playing and we get an interim result, stop the prompt.
@@ -1188,33 +1204,47 @@ export class AriClientService implements AriClientInterface {
       if (!call.speechHasBegun) { // Timers are for the start of user speech detection in a turn
         const noSpeechTimeout = call.config.appConfig.appRecognitionConfig.noSpeechBeginTimeoutSeconds;
         if (noSpeechTimeout > 0) {
-          if (call.noSpeechBeginTimer) clearTimeout(call.noSpeechBeginTimer);
+          if (call.noSpeechBeginTimer) {
+            call.callLogger.debug(`[${callId}] Clearing existing noSpeechBeginTimer before setting new one.`);
+            clearTimeout(call.noSpeechBeginTimer);
+          }
+          call.callLogger.info(`[${callId}] Setting noSpeechBeginTimer for ${noSpeechTimeout}s.`);
           call.noSpeechBeginTimer = setTimeout(() => {
-            if (call.isCleanupCalled || call.speechHasBegun) return;
-            call.callLogger.warn(`No speech detected by OpenAI in ${noSpeechTimeout}s. Stopping session & call.`);
+            const currentCallState = this.activeCalls.get(callId);
+            if (currentCallState && (currentCallState.isCleanupCalled || currentCallState.speechHasBegun)) {
+              currentCallState.callLogger.info(`[${callId}] noSpeechBeginTimer fired but condition not met (cleanup: ${currentCallState.isCleanupCalled}, speechHasBegun: ${currentCallState.speechHasBegun}). Ignoring.`);
+              return;
+            }
+            call.callLogger.warn(`[${callId}] NoSpeechBeginTimer Fired! No speech detected by OpenAI in ${noSpeechTimeout}s. speechHasBegun: ${currentCallState?.speechHasBegun}. Stopping session & call.`);
             logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `No speech from OpenAI timeout (${noSpeechTimeout}s).`})
               .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
             sessionManager.stopOpenAISession(callId, "no_speech_timeout_in_ari");
             this._fullCleanup(callId, true, "NO_SPEECH_BEGIN_TIMEOUT");
           }, noSpeechTimeout * 1000);
-          call.callLogger.info(`NoSpeechBeginTimer started (${noSpeechTimeout}s).`);
         }
 
         const streamIdleTimeout = call.config.appConfig.appRecognitionConfig.initialOpenAIStreamIdleTimeoutSeconds ?? 10;
         if (streamIdleTimeout > 0) {
-            if (call.initialOpenAIStreamIdleTimer) clearTimeout(call.initialOpenAIStreamIdleTimer);
+            if (call.initialOpenAIStreamIdleTimer) {
+              call.callLogger.debug(`[${callId}] Clearing existing initialOpenAIStreamIdleTimer before setting new one.`);
+              clearTimeout(call.initialOpenAIStreamIdleTimer);
+            }
+            call.callLogger.info(`[${callId}] Setting initialOpenAIStreamIdleTimer for ${streamIdleTimeout}s.`);
             call.initialOpenAIStreamIdleTimer = setTimeout(() => {
-               if (call.isCleanupCalled || call.speechHasBegun) return;
-               call.callLogger.warn(`OpenAI stream idle (no events) for ${streamIdleTimeout}s. Stopping session & call.`);
+               const currentCallState = this.activeCalls.get(callId);
+               if (currentCallState && (currentCallState.isCleanupCalled || currentCallState.speechHasBegun)) {
+                 currentCallState.callLogger.info(`[${callId}] initialOpenAIStreamIdleTimer fired but condition not met (cleanup: ${currentCallState.isCleanupCalled}, speechHasBegun: ${currentCallState.speechHasBegun}). Ignoring.`);
+                 return;
+               }
+               call.callLogger.warn(`[${callId}] InitialOpenAIStreamIdleTimer Fired! OpenAI stream idle (no events) for ${streamIdleTimeout}s. speechHasBegun: ${currentCallState?.speechHasBegun}. Stopping session & call.`);
                logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `OpenAI stream idle timeout (${streamIdleTimeout}s).`})
                  .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
                sessionManager.stopOpenAISession(callId, "initial_stream_idle_timeout_in_ari");
                this._fullCleanup(callId, true, "OPENAI_STREAM_IDLE_TIMEOUT");
             }, streamIdleTimeout * 1000);
-            call.callLogger.info(`InitialOpenAIStreamIdleTimer started (${streamIdleTimeout}s).`);
         }
       } else {
-        call.callLogger.info(`Speech already begun for this turn, not starting NoSpeechBeginTimer or InitialOpenAIStreamIdleTimer.`);
+        call.callLogger.info(`[${callId}] Speech already begun for this turn, not starting NoSpeechBeginTimer or InitialOpenAIStreamIdleTimer.`);
       }
 
     } catch (error: any) {
