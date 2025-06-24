@@ -222,8 +222,8 @@ Estas variables de entorno controlan los nuevos modos de activación del reconoc
 
 *   **`RECOGNITION_ACTIVATION_MODE`**:
     *   Descripción: Define cómo se inicia el reconocimiento de voz.
-    *   Valores: `"fixedDelay"`, `"Immediate"`, `"vad"`.
-    *   Default (en `default.json`): `"fixedDelay"`
+    *   Valores: `"fixedDelay"`, `"immediate"`, `"vad"`, `"manual"`. (Nota: "manual" no está completamente implementado en la lógica actual pero es una opción teórica).
+    *   Default (en `default.json`): `"fixedDelay"` (El código en `ari-client.ts` usa `"fixedDelay"` como fallback si la config no lo especifica, pero `.env.example` ahora sugiere `"vad"`).
     *   Ejemplo: `RECOGNITION_ACTIVATION_MODE="vad"`
 
 *   **`BARGE_IN_DELAY_SECONDS`**:
