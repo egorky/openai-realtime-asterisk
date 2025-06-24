@@ -292,7 +292,16 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
     // Assuming the first agent in the set is the primary one for now.
     // Or, logic could be added to select a specific agent from the set if needed.
     const primaryAgentConfig = selectedAgentSet[0];
-    oaiConf.instructions = primaryAgentConfig.instructions || "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
+
+    // Handle instructions: if it's a function, log a warning as we expect a string for OpenAI session.update.
+    // For now, we'll use a default string. A more advanced implementation might resolve the function if possible.
+    if (typeof primaryAgentConfig.instructions === 'function') {
+      logger.warn(`Agent "${activeAgentKey}" uses dynamic (function-based) instructions. This is not directly passed to OpenAI's session.update. Using default string instructions.`);
+      oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
+    } else {
+      oaiConf.instructions = primaryAgentConfig.instructions || "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
+    }
+
     // Tools from agent config should be compatible with OpenAIRealtimeAPIConfig.tools
     // The `Tool` type from `app/types.ts` and `FunctionTool` from `@openai/agents/realtime` might need careful mapping if not directly compatible.
     // For now, let's assume they are structurally compatible or RealtimeAgent's tools are a subset of OpenAIRealtimeAPIConfig.tools.

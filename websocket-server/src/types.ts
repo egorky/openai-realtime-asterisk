@@ -106,7 +106,7 @@ export interface OpenAIRealtimeAPIConfig {
   ttsVoice?: string; // e.g., "alloy"
   transcriptionIntentOnly?: boolean; // Custom flag if STT is only for intent not full conversation
   responseModalities?: ("audio" | "text")[];
-  instructions?: string; // For system prompt/instructions sent in session.update
+  instructions?: string | ((runContext: any, agent: any) => string | Promise<string>); // Instructions can be string or function
   tools?: any[]; // Añadir propiedad opcional para herramientas
 
   // Deprecated fields, kept for potential reference or if used by older configs:
