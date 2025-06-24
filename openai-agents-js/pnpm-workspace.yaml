@@ -1,0 +1,8 @@
+packages:
+  - packages/*
+  - examples/*
+  - docs
+onlyBuiltDependencies:
+  - esbuild
+  - sharp
+publishBranch: main

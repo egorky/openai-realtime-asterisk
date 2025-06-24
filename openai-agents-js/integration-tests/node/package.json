@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "scripts": {
+    "start:cjs": "node index.cjs",
+    "start:esm": "node index.mjs"
+  },
+  "dependencies": {
+    "@openai/agents": "latest"
+  }
+}
