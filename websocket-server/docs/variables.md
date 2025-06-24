@@ -116,10 +116,13 @@ Estas son las variables más críticas que generalmente se configuran en un arch
     *   Default: `8000` (si `outputAudioFormat` es uLaw) o `24000` (fallback en `ari-client.ts` si no, pero el `default.json` puede tener otro valor). Idealmente, si se usa PCM, este valor debe ser explícitamente la tasa del PCM (ej. 8000 o 16000).
     *   Ejemplo: `OPENAI_OUTPUT_AUDIO_SAMPLE_RATE=8000`
 
-*   **`APP_OPENAI_INSTRUCTIONS`** (o `OPENAI_INSTRUCTIONS` en `default.json`):
-    *   Descripción: El "system prompt" o instrucciones base para el modelo de IA.
-    *   Default: `"Eres un asistente de IA amigable y servicial. Responde de manera concisa."` (controlado por `config.openAIRealtimeAPI.instructions`).
-    *   Ejemplo: `APP_OPENAI_INSTRUCTIONS="Actúa como un experto en vinos y recomienda maridajes."`
+*   **`ACTIVE_AGENT_CONFIG_KEY`**:
+    *   Descripción: La clave que identifica qué configuración de agente (escenario) se cargará desde `config/agentConfigs/index.ts`. Las instrucciones y herramientas para el modelo de IA provendrán de esta configuración.
+    *   Default: `chatSupervisor` (definido en `config/agentConfigs/index.ts` como `defaultAgentSetKey`).
+    *   Ejemplo: `ACTIVE_AGENT_CONFIG_KEY=customerServiceRetail`
+
+*   **~~`APP_OPENAI_INSTRUCTIONS`~~** / **~~`OPENAI_INSTRUCTIONS`~~**:
+    *   Descripción: Esta variable ha sido **eliminada**. Las instrucciones para el modelo de IA ahora se cargan desde el escenario del agente seleccionado mediante `ACTIVE_AGENT_CONFIG_KEY`.
 
 *   **`APP_OPENAI_RESPONSE_MODALITIES`** (o `OPENAI_RESPONSE_MODALITIES` en `default.json`):
     *   Descripción: Modalidades de respuesta solicitadas a OpenAI, separadas por coma. Ej: `audio,text`.
@@ -194,8 +197,9 @@ El archivo `config/default.json` contiene una estructura jerárquica para estos 
     "outputAudioFormat": "g711_ulaw", // Opciones: g711_ulaw, pcm_s16le_8000hz, pcm_s16le_16000hz, pcm_s16le_24000hz, mp3, opus
     "outputAudioSampleRate": 8000, // Importante para PCM -> WAV. Debe coincidir con la tasa real del audio de OpenAI.
     "responseModalities": ["audio", "text"], // "audio", "text"
-    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa.",
-    "tools": [] // Array de esquemas de herramientas/funciones si se usan
+    // "instructions" y "tools" se cargan dinámicamente desde la configuración del agente seleccionada por ACTIVE_AGENT_CONFIG_KEY
+    // "instructions": "Este valor se sobrescribe.",
+    // "tools": [] // Este valor se sobrescribe.
   },
   "logging": {
     "level": "info" // silly, debug, info, warn, error
@@ -218,8 +222,8 @@ Estas variables de entorno controlan los nuevos modos de activación del reconoc
 
 *   **`RECOGNITION_ACTIVATION_MODE`**:
     *   Descripción: Define cómo se inicia el reconocimiento de voz.
-    *   Valores: `"fixedDelay"`, `"Immediate"`, `"vad"`.
-    *   Default (en `default.json`): `"fixedDelay"`
+    *   Valores: `"fixedDelay"`, `"immediate"`, `"vad"`, `"manual"`. (Nota: "manual" no está completamente implementado en la lógica actual pero es una opción teórica).
+    *   Default (en `default.json`): `"fixedDelay"` (El código en `ari-client.ts` usa `"fixedDelay"` como fallback si la config no lo especifica, pero `.env.example` ahora sugiere `"vad"`).
     *   Ejemplo: `RECOGNITION_ACTIVATION_MODE="vad"`
 
 *   **`BARGE_IN_DELAY_SECONDS`**:
@@ -310,6 +314,19 @@ Estas variables controlan el comportamiento del servicio de transcripción de re
     *   Descripción: Tasa de muestreo del audio para el STT asíncrono.
     *   Default (en `default.json`): `8000`
     *   Ejemplo: `ASYNC_STT_AUDIO_SAMPLE_RATE=8000`
+*   **`ASYNC_STT_GOOGLE_LANGUAGE_CODE`**:
+    *   Descripción: Código de idioma para Google Cloud Speech-to-Text (ej. `en-US`, `es-ES`).
+    *   Default (en `ari-client.ts` si no está seteado): `"es-ES"`
+    *   Ejemplo: `ASYNC_STT_GOOGLE_LANGUAGE_CODE="en-US"`
+*   **`ASYNC_STT_GOOGLE_CREDENTIALS`**:
+    *   Descripción: (Opcional) Ruta al archivo JSON de credenciales de Google Cloud. Si no se establece, se utilizarán las Credenciales Predeterminadas de la Aplicación (ADC), por ejemplo, si la variable de entorno `GOOGLE_APPLICATION_CREDENTIALS` está configurada globalmente.
+    *   Default: `undefined` (vacío)
+    *   Ejemplo: `ASYNC_STT_GOOGLE_CREDENTIALS="/path/to/your/google-credentials.json"`
+
+*   **`INITIAL_USER_PROMPT`**:
+    *   Descripción: (Opcional) Un mensaje sintético inicial del "usuario" para hacer que el asistente hable primero al inicio de la llamada. Si se establece, este texto se enviará al modelo de OpenAI como el primer turno del usuario.
+    *   Default: `undefined` (vacío)
+    *   Ejemplo: `INITIAL_USER_PROMPT="Hola"` o `INITIAL_USER_PROMPT="Comenzar la conversación."`
 
 ### Parámetros Notables en `default.json` (Actualizado):
 

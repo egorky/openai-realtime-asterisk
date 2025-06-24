@@ -19,6 +19,8 @@
     "ari-client": "^2.2.0",
     "axios": "^1.6.0",
     "cors": "^2.8.5",
+    "@google-cloud/speech": "^6.0.0",
+    "@openai/agents": "0.0.9",
     "dotenv": "^16.4.5",
     "express": "^4.21.2",
     "httpdispatcher": "^2.2.0",

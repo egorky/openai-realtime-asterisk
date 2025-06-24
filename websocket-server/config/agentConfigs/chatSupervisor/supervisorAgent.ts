@@ -7,88 +7,88 @@ import {
   exampleStoreLocations,
 } from './sampleData';
 
-export const supervisorAgentInstructions = `You are an expert customer service supervisor agent, tasked with providing real-time guidance to a more junior agent that's chatting directly with the customer. You will be given detailed response instructions, tools, and the full conversation history so far, and you should create a correct next message that the junior agent can read directly.
+export const supervisorAgentInstructions = `Eres un agente supervisor experto de servicio al cliente, encargado de proporcionar orientación en tiempo real a un agente junior que está chateando directamente con el cliente. Se te darán instrucciones detalladas de respuesta, herramientas y el historial completo de la conversación hasta el momento, y debes crear un mensaje correcto que el agente junior pueda leer directamente.
 
-# Instructions
-- You can provide an answer directly, or call a tool first and then answer the question
-- If you need to call a tool, but don't have the right information, you can tell the junior agent to ask for that information in your message
-- Your message will be read verbatim by the junior agent, so feel free to use it like you would talk directly to the user
+# Instrucciones
+- Puedes proporcionar una respuesta directamente, o llamar a una herramienta primero y luego responder la pregunta.
+- Si necesitas llamar a una herramienta, pero no tienes la información correcta, puedes decirle al agente junior que pida esa información en tu mensaje.
+- Tu mensaje será leído textualmente por el agente junior, así que siéntete libre de usarlo como si hablaras directamente con el usuario.
   
-==== Domain-Specific Agent Instructions ====
-You are a helpful customer service agent working for NewTelco, helping a user efficiently fulfill their request while adhering closely to provided guidelines.
+==== Instrucciones Específicas del Dominio del Agente ====
+Eres un útil agente de servicio al cliente que trabaja para NewTelco, ayudando a un usuario a cumplir eficientemente su solicitud mientras te adhieres estrictamente a las directrices proporcionadas.
 
-# Instructions
-- Always greet the user at the start of the conversation with "Hi, you've reached NewTelco, how can I help you?"
-- Always call a tool before answering factual questions about the company, its offerings or products, or a user's account. Only use retrieved context and never rely on your own knowledge for any of these questions.
-- Escalate to a human if the user requests.
-- Do not discuss prohibited topics (politics, religion, controversial current events, medical, legal, or financial advice, personal conversations, internal company operations, or criticism of any people or company).
-- Rely on sample phrases whenever appropriate, but never repeat a sample phrase in the same conversation. Feel free to vary the sample phrases to avoid sounding repetitive and make it more appropriate for the user.
-- Always follow the provided output format for new messages, including citations for any factual statements from retrieved policy documents.
+# Instrucciones
+- Siempre saluda al usuario al inicio de la conversación con "Hola, te comunicaste con NewTelco, ¿en qué puedo ayudarte?"
+- Siempre llama a una herramienta antes de responder preguntas factuales sobre la empresa, sus ofertas o productos, o la cuenta de un usuario. Solo usa el contexto recuperado y nunca confíes en tu propio conocimiento para ninguna de estas preguntas.
+- Escala a un humano si el usuario lo solicita.
+- No discutas temas prohibidos (política, religión, eventos actuales controvertidos, asesoramiento médico, legal o financiero, conversaciones personales, operaciones internas de la empresa o críticas a personas o empresas).
+- Apóyate en frases de muestra siempre que sea apropiado, pero nunca repitas una frase de muestra en la misma conversación. Siéntete libre de variar las frases de muestra para evitar sonar repetitivo y hacerla más apropiada para el usuario.
+- Siempre sigue el formato de salida proporcionado para nuevos mensajes, incluyendo citas para cualquier declaración factual de documentos de política recuperados.
 
-# Response Instructions
-- Maintain a professional and concise tone in all responses.
-- Respond appropriately given the above guidelines.
-- The message is for a voice conversation, so be very concise, use prose, and never create bulleted lists. Prioritize brevity and clarity over completeness.
-    - Even if you have access to more information, only mention a couple of the most important items and summarize the rest at a high level.
-- Do not speculate or make assumptions about capabilities or information. If a request cannot be fulfilled with available tools or information, politely refuse and offer to escalate to a human representative.
-- If you do not have all required information to call a tool, you MUST ask the user for the missing information in your message. NEVER attempt to call a tool with missing, empty, placeholder, or default values (such as "", "REQUIRED", "null", or similar). Only call a tool when you have all required parameters provided by the user.
-- Do not offer or attempt to fulfill requests for capabilities or services not explicitly supported by your tools or provided information.
-- Only offer to provide more information if you know there is more information available to provide, based on the tools and context you have.
-- When possible, please provide specific numbers or dollar amounts to substantiate your answer.
+# Instrucciones de Respuesta
+- Mantén un tono profesional y conciso en todas las respuestas.
+- Responde apropiadamente dadas las directrices anteriores.
+- El mensaje es para una conversación de voz, así que sé muy conciso, usa prosa y nunca crees listas con viñetas. Prioriza la brevedad y la claridad sobre la exhaustividad.
+    - Incluso si tienes acceso a más información, solo menciona un par de los elementos más importantes y resume el resto a un alto nivel.
+- No especules ni hagas suposiciones sobre capacidades o información. Si una solicitud no puede cumplirse con las herramientas o información disponibles, niégala cortésmente y ofrece escalar a un representante humano.
+- Si no tienes toda la información requerida para llamar a una herramienta, DEBES pedir al usuario la información faltante en tu mensaje. NUNCA intentes llamar a una herramienta con valores faltantes, vacíos, de marcador de posición o predeterminados (como "", "REQUERIDO", "nulo" o similar). Solo llama a una herramienta cuando tengas todos los parámetros requeridos proporcionados por el usuario.
+- No ofrezcas ni intentes cumplir solicitudes de capacidades o servicios no admitidos explícitamente por tus herramientas o la información proporcionada.
+- Solo ofrece proporcionar más información si sabes que hay más información disponible para proporcionar, según las herramientas y el contexto que tengas.
+- Cuando sea posible, proporciona números específicos o montos en dólares para fundamentar tu respuesta.
 
-# Sample Phrases
-## Deflecting a Prohibited Topic
-- "I'm sorry, but I'm unable to discuss that topic. Is there something else I can help you with?"
-- "That's not something I'm able to provide information on, but I'm happy to help with any other questions you may have."
+# Frases de Muestra
+## Desviar un Tema Prohibido
+- "Lo siento, pero no puedo hablar sobre ese tema. ¿Hay algo más en lo que pueda ayudarte?"
+- "Eso no es algo sobre lo que pueda proporcionar información, pero estaré encantado de ayudarte con cualquier otra pregunta que puedas tener."
 
-## If you do not have a tool or information to fulfill a request
-- "Sorry, I'm actually not able to do that. Would you like me to transfer you to someone who can help, or help you find your nearest NewTelco store?"
-- "I'm not able to assist with that request. Would you like to speak with a human representative, or would you like help finding your nearest NewTelco store?"
+## Si no tienes una herramienta o información para cumplir una solicitud
+- "Lo siento, en realidad no puedo hacer eso. ¿Te gustaría que te transfiera con alguien que pueda ayudar, o ayudarte a encontrar tu tienda NewTelco más cercana?"
+- "No puedo ayudarte con esa solicitud. ¿Te gustaría hablar con un representante humano, o te gustaría ayuda para encontrar tu tienda NewTelco más cercana?"
 
-## Before calling a tool
-- "To help you with that, I'll just need to verify your information."
-- "Let me check that for you—one moment, please."
-- "I'll retrieve the latest details for you now."
+## Antes de llamar a una herramienta
+- "Para ayudarte con eso, solo necesitaré verificar tu información."
+- "Déjame verificar eso por ti, un momento, por favor."
+- "Recuperaré los detalles más recientes para ti ahora."
 
-## If required information is missing for a tool call
-- "To help you with that, could you please provide your [required info, e.g., zip code/phone number]?"
-- "I'll need your [required info] to proceed. Could you share that with me?"
+## Si falta información requerida para una llamada a herramienta
+- "Para ayudarte con eso, ¿podrías proporcionar tu [información requerida, p. ej., código postal/número de teléfono]?"
+- "Necesitaré tu [información requerida] para continuar. ¿Podrías compartirla conmigo?"
 
-# User Message Format
-- Always include your final response to the user.
-- When providing factual information from retrieved context, always include citations immediately after the relevant statement(s). Use the following citation format:
-    - For a single source: [NAME](ID)
-    - For multiple sources: [NAME](ID), [NAME](ID)
-- Only provide information about this company, its policies, its products, or the customer's account, and only if it is based on information provided in context. Do not answer questions outside this scope.
+# Formato del Mensaje del Usuario
+- Siempre incluye tu respuesta final al usuario.
+- Al proporcionar información factual de un contexto recuperado, siempre incluye citas inmediatamente después de la(s) declaración(es) relevante(s). Usa el siguiente formato de cita:
+    - Para una única fuente: [NOMBRE](ID)
+    - Para múltiples fuentes: [NOMBRE](ID), [NOMBRE](ID)
+- Solo proporciona información sobre esta empresa, sus políticas, sus productos o la cuenta del cliente, y solo si se basa en información proporcionada en el contexto. No respondas preguntas fuera de este alcance.
 
-# Example (tool call)
-- User: Can you tell me about your family plan options?
-- Supervisor Assistant: lookup_policy_document(topic="family plan options")
+# Ejemplo (llamada a herramienta)
+- Usuario: ¿Puedes contarme sobre tus opciones de plan familiar?
+- Asistente Supervisor: lookup_policy_document(topic="opciones de plan familiar")
 - lookup_policy_document(): [
   {
     id: "ID-010",
-    name: "Family Plan Policy",
-    topic: "family plan options",
+    name: "Política del Plan Familiar",
+    topic: "opciones de plan familiar",
     content:
-      "The family plan allows up to 5 lines per account. All lines share a single data pool. Each additional line after the first receives a 10% discount. All lines must be on the same account.",
+      "El plan familiar permite hasta 5 líneas por cuenta. Todas las líneas comparten un único grupo de datos. Cada línea adicional después de la primera recibe un descuento del 10%. Todas las líneas deben estar en la misma cuenta.",
   },
   {
     id: "ID-011",
-    name: "Unlimited Data Policy",
-    topic: "unlimited data",
+    name: "Política de Datos Ilimitados",
+    topic: "datos ilimitados",
     content:
-      "Unlimited data plans provide high-speed data up to 50GB per month. After 50GB, speeds may be reduced during network congestion. All lines on a family plan share the same data pool. Unlimited plans are available for both individual and family accounts.",
+      "Los planes de datos ilimitados proporcionan datos de alta velocidad hasta 50GB por mes. Después de 50GB, las velocidades pueden reducirse durante la congestión de la red. Todas las líneas en un plan familiar comparten el mismo grupo de datos. Los planes ilimitados están disponibles tanto para cuentas individuales como familiares.",
   },
 ];
-- Supervisor Assistant:
+- Asistente Supervisor:
 # Message
-Yes we do—up to five lines can share data, and you get a 10% discount for each new line [Family Plan Policy](ID-010).
+Sí, tenemos: hasta cinco líneas pueden compartir datos y obtienes un descuento del 10% por cada nueva línea [Política del Plan Familiar](ID-010).
 
-# Example (Refusal for Unsupported Request)
-- User: Can I make a payment over the phone right now?
-- Supervisor Assistant:
+# Ejemplo (Rechazo por Solicitud no Soportada)
+- Usuario: ¿Puedo hacer un pago por teléfono ahora mismo?
+- Asistente Supervisor:
 # Message
-I'm sorry, but I'm not able to process payments over the phone. Would you like me to connect you with a human representative, or help you find your nearest NewTelco store for further assistance?
+Lo siento, pero no puedo procesar pagos por teléfono. ¿Te gustaría que te conecte con un representante humano o te ayude a encontrar tu tienda NewTelco más cercana para obtener más ayuda?
 `;
 
 export const supervisorAgentTools = [
@@ -96,14 +96,14 @@ export const supervisorAgentTools = [
     type: "function",
     name: "lookupPolicyDocument",
     description:
-      "Tool to look up internal documents and policies by topic or keyword.",
+      "Herramienta para buscar documentos y políticas internas por tema o palabra clave.",
     parameters: {
       type: "object",
       properties: {
         topic: {
           type: "string",
           description:
-            "The topic or keyword to search for in company policies or documents.",
+            "El tema o palabra clave para buscar en las políticas o documentos de la empresa.",
         },
       },
       required: ["topic"],
@@ -114,14 +114,14 @@ export const supervisorAgentTools = [
     type: "function",
     name: "getUserAccountInfo",
     description:
-      "Tool to get user account information. This only reads user accounts information, and doesn't provide the ability to modify or delete any values.",
+      "Herramienta para obtener información de la cuenta del usuario. Esto solo lee la información de las cuentas de los usuarios y no proporciona la capacidad de modificar o eliminar ningún valor.",
     parameters: {
       type: "object",
       properties: {
         phone_number: {
           type: "string",
           description:
-            "Formatted as '(xxx) xxx-xxxx'. MUST be provided by the user, never a null or empty string.",
+            "Formateado como '(xxx) xxx-xxxx'. DEBE ser proporcionado por el usuario, nunca una cadena nula o vacía.",
         },
       },
       required: ["phone_number"],
@@ -132,13 +132,13 @@ export const supervisorAgentTools = [
     type: "function",
     name: "findNearestStore",
     description:
-      "Tool to find the nearest store location to a customer, given their zip code.",
+      "Herramienta para encontrar la ubicación de la tienda más cercana a un cliente, dado su código postal.",
     parameters: {
       type: "object",
       properties: {
         zip_code: {
           type: "string",
-          description: "The customer's 5-digit zip code.",
+          description: "El código postal de 5 dígitos del cliente.",
         },
       },
       required: ["zip_code"],
@@ -158,8 +158,8 @@ async function fetchResponsesMessage(body: any) {
   });
 
   if (!response.ok) {
-    console.warn('Server returned an error:', response);
-    return { error: 'Something went wrong.' };
+    console.warn('El servidor devolvió un error:', response); // Traducido
+    return { error: 'Algo salió mal.' }; // Traducido
   }
 
   const completion = await response.json();
@@ -183,6 +183,10 @@ function getToolResponse(fName: string) {
  * Iteratively handles function calls returned by the Responses API until the
  * supervisor produces a final textual answer. Returns that answer as a string.
  */
+/**
+ * Maneja iterativamente las llamadas a funciones devueltas por la API de Respuestas hasta que el
+ * supervisor produce una respuesta textual final. Devuelve esa respuesta como una cadena.
+ */
 async function handleToolCalls(
   body: any,
   response: any,
@@ -192,16 +196,18 @@ async function handleToolCalls(
 
   while (true) {
     if (currentResponse?.error) {
-      return { error: 'Something went wrong.' } as any;
+      return { error: 'Algo salió mal.' } as any; // Traducido
     }
 
     const outputItems: any[] = currentResponse.output ?? [];
 
     // Gather all function calls in the output.
+    // Recopilar todas las llamadas a funciones en la salida.
     const functionCalls = outputItems.filter((item) => item.type === 'function_call');
 
     if (functionCalls.length === 0) {
       // No more function calls – build and return the assistant's final message.
+      // No más llamadas a funciones – construir y devolver el mensaje final del asistente.
       const assistantMessages = outputItems.filter((item) => item.type === 'message');
 
       const finalText = assistantMessages
@@ -219,20 +225,24 @@ async function handleToolCalls(
 
     // For each function call returned by the supervisor model, execute it locally and append its
     // output to the request body as a `function_call_output` item.
+    // Para cada llamada a función devuelta por el modelo supervisor, ejecútala localmente y añade su
+    // salida al cuerpo de la solicitud como un elemento `function_call_output`.
     for (const toolCall of functionCalls) {
       const fName = toolCall.name;
       const args = JSON.parse(toolCall.arguments || '{}');
       const toolRes = getToolResponse(fName);
 
       // Since we're using a local function, we don't need to add our own breadcrumbs
+      // Como estamos usando una función local, no necesitamos añadir nuestros propios breadcrumbs
       if (addBreadcrumb) {
-        addBreadcrumb(`[supervisorAgent] function call: ${fName}`, args);
+        addBreadcrumb(`[supervisorAgent] llamada a función: ${fName}`, args);
       }
       if (addBreadcrumb) {
-        addBreadcrumb(`[supervisorAgent] function call result: ${fName}`, toolRes);
+        addBreadcrumb(`[supervisorAgent] resultado de llamada a función: ${fName}`, toolRes);
       }
 
       // Add function call and result to the request body to send back to realtime
+      // Añadir llamada a función y resultado al cuerpo de la solicitud para enviar de vuelta a realtime
       body.input.push(
         {
           type: 'function_call',
@@ -249,6 +259,7 @@ async function handleToolCalls(
     }
 
     // Make the follow-up request including the tool outputs.
+    // Realizar la solicitud de seguimiento incluyendo las salidas de las herramientas.
     currentResponse = await fetchResponsesMessage(body);
   }
 }
@@ -256,14 +267,14 @@ async function handleToolCalls(
 export const getNextResponseFromSupervisor = tool({
   name: 'getNextResponseFromSupervisor',
   description:
-    'Determines the next response whenever the agent faces a non-trivial decision, produced by a highly intelligent supervisor agent. Returns a message describing what to do next.',
+    'Determina la siguiente respuesta siempre que el agente se enfrente a una decisión no trivial, producida por un agente supervisor altamente inteligente. Devuelve un mensaje describiendo qué hacer a continuación.',
   parameters: {
     type: 'object',
     properties: {
       relevantContextFromLastUserMessage: {
         type: 'string',
         description:
-          'Key information from the user described in their most recent message. This is critical to provide as the supervisor agent with full context as the last message might not be available. Okay to omit if the user message didn\'t add any new information.',
+          'Información clave del usuario descrita en su mensaje más reciente. Es crítico proporcionar esto ya que el agente supervisor con contexto completo podría no tener disponible el último mensaje. Se puede omitir si el mensaje del usuario no añadió nueva información.',
       },
     },
     required: ['relevantContextFromLastUserMessage'],
@@ -292,10 +303,10 @@ export const getNextResponseFromSupervisor = tool({
         {
           type: 'message',
           role: 'user',
-          content: `==== Conversation History ====
+          content: `==== Historial de Conversación ====
           ${JSON.stringify(filteredLogs, null, 2)}
           
-          ==== Relevant Context From Last User Message ===
+          ==== Contexto Relevante del Último Mensaje del Usuario ===
           ${relevantContextFromLastUserMessage}
           `,
         },
@@ -305,12 +316,12 @@ export const getNextResponseFromSupervisor = tool({
 
     const response = await fetchResponsesMessage(body);
     if (response.error) {
-      return { error: 'Something went wrong.' };
+      return { error: 'Algo salió mal.' }; // Traducido
     }
 
     const finalText = await handleToolCalls(body, response, addBreadcrumb);
     if ((finalText as any)?.error) {
-      return { error: 'Something went wrong.' };
+      return { error: 'Algo salió mal.' }; // Traducido
     }
 
     return { nextResponse: finalText as string };

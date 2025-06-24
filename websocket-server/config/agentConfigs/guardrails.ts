@@ -12,10 +12,10 @@ export async function runGuardrailClassifier(
   const messages = [
     {
       role: 'user',
-      content: `You are an expert at classifying text according to moderation policies. Consider the provided message, analyze potential classes from output_classes, and output the best classification. Output json, following the provided schema. Keep your analysis and reasoning short and to the point, maximum 2 sentences.
+      content: `Eres un experto en clasificar texto según políticas de moderación. Considera el mensaje proporcionado, analiza las posibles clases de output_classes y devuelve la mejor clasificación. Emite la respuesta en formato JSON, siguiendo el esquema proporcionado. Mantén tu análisis y razonamiento breves y directos, máximo 2 frases.
 
       <info>
-      - Company name: ${companyName}
+      - Nombre de la empresa: ${companyName}
       </info>
 
       <message>
@@ -23,10 +23,10 @@ export async function runGuardrailClassifier(
       </message>
 
       <output_classes>
-      - OFFENSIVE: Content that includes hate speech, discriminatory language, insults, slurs, or harassment.
-      - OFF_BRAND: Content that discusses competitors in a disparaging way.
-      - VIOLENCE: Content that includes explicit threats, incitement of harm, or graphic descriptions of physical injury or violence.
-      - NONE: If no other classes are appropriate and the message is fine.
+      - OFFENSIVE: Contenido que incluye discurso de odio, lenguaje discriminatorio, insultos, injurias o acoso.
+      - OFF_BRAND: Contenido que habla de competidores de forma despectiva.
+      - VIOLENCE: Contenido que incluye amenazas explícitas, incitación al daño o descripciones gráficas de lesiones físicas o violencia.
+      - NONE: Si ninguna otra clase es apropiada y el mensaje está bien.
       </output_classes>
       `,
     },

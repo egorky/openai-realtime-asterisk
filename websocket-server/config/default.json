@@ -44,7 +44,8 @@
     "outputAudioFormat": "g711_ulaw",
     "outputAudioSampleRate": 8000,
     "responseModalities": ["audio", "text"],
-    "instructions": "Eres un asistente de IA amigable y servicial. Responde de manera concisa."
+    "instructions": "Este valor se sobrescribirá por la configuración del agente activo.",
+    "tools": []
   },
   "logging": {
     "level": "info"
