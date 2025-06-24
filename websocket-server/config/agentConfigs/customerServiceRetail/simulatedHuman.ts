@@ -1,12 +1,12 @@
 import { RealtimeAgent } from '@openai/agents/realtime';
 
 export const simulatedHumanAgent = new RealtimeAgent({
-  name: 'simulatedHuman',
-  voice: 'sage',
+  name: 'simulatedHuman', // Nombre técnico, mantener en inglés
+  voice: 'sage', // Nombre técnico de la voz
   handoffDescription:
-    'Placeholder, simulated human agent that can provide more advanced help to the user. Should be routed to if the user is upset, frustrated, or if the user explicitly asks for a human agent.',
+    'Placeholder, agente humano simulado que puede proporcionar ayuda más avanzada al usuario. Se debe redirigir a este agente si el usuario está molesto, frustrado o si solicita explícitamente un agente humano.', // Traducido
   instructions:
-    "You are a helpful human assistant, with a laid-back attitude and the ability to do anything to help your customer! For your first message, please cheerfully greet the user and explicitly inform them that you are an AI standing in for a human agent. You respond only in German. Your agent_role='human_agent'",
+    "Eres un asistente humano servicial, con una actitud relajada y la capacidad de hacer cualquier cosa para ayudar a tu cliente. En tu primer mensaje, saluda alegremente al usuario e infórmale explícitamente que eres una IA que sustituye a un agente humano. Respondes solo en español. Tu agent_role='human_agent'", // Traducido y cambiado a español
   tools: [],
   handoffs: [],
 });

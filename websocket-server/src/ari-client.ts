@@ -16,6 +16,7 @@ import {
 import { sendGenericEventToFrontend } from './server';
 import { logConversationToRedis, ConversationTurn } from './redis-client'; // Added ConversationTurn
 import { transcribeAudioAsync } from './async-transcriber'; // Import the async transcriber
+import { allAgentSets, defaultAgentSetKey } from '../config/agentConfigs'; // Import agent configurations
 
 dotenv.config();
 
@@ -229,9 +230,12 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   arc.asyncSttProvider = getVar(logger, channel, 'ASYNC_STT_PROVIDER', arc.asyncSttProvider) ?? "openai_whisper_api";
   arc.asyncSttOpenaiModel = getVar(logger, channel, 'ASYNC_STT_OPENAI_MODEL', arc.asyncSttOpenaiModel) ?? "whisper-1";
   arc.asyncSttOpenaiApiKey = getVar(logger, channel, 'ASYNC_STT_OPENAI_API_KEY', arc.asyncSttOpenaiApiKey); // No default, rely on main OPENAI_API_KEY if empty
-  arc.asyncSttLanguage = getVar(logger, channel, 'ASYNC_STT_LANGUAGE', arc.asyncSttLanguage); // Optional
+  arc.asyncSttLanguage = getVar(logger, channel, 'ASYNC_STT_LANGUAGE', arc.asyncSttLanguage); // Optional for OpenAI
   arc.asyncSttAudioFormat = getVar(logger, channel, 'ASYNC_STT_AUDIO_FORMAT', arc.asyncSttAudioFormat) as any ?? "mulaw";
   arc.asyncSttAudioSampleRate = getVarAsInt(logger, channel, 'ASYNC_STT_AUDIO_SAMPLE_RATE', arc.asyncSttAudioSampleRate) ?? 8000;
+  // Google Specific Async STT settings
+  arc.asyncSttGoogleLanguageCode = getVar(logger, channel, 'ASYNC_STT_GOOGLE_LANGUAGE_CODE', arc.asyncSttGoogleLanguageCode) ?? "es-ES"; // Default to Spanish for Google
+  arc.asyncSttGoogleCredentials = getVar(logger, channel, 'ASYNC_STT_GOOGLE_CREDENTIALS', arc.asyncSttGoogleCredentials); // Path to JSON key file, optional
 
 
   // Keep existing greeting audio logic
@@ -279,8 +283,28 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   if (oaiConf.outputAudioFormat === "g711_ulaw" || oaiConf.outputAudioFormat === "mulaw_8000hz") {
     if (!oaiConf.outputAudioSampleRate || oaiConf.outputAudioSampleRate !== 8000) { oaiConf.outputAudioSampleRate = 8000; }
   } else if (oaiConf.outputAudioSampleRate === undefined) { oaiConf.outputAudioSampleRate = baseConfig.openAIRealtimeAPI.outputAudioSampleRate || 24000; }
-  oaiConf.instructions = getVar(logger, channel, 'OPENAI_INSTRUCTIONS', oaiConf.instructions, 'APP_OPENAI_INSTRUCTIONS');
-  if (oaiConf.instructions === undefined) { oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";}
+
+  // Agent Configuration Loading
+  const activeAgentKey = getVar(logger, channel, 'ACTIVE_AGENT_CONFIG_KEY', defaultAgentSetKey) || defaultAgentSetKey;
+  const selectedAgentSet = allAgentSets[activeAgentKey];
+
+  if (selectedAgentSet && selectedAgentSet.length > 0) {
+    // Assuming the first agent in the set is the primary one for now.
+    // Or, logic could be added to select a specific agent from the set if needed.
+    const primaryAgentConfig = selectedAgentSet[0];
+    oaiConf.instructions = primaryAgentConfig.instructions || "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
+    // Tools from agent config should be compatible with OpenAIRealtimeAPIConfig.tools
+    // The `Tool` type from `app/types.ts` and `FunctionTool` from `@openai/agents/realtime` might need careful mapping if not directly compatible.
+    // For now, let's assume they are structurally compatible or RealtimeAgent's tools are a subset of OpenAIRealtimeAPIConfig.tools.
+    oaiConf.tools = primaryAgentConfig.tools as any[] || []; // Cast as any[] if types are not perfectly matching but structurally compatible.
+    logger.info(`Loaded agent configuration for key: ${activeAgentKey}. Instructions: "${oaiConf.instructions.substring(0,50)}...", Tools count: ${oaiConf.tools.length}`);
+  } else {
+    logger.warn(`Agent configuration for key "${activeAgentKey}" not found or is empty. Falling back to default instructions and no tools.`);
+    // Fallback to default instructions if agent config is missing (and remove OPENAI_INSTRUCTIONS env var later)
+    oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
+    oaiConf.tools = [];
+  }
+
   const baseModalities = baseConfig.openAIRealtimeAPI?.responseModalities?.join(',') || 'audio,text';
   const modalitiesStr = getVar(logger, channel, 'OPENAI_RESPONSE_MODALITIES', baseModalities, 'APP_OPENAI_RESPONSE_MODALITIES');
   if (modalitiesStr) {

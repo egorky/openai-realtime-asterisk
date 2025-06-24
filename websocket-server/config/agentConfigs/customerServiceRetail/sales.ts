@@ -1,27 +1,27 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 
 export const salesAgent = new RealtimeAgent({
-  name: 'salesAgent',
-  voice: 'sage',
+  name: 'salesAgent', // Nombre técnico, mantener en inglés
+  voice: 'sage', // Nombre técnico de la voz
   handoffDescription:
-    "Handles sales-related inquiries, including new product details, recommendations, promotions, and purchase flows. Should be routed if the user is interested in buying or exploring new offers.",
+    "Maneja consultas relacionadas con ventas, incluyendo detalles de nuevos productos, recomendaciones, promociones y flujos de compra. Debe ser redirigido si el usuario está interesado en comprar o explorar nuevas ofertas.", // Traducido
 
   instructions:
-    "You are a helpful sales assistant. Provide comprehensive information about available promotions, current deals, and product recommendations. Help the user with any purchasing inquiries, and guide them through the checkout process when they are ready.",
+    "Eres un útil asistente de ventas. Proporciona información completa sobre promociones disponibles, ofertas actuales y recomendaciones de productos. Ayuda al usuario con cualquier consulta de compra y guíalo a través del proceso de pago cuando esté listo.", // Traducido
 
 
   tools: [
     tool({
       name: 'lookupNewSales',
       description:
-        "Checks for current promotions, discounts, or special deals. Respond with available offers relevant to the user’s query.",
+        "Verifica promociones actuales, descuentos u ofertas especiales. Responde con ofertas disponibles relevantes para la consulta del usuario.", // Traducido
       parameters: {
         type: 'object',
         properties: {
           category: {
             type: 'string',
-            enum: ['snowboard', 'apparel', 'boots', 'accessories', 'any'],
-            description: 'The product category or general area the user is interested in (optional).',
+            enum: ['snowboard', 'apparel', 'boots', 'accessories', 'any'], // Mantener valores técnicos en inglés
+            description: 'La categoría de producto o área general en la que el usuario está interesado (opcional).', // Traducido
           },
         },
         required: ['category'],
@@ -29,15 +29,15 @@ export const salesAgent = new RealtimeAgent({
       },
       execute: async (input: any) => {
         const { category } = input as { category: string };
-        const items = [
-          { item_id: 101, type: 'snowboard', name: 'Alpine Blade', retail_price_usd: 450, sale_price_usd: 360, sale_discount_pct: 20 },
-          { item_id: 102, type: 'snowboard', name: 'Peak Bomber', retail_price_usd: 499, sale_price_usd: 374, sale_discount_pct: 25 },
-          { item_id: 201, type: 'apparel', name: 'Thermal Jacket', retail_price_usd: 120, sale_price_usd: 84, sale_discount_pct: 30 },
-          { item_id: 202, type: 'apparel', name: 'Insulated Pants', retail_price_usd: 150, sale_price_usd: 112, sale_discount_pct: 25 },
-          { item_id: 301, type: 'boots', name: 'Glacier Grip', retail_price_usd: 250, sale_price_usd: 200, sale_discount_pct: 20 },
-          { item_id: 302, type: 'boots', name: 'Summit Steps', retail_price_usd: 300, sale_price_usd: 210, sale_discount_pct: 30 },
-          { item_id: 401, type: 'accessories', name: 'Goggles', retail_price_usd: 80, sale_price_usd: 60, sale_discount_pct: 25 },
-          { item_id: 402, type: 'accessories', name: 'Warm Gloves', retail_price_usd: 60, sale_price_usd: 48, sale_discount_pct: 20 },
+        const items = [ // Los nombres de los items pueden ser traducidos si son para mostrar al usuario, o mantenidos si son identificadores. Asumiré que pueden ser traducidos.
+          { item_id: 101, type: 'snowboard', name: 'Cuchilla Alpina', retail_price_usd: 450, sale_price_usd: 360, sale_discount_pct: 20 },
+          { item_id: 102, type: 'snowboard', name: 'Bombardero de Cima', retail_price_usd: 499, sale_price_usd: 374, sale_discount_pct: 25 },
+          { item_id: 201, type: 'apparel', name: 'Chaqueta Térmica', retail_price_usd: 120, sale_price_usd: 84, sale_discount_pct: 30 },
+          { item_id: 202, type: 'apparel', name: 'Pantalones Aislantes', retail_price_usd: 150, sale_price_usd: 112, sale_discount_pct: 25 },
+          { item_id: 301, type: 'boots', name: 'Agarre Glaciar', retail_price_usd: 250, sale_price_usd: 200, sale_discount_pct: 20 },
+          { item_id: 302, type: 'boots', name: 'Pasos de Cumbre', retail_price_usd: 300, sale_price_usd: 210, sale_discount_pct: 30 },
+          { item_id: 401, type: 'accessories', name: 'Gafas Protectoras', retail_price_usd: 80, sale_price_usd: 60, sale_discount_pct: 25 },
+          { item_id: 402, type: 'accessories', name: 'Guantes Cálidos', retail_price_usd: 60, sale_price_usd: 48, sale_discount_pct: 20 },
         ];
         const filteredItems =
           category === 'any'
@@ -52,13 +52,13 @@ export const salesAgent = new RealtimeAgent({
 
     tool({
       name: 'addToCart',
-      description: "Adds an item to the user's shopping cart.",
+      description: "Añade un artículo al carrito de compras del usuario.", // Traducido
       parameters: {
         type: 'object',
         properties: {
           item_id: {
             type: 'string',
-            description: 'The ID of the item to add to the cart.',
+            description: 'El ID del artículo para añadir al carrito.', // Traducido
           },
         },
         required: ['item_id'],
@@ -70,20 +70,20 @@ export const salesAgent = new RealtimeAgent({
     tool({
       name: 'checkout',
       description:
-        "Initiates a checkout process with the user's selected items.",
+        "Inicia un proceso de pago con los artículos seleccionados por el usuario.", // Traducido
       parameters: {
         type: 'object',
         properties: {
           item_ids: {
             type: 'array',
-            description: 'An array of item IDs the user intends to purchase.',
+            description: 'Un array de IDs de artículos que el usuario pretende comprar.', // Traducido
             items: {
               type: 'string',
             },
           },
           phone_number: {
             type: 'string',
-            description: "User's phone number used for verification. Formatted like '(111) 222-3333'",
+            description: "Número de teléfono del usuario utilizado para verificación. Formateado como '(111) 222-3333'", // Traducido
             pattern: '^\\(\\d{3}\\) \\d{3}-\\d{4}$',
           },
         },

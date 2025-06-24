@@ -101,7 +101,8 @@ Create a `.env` file in the root of the `websocket-server` directory by copying 
 *   `OPENAI_REALTIME_MODEL`: The OpenAI Realtime model ID to be used for both Speech-to-Text and Text-to-Speech within a session (e.g., `gpt-4o-mini-realtime-preview-2024-12-17`).
 
 ### OpenAI Optional (Defaults are provided in `config/default.json`)
-*   `OPENAI_INSTRUCTIONS`: Optional. Allows you to set the default system prompt or instructions for the OpenAI model. Defaults to a friendly, concise assistant in Spanish if not set. Example: `"Eres un experto en historia medieval."`
+*   `ACTIVE_AGENT_CONFIG_KEY`: Specifies which agent configuration (scenario) to load from `config/agentConfigs/index.ts`. This determines the assistant's instructions, tools, and personality. Example: `"customerServiceRetail"`. Defaults to `chatSupervisor` if not set.
+*   `INITIAL_USER_PROMPT`: Optional. If set, this text will be sent as a synthetic first "user" message to the OpenAI model, prompting the assistant to speak first. Example: `"Hola"`.
 *   `OPENAI_RESPONSE_MODALITIES`: Optional. Comma-separated list of desired response types from OpenAI. Can include "audio" and/or "text". Defaults to `"audio,text"` if not set. Example: `"text"` for text-only responses.
 *   `OPENAI_TTS_MODEL`: Model for Text-to-Speech (e.g., `tts-1`). Primarily used if the Realtime API does not handle TTS as part of the session, or for separate/fallback TTS functionalities.
 *   `OPENAI_TTS_VOICE`: Voice for TTS (e.g., `alloy`). Used for any TTS audio generation.

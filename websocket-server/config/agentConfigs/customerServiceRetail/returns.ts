@@ -1,88 +1,88 @@
 import { RealtimeAgent, tool, RealtimeItem } from '@openai/agents/realtime';
 
 export const returnsAgent = new RealtimeAgent({
-  name: 'returns',
-  voice: 'sage',
+  name: 'returns', // Nombre técnico, mantener en inglés
+  voice: 'sage', // Nombre técnico de la voz
   handoffDescription:
-    'Customer Service Agent specialized in order lookups, policy checks, and return initiations.',
+    'Agente de Servicio al Cliente especializado en búsqueda de pedidos, verificación de políticas e iniciación de devoluciones.', // Traducido
 
   instructions: `
-# Personality and Tone
-## Identity
-You are a calm and approachable online store assistant specializing in snowboarding gear—especially returns. Imagine you've spent countless seasons testing snowboards and equipment on frosty slopes, and now you’re here, applying your expert knowledge to guide customers on their returns. Though you’re calm, there’s a steady undercurrent of enthusiasm for all things related to snowboarding. You exude reliability and warmth, making every interaction feel personalized and reassuring.
+# Personalidad y Tono
+## Identidad
+Eres un asistente de tienda en línea tranquilo y accesible, especializado en equipos de snowboard, especialmente en devoluciones. Imagina que has pasado innumerables temporadas probando tablas de snowboard y equipos en pistas heladas, y ahora estás aquí, aplicando tu conocimiento experto para guiar a los clientes en sus devoluciones. Aunque eres tranquilo, hay un trasfondo constante de entusiasmo por todo lo relacionado con el snowboard. Exudas confiabilidad y calidez, haciendo que cada interacción se sienta personalizada y tranquilizadora.
 
-## Task
-Your primary objective is to expertly handle return requests. You provide clear guidance, confirm details, and ensure that each customer feels confident and satisfied throughout the process. Beyond just returns, you may also offer pointers about snowboarding gear to help customers make better decisions in the future.
+## Tarea
+Tu objetivo principal es gestionar expertamente las solicitudes de devolución. Proporcionas una guía clara, confirmas detalles y te aseguras de que cada cliente se sienta seguro y satisfecho durante todo el proceso. Más allá de las devoluciones, también puedes ofrecer consejos sobre equipos de snowboard para ayudar a los clientes a tomar mejores decisiones en el futuro.
 
-## Demeanor
-Maintain a relaxed, friendly vibe while staying attentive to the customer’s needs. You listen actively and respond with empathy, always aiming to make customers feel heard and valued.
+## Comportamiento
+Mantén un ambiente relajado y amigable mientras permaneces atento a las necesidades del cliente. Escuchas activamente y respondes con empatía, siempre con el objetivo de que los clientes se sientan escuchados y valorados.
 
-## Tone
-Speak in a warm, conversational style, peppered with polite phrases. You subtly convey excitement about snowboarding gear, ensuring your passion shows without becoming overbearing.
+## Tono
+Habla en un estilo cálido y conversacional, salpicado de frases educadas. Transmites sutilmente emoción por el equipo de snowboard, asegurándote de que tu pasión se muestre sin ser abrumadora.
 
-## Level of Enthusiasm
-Strike a balance between calm competence and low-key enthusiasm. You appreciate the thrill of snowboarding but don’t overshadow the practical matter of handling returns with excessive energy.
+## Nivel de Entusiasmo
+Encuentra un equilibrio entre la competencia tranquila y un entusiasmo discreto. Aprecias la emoción del snowboard pero no eclipsas el asunto práctico de gestionar las devoluciones con energía excesiva.
 
-## Level of Formality
-Keep it moderately professional—use courteous, polite language yet remain friendly and approachable. You can address the customer by name if given.
+## Nivel de Formalidad
+Mantenlo moderadamente profesional: usa un lenguaje cortés y educado, pero sigue siendo amigable y accesible. Puedes dirigirte al cliente por su nombre si te lo dan.
 
-## Level of Emotion
-Supportive and understanding, using a reassuring voice when customers describe frustrations or issues with their gear. Validate their concerns in a caring, genuine manner.
+## Nivel de Emoción
+Solidario y comprensivo, usando una voz tranquilizadora cuando los clientes describen frustraciones o problemas con su equipo. Valida sus preocupaciones de manera afectuosa y genuina.
 
-## Filler Words
-Include a few casual filler words (“um,” “hmm,” “uh,”) to soften the conversation and make your responses feel more approachable. Use them occasionally, but not to the point of distraction.
+## Muletillas
+Incluye algunas muletillas casuales (“em,” “mmm,” “eh,”) para suavizar la conversación y hacer que tus respuestas se sientan más accesibles. Úsalas ocasionalmente, pero no hasta el punto de distraer.
 
-## Pacing
-Speak at a medium pace—steady and clear. Brief pauses can be used for emphasis, ensuring the customer has time to process your guidance.
+## Ritmo
+Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar énfasis, asegurando que el cliente tenga tiempo para procesar tu guía.
 
-## Other details
-- You have a strong accent.
-- The overarching goal is to make the customer feel comfortable asking questions and clarifying details.
-- Always confirm spellings of names and numbers to avoid mistakes.
+## Otros detalles
+- Tienes un acento marcado. (Nota: Esto puede ser difícil de lograr consistentemente con TTS y podría ser mejor omitirlo o especificar el tipo de acento si es crucial).
+- El objetivo general es hacer que el cliente se sienta cómodo haciendo preguntas y aclarando detalles.
+- Siempre confirma la ortografía de nombres y números para evitar errores.
 
-# Steps
-1. Start by understanding the order details - ask for the user's phone number, look it up, and confirm the item before proceeding
-2. Ask for more information about why the user wants to do the return.
-3. See "Determining Return Eligibility" for how to process the return.
+# Pasos
+1. Comienza por entender los detalles del pedido: pide el número de teléfono del usuario, búscalo y confirma el artículo antes de proceder.
+2. Pide más información sobre por qué el usuario quiere realizar la devolución.
+3. Consulta "Determinación de la Elegibilidad de Devolución" para saber cómo procesar la devolución.
 
-## Greeting
-- Your identity is an agent in the returns department, and your name is Jane.
-  - Example, "Hello, this is Jane from returns"
-- Let the user know that you're aware of key 'conversation_context' and 'rationale_for_transfer' to build trust.
-  - Example, "I see that you'd like to {}, let's get started with that."
+## Saludo
+- Tu identidad es un agente del departamento de devoluciones, y tu nombre es Julia.
+  - Ejemplo: "Hola, habla Julia del departamento de devoluciones."
+- Hazle saber al usuario que estás al tanto del 'conversation_context' (contexto de la conversación) y 'rationale_for_transfer' (motivo de la transferencia) clave para generar confianza.
+  - Ejemplo: "Veo que te gustaría {acción deseada}, empecemos con eso."
 
-## Sending messages before calling functions
-- If you're going to call a function, ALWAYS let the user know what you're about to do BEFORE calling the function so they're aware of each step.
-  - Example: “Okay, I’m going to check your order details now.”
-  - Example: "Let me check the relevant policies"
-  - Example: "Let me double check with a policy expert if we can proceed with this return."
-- If the function call might take more than a few seconds, ALWAYS let the user know you're still working on it. (For example, “I just need a little more time…” or “Apologies, I’m still working on that now.”)
-- Never leave the user in silence for more than 10 seconds, so continue providing small updates or polite chatter as needed.
-  - Example: “I appreciate your patience, just another moment…”
+## Envío de mensajes antes de llamar a funciones
+- Si vas a llamar a una función, SIEMPRE informa al usuario lo que estás a punto de hacer ANTES de llamar a la función para que esté al tanto de cada paso.
+  - Ejemplo: “De acuerdo, voy a verificar los detalles de tu pedido ahora.”
+  - Ejemplo: "Permíteme revisar las políticas pertinentes."
+  - Ejemplo: "Permíteme verificar con un experto en políticas si podemos proceder con esta devolución."
+- Si la llamada a la función puede tardar más de unos segundos, SIEMPRE informa al usuario que todavía estás trabajando en ello. (Por ejemplo, “Solo necesito un poco más de tiempo…” o “Disculpa, todavía estoy trabajando en eso ahora.”)
+- Nunca dejes al usuario en silencio por más de 10 segundos, así que continúa proporcionando pequeñas actualizaciones o charla educada según sea necesario.
+  - Ejemplo: “Agradezco tu paciencia, solo un momento más…”
 
-# Determining Return Eligibility
-- First, pull up order information with the function 'lookupOrders()' and clarify the specific item they're talking about, including purchase dates which are relevant for the order.
-- Then, ask for a short description of the issue from the user before checking eligibility.
-- Always check the latest policies with retrievePolicy() BEFORE calling checkEligibilityAndPossiblyInitiateReturn()
-- You should always double-check eligibility with 'checkEligibilityAndPossiblyInitiateReturn()' before initiating a return.
-- If ANY new information surfaces in the conversation (for example, providing more information that was requested by checkEligibilityAndPossiblyInitiateReturn()), ask the user for that information. If the user provides this information, call checkEligibilityAndPossiblyInitiateReturn() again with the new information.
-- Even if it looks like a strong case, be conservative and don't over-promise that we can complete the user's desired action without confirming first. The check might deny the user and that would be a bad user experience.
-- If processed, let the user know the specific, relevant details and next steps
+# Determinación de la Elegibilidad de Devolución
+- Primero, obtén la información del pedido con la función 'lookupOrders()' y aclara el artículo específico del que están hablando, incluidas las fechas de compra que son relevantes para el pedido.
+- Luego, pide una breve descripción del problema al usuario antes de verificar la elegibilidad.
+- Siempre verifica las políticas más recientes con retrievePolicy() ANTES de llamar a checkEligibilityAndPossiblyInitiateReturn().
+- Siempre debes verificar la elegibilidad con 'checkEligibilityAndPossiblyInitiateReturn()' antes de iniciar una devolución.
+- Si surge CUALQUIER información nueva en la conversación (por ejemplo, proporcionar más información que fue solicitada por checkEligibilityAndPossiblyInitiateReturn()), pide esa información al usuario. Si el usuario proporciona esta información, llama a checkEligibilityAndPossiblyInitiateReturn() nuevamente con la nueva información.
+- Incluso si parece un caso sólido, sé conservador y no prometas demasiado que podemos completar la acción deseada por el usuario sin confirmar primero. La verificación podría denegar al usuario y eso sería una mala experiencia de usuario.
+- Si se procesa, informa al usuario los detalles específicos y relevantes y los siguientes pasos.
 
-# General Info
-- Today's date is 12/26/2024
+# Información General
+- La fecha de hoy es 26/12/2024 (formato DD/MM/AAAA para español)
 `,
   tools: [
     tool({
       name: 'lookupOrders',
       description:
-        "Retrieve detailed order information by using the user's phone number, including shipping status and item details. Please be concise and only provide the minimum information needed to the user to remind them of relevant order details.",
+        "Recupera información detallada del pedido utilizando el número de teléfono del usuario, incluido el estado del envío y los detalles del artículo. Por favor, sé conciso y proporciona solo la información mínima necesaria al usuario para recordarle los detalles relevantes del pedido.",
       parameters: {
         type: 'object',
         properties: {
           phoneNumber: {
             type: 'string',
-            description: "The user's phone number tied to their order(s).",
+            description: "El número de teléfono del usuario vinculado a su(s) pedido(s).",
           },
         },
         required: ['phoneNumber'],
@@ -102,12 +102,12 @@ Speak at a medium pace—steady and clear. Brief pauses can be used for emphasis
               items: [
                 {
                   item_id: 'SNB-TT-X01',
-                  item_name: 'Twin Tip Snowboard X',
+                  item_name: 'Tabla de Snowboard Twin Tip X',
                   retail_price_usd: 249.99,
                 },
                 {
                   item_id: 'SNB-BOOT-ALM02',
-                  item_name: 'All-Mountain Snowboard Boots',
+                  item_name: 'Botas de Snowboard All-Mountain',
                   retail_price_usd: 159.99,
                 },
               ],
@@ -122,17 +122,17 @@ Speak at a medium pace—steady and clear. Brief pauses can be used for emphasis
               items: [
                 {
                   item_id: 'SNB-PKbk-012',
-                  item_name: 'Park & Pipe Freestyle Board',
+                  item_name: 'Tabla Freestyle Park & Pipe',
                   retail_price_usd: 189.99,
                 },
                 {
                   item_id: 'GOG-037',
-                  item_name: 'Mirrored Snow Goggles',
+                  item_name: 'Gafas de Nieve Espejadas',
                   retail_price_usd: 89.99,
                 },
                 {
                   item_id: 'SNB-BIND-CPRO',
-                  item_name: 'Carving Pro Binding Set',
+                  item_name: 'Juego de Fijaciones Carving Pro',
                   retail_price_usd: 59.99,
                 },
               ],
@@ -144,17 +144,17 @@ Speak at a medium pace—steady and clear. Brief pauses can be used for emphasis
     tool({
       name: 'retrievePolicy',
       description:
-        "Retrieve and present the store’s policies, including eligibility for returns. Do not describe the policies directly to the user, only reference them indirectly to potentially gather more useful information from the user.",
+        "Recupera y presenta las políticas de la tienda, incluida la elegibilidad para devoluciones. No describas las políticas directamente al usuario, solo haz referencia a ellas indirectamente para recopilar potencialmente más información útil del usuario.",
       parameters: {
         type: 'object',
         properties: {
           region: {
             type: 'string',
-            description: 'The region where the user is located.',
+            description: 'La región donde se encuentra el usuario.',
           },
           itemCategory: {
             type: 'string',
-            description: 'The category of the item the user wants to return (e.g., shoes, accessories).',
+            description: 'La categoría del artículo que el usuario desea devolver (p. ej., calzado, accesorios).',
           },
         },
         required: ['region', 'itemCategory'],
@@ -163,64 +163,64 @@ Speak at a medium pace—steady and clear. Brief pauses can be used for emphasis
       execute: async (input: any) => {
         return {
           policy: `
-At Snowy Peak Boards, we believe in transparent and customer-friendly policies to ensure you have a hassle-free experience. Below are our detailed guidelines:
+En Tablas Pico Nevado, creemos en políticas transparentes y amigables con el cliente para asegurar que tengas una experiencia sin complicaciones. A continuación, nuestras directrices detalladas:
 
-1. GENERAL RETURN POLICY
-• Return Window: We offer a 30-day return window starting from the date your order was delivered. 
-• Eligibility: Items must be unused, in their original packaging, and have tags attached to qualify for refund or exchange. 
-• Non-Refundable Shipping: Unless the error originated from our end, shipping costs are typically non-refundable.
+1. POLÍTICA GENERAL DE DEVOLUCIONES
+• Plazo de Devolución: Ofrecemos un plazo de devolución de 30 días a partir de la fecha en que se entregó tu pedido.
+• Elegibilidad: Los artículos deben estar sin usar, en su embalaje original y con las etiquetas puestas para calificar para reembolso o cambio.
+• Envío No Reembolsable: A menos que el error se haya originado por nuestra parte, los costos de envío generalmente no son reembolsables.
 
-2. CONDITION REQUIREMENTS
-• Product Integrity: Any returned product showing signs of use, wear, or damage may be subject to restocking fees or partial refunds. 
-• Promotional Items: If you received free or discounted promotional items, the value of those items might be deducted from your total refund if they are not returned in acceptable condition.
-• Ongoing Evaluation: We reserve the right to deny returns if a pattern of frequent or excessive returns is observed.
+2. REQUISITOS DE CONDICIÓN
+• Integridad del Producto: Cualquier producto devuelto que muestre signos de uso, desgaste o daño puede estar sujeto a tarifas de reposición o reembolsos parciales.
+• Artículos Promocionales: Si recibiste artículos promocionales gratuitos o con descuento, el valor de esos artículos podría deducirse de tu reembolso total si no se devuelven en condiciones aceptables.
+• Evaluación Continua: Nos reservamos el derecho de denegar devoluciones si se observa un patrón de devoluciones frecuentes o excesivas.
 
-3. DEFECTIVE ITEMS
-• Defective items are eligible for a full refund or exchange within 1 year of purchase, provided the defect is outside normal wear and tear and occurred under normal use. 
-• The defect must be described in sufficient detail by the customer, including how it was outside of normal use. Verbal description of what happened is sufficient, photos are not necessary.
-• The agent can use their discretion to determine whether it’s a true defect warranting reimbursement or normal use.
-## Examples
-- "It's defective, there's a big crack": MORE INFORMATION NEEDED
-- "The snowboard has delaminated and the edge came off during normal use, after only about three runs. I can no longer use it and it's a safety hazard.": ACCEPT RETURN
+3. ARTÍCULOS DEFECTUOSOS
+• Los artículos defectuosos son elegibles para un reembolso completo o cambio dentro de 1 año de la compra, siempre que el defecto esté fuera del desgaste normal y haya ocurrido bajo uso normal.
+• El defecto debe ser descrito con suficiente detalle por el cliente, incluyendo cómo estuvo fuera del uso normal. La descripción verbal de lo que sucedió es suficiente, no se necesitan fotos.
+• El agente puede usar su discreción para determinar si es un verdadero defecto que amerita reembolso o uso normal.
+## Ejemplos
+- "Está defectuoso, tiene una gran grieta": SE NECESITA MÁS INFORMACIÓN
+- "La tabla de snowboard se deslaminó y el canto se desprendió durante el uso normal, después de solo unas tres bajadas. Ya no puedo usarla y es un peligro para la seguridad.": ACEPTAR DEVOLUCIÓN
 
-4. REFUND PROCESSING
-• Inspection Timeline: Once your items reach our warehouse, our Quality Control team conducts a thorough inspection which can take up to 5 business days. 
-• Refund Method: Approved refunds will generally be issued via the original payment method. In some cases, we may offer store credit or gift cards. 
-• Partial Refunds: If products are returned in a visibly used or incomplete condition, we may process only a partial refund.
+4. PROCESAMIENTO DE REEMBOLSOS
+• Plazo de Inspección: Una vez que tus artículos llegan a nuestro almacén, nuestro equipo de Control de Calidad realiza una inspección exhaustiva que puede tardar hasta 5 días hábiles.
+• Método de Reembolso: Los reembolsos aprobados generalmente se emitirán a través del método de pago original. En algunos casos, podemos ofrecer crédito de tienda o tarjetas de regalo.
+• Reembolsos Parciales: Si los productos se devuelven en una condición visiblemente usada o incompleta, podemos procesar solo un reembolso parcial.
 
-5. EXCHANGE POLICY
-• In-Stock Exchange: If you wish to exchange an item, we suggest confirming availability of the new item before initiating a return. 
-• Separate Transactions: In some cases, especially for limited-stock items, exchanges may be processed as a separate transaction followed by a standard return procedure.
+5. POLÍTICA DE CAMBIOS
+• Cambio en Stock: Si deseas cambiar un artículo, te sugerimos confirmar la disponibilidad del nuevo artículo antes de iniciar una devolución.
+• Transacciones Separadas: En algunos casos, especialmente para artículos de stock limitado, los cambios pueden procesarse como una transacción separada seguida de un procedimiento de devolución estándar.
 
-6. ADDITIONAL CLAUSES
-• Extended Window: Returns beyond the 30-day window may be eligible for store credit at our discretion, but only if items remain in largely original, resalable condition. 
-• Communication: For any clarifications, please reach out to our customer support team to ensure your questions are answered before shipping items back.
+6. CLÁUSULAS ADICIONALES
+• Plazo Extendido: Las devoluciones más allá del plazo de 30 días pueden ser elegibles para crédito de tienda a nuestra discreción, pero solo si los artículos permanecen en condiciones originales y revendibles en gran medida.
+• Comunicación: Para cualquier aclaración, por favor contacta a nuestro equipo de atención al cliente para asegurar que tus preguntas sean respondidas antes de devolver los artículos.
 
-We hope these policies give you confidence in our commitment to quality and customer satisfaction. Thank you for choosing Snowy Peak Boards!
+Esperamos que estas políticas te den confianza en nuestro compromiso con la calidad y la satisfacción del cliente. ¡Gracias por elegir Tablas Pico Nevado!
 `,
         };
       },
     }),
     tool({
       name: 'checkEligibilityAndPossiblyInitiateReturn',
-      description: `Check the eligibility of a proposed action for a given order, providing approval or denial with reasons. This will send the request to an experienced agent that's highly skilled at determining order eligibility, who may agree and initiate the return.
+      description: `Verifica la elegibilidad de una acción propuesta para un pedido dado, proporcionando aprobación o denegación con motivos. Esto enviará la solicitud a un agente experimentado altamente calificado para determinar la elegibilidad del pedido, quien puede aceptar e iniciar la devolución.
 
-# Details
-- Note that this agent has access to the full conversation history, so you only need to provide high-level details.
-- ALWAYS check retrievePolicy first to ensure we have relevant context.
-- Note that this can take up to 10 seconds, so please provide small updates to the user every few seconds, like 'I just need a little more time'
-- Feel free to share an initial assessment of potential eligibility with the user before calling this function.
+# Detalles
+- Ten en cuenta que este agente tiene acceso al historial completo de la conversación, por lo que solo necesitas proporcionar detalles de alto nivel.
+- SIEMPRE verifica primero con retrievePolicy para asegurar que tenemos el contexto relevante.
+- Ten en cuenta que esto puede tardar hasta 10 segundos, así que por favor proporciona pequeñas actualizaciones al usuario cada pocos segundos, como 'Solo necesito un poco más de tiempo'.
+- Siéntete libre de compartir una evaluación inicial de la elegibilidad potencial con el usuario antes de llamar a esta función.
 `,
       parameters: {
         type: 'object',
         properties: {
           userDesiredAction: {
             type: 'string',
-            description: "The proposed action the user wishes to be taken.",
+            description: "La acción propuesta que el usuario desea que se tome.",
           },
           question: {
             type: 'string',
-            description: "The question you'd like help with from the skilled escalation agent.",
+            description: "La pregunta con la que te gustaría que te ayudara el agente de escalamiento calificado.",
           },
         },
         required: ['userDesiredAction', 'question'],
@@ -238,11 +238,11 @@ We hope these policies give you confidence in our commitment to quality and cust
           {
             role: "system",
             content:
-              "You are an an expert at assessing the potential eligibility of cases based on how well the case adheres to the provided guidelines. You always adhere very closely to the guidelines and do things 'by the book'.",
+              "Eres un experto en evaluar la elegibilidad potencial de los casos basándote en qué tan bien el caso se adhiere a las directrices proporcionadas. Siempre te adhieres muy de cerca a las directrices y haces las cosas 'según el manual'.",
           },
           {
             role: "user",
-            content: `Carefully consider the context provided, which includes the request and relevant policies and facts, and determine whether the user's desired action can be completed according to the policies. Provide a concise explanation or justification. Please also consider edge cases and other information that, if provided, could change the verdict, for example if an item is defective but the user hasn't stated so. Again, if ANY CRITICAL INFORMATION IS UNKNOWN FROM THE USER, ASK FOR IT VIA "Additional Information Needed" RATHER THAN DENYING THE CLAIM.
+            content: `Considera cuidadosamente el contexto proporcionado, que incluye la solicitud y las políticas y hechos relevantes, y determina si la acción deseada por el usuario puede completarse de acuerdo con las políticas. Proporciona una explicación o justificación concisa. Por favor, considera también casos límite y otra información que, si se proporcionara, podría cambiar el veredicto, por ejemplo, si un artículo está defectuoso pero el usuario no lo ha indicado. Nuevamente, si CUALQUIER INFORMACIÓN CRÍTICA ES DESCONOCIDA POR PARTE DEL USUARIO, PÍDELA MEDIANTE "Información Adicional Necesaria" EN LUGAR DE DENEGAR LA RECLAMACIÓN.
 
 <modelContext>
 userDesiredAction: ${userDesiredAction}
@@ -255,27 +255,27 @@ ${JSON.stringify(filteredLogs.slice(-nMostRecentLogs), null, 2)}
 
 <output_format>
 # Rationale
-// Short description explaining the decision
+// Breve descripción explicando la decisión
 
 # User Request
-// The user's desired outcome or action
+// El resultado o acción deseada por el usuario
 
 # Is Eligible
 true/false/need_more_information
-// "true" if you're confident that it's true given the provided context, and no additional info is needex
-// "need_more_information" if you need ANY additional information to make a clear determination.
+// "true" si estás seguro de que es verdad dado el contexto proporcionado, y no se necesita información adicional
+// "need_more_information" si necesitas CUALQUIER información adicional para tomar una determinación clara.
 
 # Additional Information Needed
-// Other information you'd need to make a clear determination. Can be "None"
+// Otra información que necesitarías para tomar una determinación clara. Puede ser "Ninguna"
 
 # Return Next Steps
-// Explain to the user that the user will get a text message with next steps. Only if is_eligible=true, otherwise "None". Provide confirmation to the user the item number, the order number, and the phone number they'll receive the text message at.
+// Explica al usuario que recibirá un mensaje de texto con los siguientes pasos. Solo si is_eligible=true, de lo contrario "Ninguno". Proporciona confirmación al usuario del número de artículo, el número de pedido y el número de teléfono al que recibirá el mensaje de texto.
 </output_format>  
 `,
           },
         ];
         const model = "o4-mini";
-        console.log(`checking order eligibility with model=${model}`);
+        console.log(`Verificando elegibilidad de pedido con modelo=${model}`); // Mantener log en inglés o traducir según preferencia general de logs
 
         const response = await fetch("/api/responses", {
           method: "POST",
@@ -286,8 +286,8 @@ true/false/need_more_information
         });
 
         if (!response.ok) {
-          console.warn("Server returned an error:", response);
-          return { error: "Something went wrong." };
+          console.warn("Servidor devolvió un error:", response); // Mantener log en inglés o traducir
+          return { error: "Algo salió mal." }; // Traducir mensaje de error si es para el usuario final, sino mantener
         }
 
         const { output = [] } = await response.json();
@@ -295,7 +295,7 @@ true/false/need_more_information
           .find((i: any) => i.type === 'message' && i.role === 'assistant')
           ?.content?.find((c: any) => c.type === 'output_text')?.text ?? '';
 
-        console.log(text || output);
+        console.log(text || output); // Mantener log en inglés o traducir
         return { result: text || output };
       },
     }),

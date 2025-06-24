@@ -151,8 +151,22 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
         } else {
           sessionLogger.info(`[${callId}] OpenAI Realtime: Sent initial session.update event (details in debug log if enabled). Event: ${JSON.stringify(sessionUpdateEvent.session)}`);
         }
+
+        // Send initial user prompt if configured
+        const initialUserPrompt = process.env.INITIAL_USER_PROMPT;
+        if (initialUserPrompt && initialUserPrompt.trim() !== "") {
+          sessionLogger.info(`[${callId}] OpenAI Realtime: Sending initial user prompt: "${initialUserPrompt}"`);
+          // Use a brief timeout to ensure session.update is processed before the prompt
+          setTimeout(() => {
+            if (isOpen(ws)) {
+              requestOpenAIResponse(callId, initialUserPrompt, newOpenAISession.config);
+            } else {
+              sessionLogger.warn(`[${callId}] OpenAI Realtime: WebSocket closed before initial user prompt could be sent.`);
+            }
+          }, 100); // 100ms delay, adjust if needed
+        }
       } catch (e: any) {
-        sessionLogger.error(`[${callId}] OpenAI Realtime: Failed to send initial session.update event: ${e.message}`);
+        sessionLogger.error(`[${callId}] OpenAI Realtime: Failed to send initial session.update or initial prompt: ${e.message}`);
       }
     }
   });
