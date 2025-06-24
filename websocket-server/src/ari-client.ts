@@ -236,6 +236,15 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
   // Google Specific Async STT settings
   arc.asyncSttGoogleLanguageCode = getVar(logger, channel, 'ASYNC_STT_GOOGLE_LANGUAGE_CODE', arc.asyncSttGoogleLanguageCode) ?? "es-ES"; // Default to Spanish for Google
   arc.asyncSttGoogleCredentials = getVar(logger, channel, 'ASYNC_STT_GOOGLE_CREDENTIALS', arc.asyncSttGoogleCredentials); // Path to JSON key file, optional
+  // Vosk Specific Async STT settings
+  arc.voskServerUrl = getVar(logger, channel, 'VOSK_SERVER_URL', arc.voskServerUrl);
+
+  // TTS Playback Mode
+  arc.ttsPlaybackMode = getVar(logger, channel, 'OPENAI_TTS_PLAYBACK_MODE', arc.ttsPlaybackMode) as "full_chunk" | "stream" || "full_chunk";
+
+  // First Interaction Recognition Mode
+  arc.firstInteractionRecognitionMode = getVar(logger, channel, 'FIRST_INTERACTION_RECOGNITION_MODE', arc.firstInteractionRecognitionMode) as "fixedDelay" | "Immediate" | "vad" | "" || "";
+
 
   // Initial User Prompt
   arc.initialUserPrompt = getVar(logger, channel, 'INITIAL_USER_PROMPT', arc.initialUserPrompt);
@@ -393,6 +402,8 @@ interface CallResources {
   currentTtsResponseId?: string;
   callerAudioBufferForCurrentTurn: Buffer[]; // For async STT
   currentTurnStartTime: string; // Timestamp for the start of the current caller turn
+  isFirstInteraction: boolean; // To track the first interaction for mode switching
+  streamedTtsChunkFiles: string[]; // Store paths of streamed TTS chunk files for cleanup
 }
 
 export interface ActiveCallInfo {
@@ -728,34 +739,66 @@ export class AriClientService implements AriClientInterface {
     call.callLogger.info(`Waiting for OpenAI to generate response (including potential audio).`);
   }
 
-  public _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): void {
+  public async _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, _isLastChunk_deprecated: boolean): Promise<void> {
     const call = this.activeCalls.get(callId);
     const loggerToUse = call?.callLogger || this.logger;
 
-    loggerToUse.info(
-      `_onOpenAIAudioChunk CALLED for callId: ${callId}. ` +
-      `Call object exists: ${!!call}. ` +
-      `Chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}. ` +
-      `ttsAudioChunks exists on call: ${!!call?.ttsAudioChunks}. ` +
-      `Initial ttsAudioChunks length: ${call?.ttsAudioChunks?.length ?? 'N/A'}.`
-    );
-
     if (!call || call.isCleanupCalled) {
-      loggerToUse.warn(`_onOpenAIAudioChunk: Call object not found or cleanup called for ${callId}. Ignoring audio chunk.`);
+      loggerToUse.warn(`_onOpenAIAudioChunk: Call ${callId} not active or cleanup. Ignoring.`);
       return;
     }
 
-    if (!call.ttsAudioChunks) {
-      call.callLogger.error('_onOpenAIAudioChunk: CRITICAL - ttsAudioChunks was undefined. This indicates a prior initialization issue.');
-      call.ttsAudioChunks = [];
+    const playbackMode = call.config.appConfig.appRecognitionConfig.ttsPlaybackMode || "full_chunk";
+    loggerToUse.info(`_onOpenAIAudioChunk for call ${callId}. Playback mode: ${playbackMode}. Chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}.`);
+
+    if (!(audioChunkBase64 && audioChunkBase64.length > 0)) {
+      loggerToUse.warn('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
+      return;
     }
 
-    if (audioChunkBase64 && audioChunkBase64.length > 0) {
-       call.callLogger.debug(`Received TTS audio chunk, length: ${audioChunkBase64.length}. Accumulating. Previous #chunks: ${call.ttsAudioChunks.length}`);
-       call.ttsAudioChunks.push(audioChunkBase64);
-       call.callLogger.info(`_onOpenAIAudioChunk: AFTER PUSH for call ${callId}, ttsAudioChunks.length: ${call.ttsAudioChunks.length}`);
-    } else {
-       call.callLogger.warn('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
+    if (playbackMode === "stream") {
+      loggerToUse.debug(`Streaming TTS audio chunk, length: ${audioChunkBase64.length}.`);
+      try {
+        const audioBuffer = Buffer.from(audioChunkBase64, 'base64');
+        if (audioBuffer.length === 0) {
+          loggerToUse.warn(`[StreamPlayback] Decoded audio chunk is empty for call ${callId}. Skipping playback of this chunk.`);
+          return;
+        }
+
+        // Save individual chunk and play
+        const recordingsBaseDir = '/var/lib/asterisk/sounds';
+        const openaiRecordingsDir = path.join(recordingsBaseDir, 'openai_stream_chunks');
+        if (!fs.existsSync(openaiRecordingsDir)) {
+          fs.mkdirSync(openaiRecordingsDir, { recursive: true });
+        }
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const chunkFilename = `openai_tts_chunk_${callId}_${timestamp}.ulaw`; // Assuming uLaw for now, needs to be dynamic based on actual format
+        const absoluteChunkPath = path.join(openaiRecordingsDir, chunkFilename);
+
+        // TODO: Handle different audio formats (PCM -> WAV header) similar to full_chunk mode if not uLaw
+        // For now, assuming output is uLaw as per default OPENAI_OUTPUT_AUDIO_FORMAT
+        // This part needs to be robust if output format can vary.
+        fs.writeFileSync(absoluteChunkPath, audioBuffer);
+        loggerToUse.info(`[StreamPlayback] Saved TTS chunk to ${absoluteChunkPath}`);
+
+        // Play this chunk. This might interrupt previous chunk if not handled carefully.
+        // A more advanced implementation would queue playbacks or manage interruptions.
+        // For now, simple playback.
+        // Store the path for cleanup
+        call.streamedTtsChunkFiles.push(absoluteChunkPath);
+        await this.playbackAudio(callId, null, `sound:openai_stream_chunks/${chunkFilename.replace(/\.ulaw$/, '')}`);
+        loggerToUse.info(`[StreamPlayback] Initiated playback for TTS chunk ${chunkFilename}`);
+
+      } catch (e: any) {
+        loggerToUse.error(`[StreamPlayback] Error processing or playing TTS chunk for call ${callId}: ${e.message}`);
+      }
+    } else { // full_chunk mode (default)
+      if (!call.ttsAudioChunks) {
+        call.callLogger.error('_onOpenAIAudioChunk (full_chunk): CRITICAL - ttsAudioChunks was undefined.');
+        call.ttsAudioChunks = [];
+      }
+      call.callLogger.debug(`(Full Chunk Mode) Received TTS audio chunk, length: ${audioChunkBase64.length}. Accumulating. Previous #chunks: ${call.ttsAudioChunks.length}`);
+      call.ttsAudioChunks.push(audioChunkBase64);
     }
   }
 
@@ -768,18 +811,28 @@ export class AriClientService implements AriClientInterface {
       return;
     }
 
+    const playbackMode = call.config.appConfig.appRecognitionConfig.ttsPlaybackMode || "full_chunk";
+    loggerToUse.info(`_onOpenAIAudioStreamEnd for call ${callId}. Playback mode: ${playbackMode}.`);
+
+    if (playbackMode === "stream") {
+      loggerToUse.info(`[StreamPlayback] Audio stream ended. All chunks should have been processed and played individually.`);
+      // Potentially clean up temporary chunk files if they are managed in a list.
+      // For now, files remain.
+      // Ensure any final state for streaming playback is handled if necessary.
+      // Since playbackAudio calls _handlePlaybackFinished, the normal turn transition should occur.
+      return; // Nothing more to do for streaming mode here, chunks are played as they arrive.
+    }
+
+    // Logic for "full_chunk" mode continues below
     if (!call.ttsAudioChunks) {
-        call.callLogger.error(`_onOpenAIAudioStreamEnd: CRITICAL - ttsAudioChunks is undefined for call ${callId}. This should have been initialized in onStasisStart.`);
-        return;
+      call.callLogger.error(`_onOpenAIAudioStreamEnd (full_chunk): CRITICAL - ttsAudioChunks is undefined.`);
+      return;
     }
-
-    call.callLogger.info(`_onOpenAIAudioStreamEnd: Checking ttsAudioChunks for call ${callId}. Length: ${call.ttsAudioChunks.length}`);
-    if (call.ttsAudioChunks.length > 0) {
-      call.callLogger.debug(`_onOpenAIAudioStreamEnd: First chunk content (first 50 chars): ${call.ttsAudioChunks[0]?.substring(0,50)}`);
-    }
+    call.callLogger.info(`(Full Chunk Mode) Checking accumulated ttsAudioChunks for call ${callId}. Length: ${call.ttsAudioChunks.length}`);
 
     if (call.ttsAudioChunks.length > 0) {
-      call.callLogger.info(`Processing ${call.ttsAudioChunks.length} audio chunks for call ${callId}.`);
+      call.callLogger.debug(`(Full Chunk Mode) First chunk content (first 50 chars): ${call.ttsAudioChunks[0]?.substring(0,50)}`);
+      call.callLogger.info(`(Full Chunk Mode) Processing ${call.ttsAudioChunks.length} audio chunks for call ${callId}.`);
       const decodedBuffers: Buffer[] = [];
       let totalOriginalBase64Length = 0;
 
@@ -1412,24 +1465,37 @@ export class AriClientService implements AriClientInterface {
         return;
       }
       // If vadInitialSilenceDelay *IS* complete, then this ChannelTalkingStarted is the trigger.
-      call.callLogger.info(`VAD (vadMode): Speech detected (ChannelTalkingStarted) *after* initial silence delay. This is the trigger.`);
+      call.callLogger.info(`VAD (vadMode): Speech detected (ChannelTalkingStarted) *after* initial silence delay. This is the trigger to start OpenAI stream.`);
     } else if (vadRecogActivation === 'afterPrompt') {
       // In 'afterPrompt' mode, TALK_DETECT is only meant to trigger action *after* the prompt has finished playing.
-      if (call.mainPlayback) { // Check if prompt is currently playing
-        call.callLogger.info(`VAD (afterPrompt): Speech detected (ChannelTalkingStarted) *during* main prompt playback. Stopping prompt.`);
-        call.vadSpeechDetected = true; // Mark that speech was detected during prompt
-        await this._stopAllPlaybacks(call); // Stop the prompt immediately (barge-in)
-        call.promptPlaybackStoppedForInterim = true;
-        // Stream activation will be handled by _handlePostPromptVADLogic when PlaybackFinished (due to stop) or naturally.
-        // _handlePostPromptVADLogic will see vadSpeechDetected = true.
+      // Or, if speech occurs *during* the prompt, it should barge-in.
+      if (call.mainPlayback || call.waitingPlayback) { // Check if any prompt/TTS is currently playing
+        call.callLogger.info(`VAD (afterPrompt): Speech detected (ChannelTalkingStarted) *during* active playback. This is a barge-in attempt.`);
+        call.vadSpeechDetected = true; // Mark that speech was detected during prompt/TTS
+
+        // Stop all playbacks (main greeting, waiting TTS)
+        await this._stopAllPlaybacks(call);
+        call.promptPlaybackStoppedForInterim = true; // Mark that playback was stopped due to speech
+
+        // Since playback was stopped, _handlePlaybackFinished will eventually be called.
+        // _handlePlaybackFinished will then call _handlePostPromptVADLogic.
+        // _handlePostPromptVADLogic will see call.vadSpeechDetected = true and activate the stream.
+        // So, we return here and let that flow handle the stream activation.
         return;
       }
-      // If prompt is NOT playing, this ChannelTalkingStarted is the valid trigger for 'afterPrompt'.
-      call.callLogger.info(`VAD (afterPrompt): Speech detected (ChannelTalkingStarted) *after* prompt has finished. This is the trigger.`);
+      // If no prompt/TTS is playing, this ChannelTalkingStarted is the valid trigger for 'afterPrompt'.
+      call.callLogger.info(`VAD (afterPrompt): Speech detected (ChannelTalkingStarted) and no prompt/TTS was playing. This is the trigger to start OpenAI stream.`);
+    } else {
+      // Should not happen if vadRecogActivation is correctly one of the two enum values
+      call.callLogger.error(`VAD: Unhandled vadRecogActivation mode: ${vadRecogActivation} in _onChannelTalkingStarted.`);
+      return;
     }
 
-    // Common logic for VAD triggering OpenAI stream if conditions above are met:
-    call.vadSpeechDetected = true;
+    // Common logic for VAD triggering OpenAI stream if conditions above led here:
+    // This means:
+    // - In 'vadMode': initial silence delay completed AND ChannelTalkingStarted received.
+    // - In 'afterPrompt': ChannelTalkingStarted received AND no prompt was playing (or barge-in handled by returning above).
+    call.vadSpeechDetected = true; // General flag
     call.vadRecognitionTriggeredAfterInitialDelay = true;
 
     const initialUserPromptIsSet = !!call.config.appConfig.appRecognitionConfig.initialUserPrompt && call.config.appConfig.appRecognitionConfig.initialUserPrompt.trim() !== "";
@@ -1581,14 +1647,23 @@ export class AriClientService implements AriClientInterface {
     }
 
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
-    const activationMode = appRecogConf.recognitionActivationMode;
+    let currentActivationMode = appRecogConf.recognitionActivationMode;
+
+    // Override with first interaction mode if applicable
+    if (call.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
+      currentActivationMode = appRecogConf.firstInteractionRecognitionMode;
+      call.callLogger.info(`Using FIRST_INTERACTION_RECOGNITION_MODE: ${currentActivationMode}`);
+    } else {
+      call.callLogger.info(`Using global RECOGNITION_ACTIVATION_MODE: ${currentActivationMode}`);
+    }
+
 
     if (reason.startsWith('main_greeting_')) {
-      call.callLogger.info(`Main greeting/prompt finished or failed. Reason: ${reason}. Handling post-prompt logic for main greeting.`);
+      call.callLogger.info(`Main greeting/prompt finished or failed. Reason: ${reason}. Handling post-prompt logic for main greeting using mode: ${currentActivationMode}.`);
       call.mainPlayback = undefined;
 
       // Logic for after main greeting finishes
-      switch (activationMode) {
+      switch (currentActivationMode) {
         case 'fixedDelay':
           call.callLogger.info(`fixedDelay mode: Main greeting finished. Barge-in logic handled by onStasisStart timer or direct activation.`);
           if (!call.openAIStreamingActive && !call.bargeInActivationTimer) {
@@ -1597,10 +1672,13 @@ export class AriClientService implements AriClientInterface {
           }
           break;
         case 'Immediate':
-          call.callLogger.info(`Immediate mode: Main greeting finished. OpenAI stream should be active.`);
+          call.callLogger.info(`Immediate mode: Main greeting finished. OpenAI stream should be active or activating.`);
           if (!call.openAIStreamingActive) {
-            call.callLogger.warn(`Immediate mode: Main greeting finished, stream not active. Unexpected. Safeguard activation.`);
-            this._activateOpenAIStreaming(callId, "Immediate_safeguard_post_main_greeting");
+            call.callLogger.warn(`Immediate mode: Main greeting finished, stream not active. Safeguard activation.`);
+            // If an initialUserPrompt was set, the stream might have been activated to send that,
+            // and we'd be waiting for the bot. If not, we expect user speech.
+            const initialUserPromptIsSet = !!appRecogConf.initialUserPrompt && appRecogConf.initialUserPrompt.trim() !== "";
+            this._activateOpenAIStreaming(callId, "Immediate_safeguard_post_main_greeting", !initialUserPromptIsSet);
           }
           break;
         case 'vad':
@@ -1608,21 +1686,28 @@ export class AriClientService implements AriClientInterface {
             call.callLogger.info(`VAD mode (afterPrompt): Main greeting finished. Activating VAD logic.`);
             this._handlePostPromptVADLogic(callId);
           } else if (appRecogConf.vadRecogActivation === 'vadMode') {
-            call.callLogger.info(`VAD mode (vadMode): Main greeting finished. VAD logic (delays/TALK_DETECT) already in effect.`);
-            this._handleVADDelaysCompleted(callId); // Check if delays completed and if speech occurred during them
+            call.callLogger.info(`VAD mode (vadMode): Main greeting finished. VAD logic (delays/TALK_DETECT) already in effect or starting.`);
+            this._handleVADDelaysCompleted(callId);
             if (call.vadInitialSilenceDelayCompleted && !call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay) {
-                 this._handlePostPromptVADLogic(callId); // Potentially start maxWait timer
+                 this._handlePostPromptVADLogic(callId);
             }
           }
           break;
         default:
-          call.callLogger.warn(`Unhandled recognitionActivationMode: ${activationMode} after main_greeting.`);
+          call.callLogger.warn(`Unhandled recognitionActivationMode: ${currentActivationMode} after main_greeting.`);
       }
     } else if (reason.startsWith('openai_tts_')) {
       call.callLogger.info(`OpenAI TTS playback finished or failed. Reason: ${reason}. Preparing for next caller turn.`);
       // After OpenAI TTS finishes, we always need to set up to listen for the user again.
-      // The exact mechanism depends on the overall RECOGNITION_ACTIVATION_MODE.
-      // TALK_DETECT should have been (re-)enabled before this playback started if VAD barge-in was desired.
+
+      // THIS IS WHERE THE FIRST INTERACTION ENDS.
+      if (call.isFirstInteraction) {
+        call.callLogger.info("First interaction has concluded. Subsequent interactions will use global recognition mode.");
+        call.isFirstInteraction = false;
+        // Update currentActivationMode to global for the next turn's setup
+        currentActivationMode = appRecogConf.recognitionActivationMode;
+        call.callLogger.info(`Switching to global RECOGNITION_ACTIVATION_MODE for next turn: ${currentActivationMode}`);
+      }
 
       // Reset flags for the new turn
       call.speechHasBegun = false;
@@ -1731,6 +1816,8 @@ export class AriClientService implements AriClientInterface {
       currentTtsResponseId: undefined,
       callerAudioBufferForCurrentTurn: [],
       currentTurnStartTime: new Date().toISOString(),
+      isFirstInteraction: true, // Initialize as true for a new call
+      streamedTtsChunkFiles: [], // Initialize empty list for streamed TTS chunks
     };
     this.activeCalls.set(callId, callResources);
     this.currentPrimaryCallId = callId; // Mantener la lógica de llamada primaria por ahora
@@ -1839,9 +1926,28 @@ export class AriClientService implements AriClientInterface {
       const initialUserPromptIsSet = !!appRecogConf.initialUserPrompt && appRecogConf.initialUserPrompt.trim() !== "";
       callLogger.info(`Recognition Activation Mode: ${activationMode}, InitialUserPrompt Set: ${initialUserPromptIsSet}`);
 
-      if (activationMode === 'Immediate') {
+      // Determine if this is the first interaction and if a specific mode is set for it.
+      // This logic will be expanded in a later step. For now, assume isFirstInteraction = true at StasisStart.
+      // const isFirstInteraction = true; // Placeholder
+      // const firstInteractionMode = process.env.FIRST_INTERACTION_RECOGNITION_MODE || getVar(callLogger, incomingChannel, 'FIRST_INTERACTION_RECOGNITION_MODE', '');
+      // const effectiveActivationMode = isFirstInteraction && firstInteractionMode ? firstInteractionMode : activationMode;
+      // callLogger.info(`Effective Activation Mode for this turn: ${effectiveActivationMode}`);
+      // For now, we use the global activationMode. This will be refined.
+      let effectiveActivationMode = activationMode;
+      if (callResources.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
+        effectiveActivationMode = appRecogConf.firstInteractionRecognitionMode;
+        callLogger.info(`Using FIRST_INTERACTION_RECOGNITION_MODE for StasisStart: ${effectiveActivationMode}`);
+      } else {
+        callLogger.info(`Using global RECOGNITION_ACTIVATION_MODE for StasisStart: ${effectiveActivationMode}`);
+      }
+
+
+      if (effectiveActivationMode === 'Immediate') {
+        callLogger.info(`Immediate mode: Activating OpenAI stream on StasisStart. ExpectingUserSpeechNext: ${!initialUserPromptIsSet}`);
+        // If there's an initialUserPrompt, OpenAI will speak first, so user isn't expected to speak *yet*.
+        // If no initialUserPrompt, then user is expected to speak.
         this._activateOpenAIStreaming(callId, "Immediate_mode_on_start", !initialUserPromptIsSet);
-      } else if (activationMode === 'fixedDelay') {
+      } else if (effectiveActivationMode === 'fixedDelay') {
         const delaySeconds = appRecogConf.bargeInDelaySeconds;
         callLogger.info(`fixedDelay mode: bargeInDelaySeconds = ${delaySeconds}s.`);
         if (delaySeconds > 0) {
@@ -1857,7 +1963,7 @@ export class AriClientService implements AriClientInterface {
           // If delay is 0, activate immediately.
           this._activateOpenAIStreaming(callId, "fixedDelay_immediate_activation (delay is 0)", !initialUserPromptIsSet);
         }
-      } else if (activationMode === 'vad') {
+      } else if (effectiveActivationMode === 'vad') {
         callResources.isVADBufferingActive = true; // Start buffering audio immediately in VAD mode
         // Use vadSilenceThresholdMs for TALK_DETECT silence part.
         // Use vadTalkThreshold for TALK_DETECT energy part. TALK_DETECT format: {talk_thresh},{silence_thresh[,direction]}
@@ -2075,6 +2181,21 @@ export class AriClientService implements AriClientInterface {
       }
       call.openAIStreamingActive = false;
       call.isOpenAIStreamEnding = true;
+
+      // Cleanup streamed TTS chunk files
+      if (call.streamedTtsChunkFiles && call.streamedTtsChunkFiles.length > 0) {
+        call.callLogger.info(`Cleaning up ${call.streamedTtsChunkFiles.length} streamed TTS chunk files.`);
+        for (const filePath of call.streamedTtsChunkFiles) {
+          fs.unlink(filePath, (err) => {
+            if (err) {
+              call.callLogger.warn(`Failed to delete streamed TTS chunk file ${filePath}: ${err.message}`);
+            } else {
+              call.callLogger.debug(`Deleted streamed TTS chunk file: ${filePath}`);
+            }
+          });
+        }
+        call.streamedTtsChunkFiles = []; // Clear the list
+      }
 
       await this.cleanupCallResources(callId, hangupMainChannel, false, call.callLogger);
 

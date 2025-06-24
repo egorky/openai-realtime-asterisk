@@ -71,8 +71,12 @@ export interface AppRecognitionConfig {
   // Google Specific Async STT settings
   asyncSttGoogleLanguageCode?: string; // e.g., "en-US", "es-ES"
   asyncSttGoogleCredentials?: string; // Optional: Path to Google Cloud credentials JSON file
+  voskServerUrl?: string; // URL for the Vosk WebSocket server, e.g., "ws://localhost:2700"
 
   initialUserPrompt?: string; // Optional synthetic first user message
+  ttsPlaybackMode?: "full_chunk" | "stream"; // New: How TTS audio is played back
+  firstInteractionRecognitionMode?: "fixedDelay" | "Immediate" | "vad" | ""; // Mode for the first interaction
+
 }
 
 export interface DtmfConfig {
