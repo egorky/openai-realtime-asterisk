@@ -1,0 +1,38 @@
+---
+import { Code, TabItem, Tabs } from '@astrojs/starlight/components';
+import helloWorldExample from '../../../examples/docs/toppage/textAgent.ts?raw';
+import helloWorldVoiceExample from '../../../examples/docs/toppage/voiceAgent.ts?raw';
+const path = Astro.url.pathname;
+const pathPrefix =
+  path !== '/' ? (!path.endsWith('/') ? path + '/' : path) : '';
+---
+
+<div class="openai-hero">
+  <div class="openai-hero-container flex gap-4">
+    <div class="openai-quickstart flex-1 flex items-center">
+      <div>
+        <h2 class="title"><slot name="title" /></h2>
+        <p>
+          <slot name="description" />
+        </p>
+        <a href={`${pathPrefix}guides/quickstart`} class="openai-hero-cta">
+          <slot name="cta" />
+        </a>
+      </div>
+    </div>
+    <div class="openai-hero-code flex-1 overflow-x-scroll">
+      <Tabs>
+        <TabItem label="Text Agent">
+          <Code lang="typescript" code={helloWorldExample} />
+        </TabItem>
+        <TabItem label="Voice Agent">
+          <Code
+            lang="typescript"
+            code={helloWorldVoiceExample}
+            class="flex-1"
+          />
+        </TabItem>
+      </Tabs>
+    </div>
+  </div>
+</div>

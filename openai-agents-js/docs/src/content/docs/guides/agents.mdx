@@ -1,0 +1,171 @@
+---
+title: Agents
+description: Learn more about how to define agents in the OpenAI Agents SDK for JavaScript / TypeScript
+---
+
+import { Code } from '@astrojs/starlight/components';
+import simpleAgent from '../../../../../examples/docs/agents/simpleAgent.ts?raw';
+import agentWithTools from '../../../../../examples/docs/agents/agentWithTools.ts?raw';
+import agentWithContext from '../../../../../examples/docs/agents/agentWithContext.ts?raw';
+import agentWithAodOutputType from '../../../../../examples/docs/agents/agentWithAodOutputType.ts?raw';
+import agentWithHandoffs from '../../../../../examples/docs/agents/agentWithHandoffs.ts?raw';
+import agentWithDynamicInstructions from '../../../../../examples/docs/agents/agentWithDynamicInstructions.ts?raw';
+import agentWithLifecycleHooks from '../../../../../examples/docs/agents/agentWithLifecycleHooks.ts?raw';
+import agentCloning from '../../../../../examples/docs/agents/agentCloning.ts?raw';
+import agentForcingToolUse from '../../../../../examples/docs/agents/agentForcingToolUse.ts?raw';
+
+Agents are the main building‑block of the OpenAI Agents SDK. An **Agent** is a Large Language
+Model (LLM) that has been configured with:
+
+- **Instructions** – the system prompt that tells the model _who it is_ and _how it should
+  respond_.
+- **Model** – which OpenAI model to call, plus any optional model tuning parameters.
+- **Tools** – a list of functions or APIs the LLM can invoke to accomplish a task.
+
+<Code lang="typescript" code={simpleAgent} title="Basic Agent definition" />
+
+The rest of this page walks through every Agent feature in more detail.
+
+---
+
+## Basic configuration
+
+The `Agent` constructor takes a single configuration object. The most commonly‑used
+properties are shown below.
+
+| Property        | Required | Description                                                                                             |
+| --------------- | -------- | ------------------------------------------------------------------------------------------------------- |
+| `name`          | yes      | A short human‑readable identifier.                                                                      |
+| `instructions`  | yes      | System prompt (string **or** function – see [Dynamic instructions](#dynamic-instructions)).             |
+| `model`         | no       | Model name **or** a custom [`Model`](/openai-agents-js/openai/agents/interfaces/model/) implementation. |
+| `modelSettings` | no       | Tuning parameters (temperature, top_p, etc.).                                                           |
+| `tools`         | no       | Array of [`Tool`](/openai-agents-js/openai/agents/type-aliases/tool/) instances the model can call.     |
+
+<Code lang="typescript" code={agentWithTools} title="Agent with tools" />
+
+---
+
+## Context
+
+Agents are **generic on their context type** – i.e. `Agent<TContext, TOutput>`. The _context_
+is a dependency‑injection object that you create and pass to `Runner.run()`. It is forwarded to
+every tool, guardrail, handoff, etc. and is useful for storing state or providing shared
+services (database connections, user metadata, feature flags, …).
+
+<Code lang="typescript" code={agentWithContext} title="Agent with context" />
+
+---
+
+## Output types
+
+By default, an Agent returns **plain text** (`string`). If you want the model to return a
+structured object you can specify the `outputType` property. The SDK accepts:
+
+1. A [Zod](https://github.com/colinhacks/zod) schema (`z.object({...})`).
+2. Any JSON‑schema‑compatible object.
+
+<Code
+  lang="typescript"
+  code={agentWithAodOutputType}
+  title="Structured output with Zod"
+/>
+
+When `outputType` is provided, the SDK automatically uses
+[structured outputs](https://platform.openai.com/docs/guides/structured-outputs) instead of
+plain text.
+
+---
+
+## Handoffs
+
+An Agent can **delegate** to other Agents via the `handoffs` property. A common pattern is to
+use a _triage agent_ that routes the conversation to a more specialised sub‑agent.
+
+<Code lang="typescript" code={agentWithHandoffs} title="Agent with handoffs" />
+
+You can read more about this pattern in the [handoffs guide](/openai-agents-js/guides/handoffs).
+
+---
+
+## Dynamic instructions
+
+`instructions` can be a **function** instead of a string. The function receives the current
+`RunContext` and the Agent instance and can return a string _or_ a `Promise<string>`.
+
+<Code
+  lang="typescript"
+  code={agentWithDynamicInstructions}
+  title="Agent with dynamic instructions"
+/>
+
+Both synchronous and `async` functions are supported.
+
+---
+
+## Lifecycle hooks
+
+For advanced use‑cases you can observe the Agent lifecycle by listening on events
+
+<Code
+  lang="typescript"
+  code={agentWithLifecycleHooks}
+  title="Agent with lifecycle hooks"
+/>
+
+---
+
+## Guardrails
+
+Guardrails allow you to validate or transform user input and agent output. They are configured
+via the `inputGuardrails` and `outputGuardrails` arrays. See the
+[guardrails guide](/openai-agents-js/guides/guardrails) for details.
+
+---
+
+## Cloning / copying agents
+
+Need a slightly modified version of an existing agent? Use the `clone()` method, which returns
+an entirely new `Agent` instance.
+
+<Code lang="typescript" code={agentCloning} title="Cloning Agents" />
+
+---
+
+## Forcing tool use
+
+Supplying tools doesn’t guarantee the LLM will call one. You can **force** tool use with
+`modelSettings.tool_choice`:
+
+1. `'auto'` (default) – the LLM decides whether to use a tool.
+2. `'required'` – the LLM _must_ call a tool (it can choose which one).
+3. `'none'` – the LLM must **not** call a tool.
+4. A specific tool name, e.g. `'calculator'` – the LLM must call that particular tool.
+
+<Code lang="typescript" code={agentForcingToolUse} title="Forcing tool use" />
+
+### Preventing infinite loops
+
+After a tool call the SDK automatically resets `tool_choice` back to `'auto'`. This prevents
+the model from entering an infinite loop where it repeatedly tries to call the tool. You can
+override this behaviour via the `resetToolChoice` flag or by configuring
+`toolUseBehavior`:
+
+- `'run_llm_again'` (default) – run the LLM again with the tool result.
+- `'stop_on_first_tool'` – treat the first tool result as the final answer.
+- `{ stopAtToolNames: ['my_tool'] }` – stop when any of the listed tools is called.
+- `(context, toolResults) => ...` – custom function returning whether the run should finish.
+
+```typescript
+const agent = new Agent({
+  ...,
+  toolUseBehavior: 'stop_on_first_tool',
+});
+```
+
+---
+
+## Next steps
+
+- Learn how to [run agents](/openai-agents-js/guides/running-agents).
+- Dive into [tools](/openai-agents-js/guides/tools), [guardrails](/openai-agents-js/guides/guardrails), and [models](/openai-agents-js/guides/models).
+- Explore the full TypeDoc reference under **@openai/agents** in the sidebar.

@@ -1,0 +1,83 @@
+---
+title: Using any model with the Vercel's AI SDK
+description: Connect your Agents SDK agents to any model through the Vercel's AI SDK
+---
+
+import { Aside, Steps, Code } from '@astrojs/starlight/components';
+import aiSdkSetupExample from '../../../../../examples/docs/extensions/ai-sdk-setup.ts?raw';
+
+<Aside type="caution">
+  This adapter is still in beta. You may run into issues with some model
+  providers, especially smaller ones. Please report any issues via [GitHub
+  issues](https://github.com/openai/openai-agents-js/issues) and we'll fix
+  quickly.
+</Aside>
+
+Out of the box the Agents SDK works with OpenAI models through the Responses API or Chat
+Completions API. However, if you would like to use another model, the [Vercel's AI SDK](https://sdk.vercel.ai/) offers a range
+of supported models that can be brought into the Agents SDK through this adapter.
+
+## Setup
+
+<Steps>
+
+1. Install the AI SDK adapter by installing the extensions package:
+
+   ```bash
+   npm install @openai/agents-extensions
+   ```
+
+2. Choose your desired model package from the [Vercel's AI SDK](https://sdk.vercel.ai/docs/models/overview) and install it:
+
+   ```bash
+   npm install @ai-sdk/openai
+   ```
+
+3. Import the adapter and model to connect to your agent:
+
+   ```typescript
+   import { openai } from '@ai-sdk/openai';
+   import { aisdk } from '@openai/agents-extensions';
+   ```
+
+4. Initialize an instance of the model to be used by the agent:
+
+   ```typescript
+   const model = aisdk(openai('o4-mini'));
+   ```
+
+</Steps>
+
+## Example
+
+<Code lang="typescript" code={aiSdkSetupExample} title="AI SDK Setup" />
+
+## Passing provider metadata
+
+If you need to send provider-specific options with a message, pass them through
+`providerMetadata`. The values are forwarded directly to the underlying AI SDK
+model. For example, the following `providerData` in the Agents SDK
+
+```ts
+providerData: {
+  anthropic: {
+    cacheControl: {
+      type: 'ephemeral';
+    }
+  }
+}
+```
+
+would become
+
+```ts
+providerMetadata: {
+  anthropic: {
+    cacheControl: {
+      type: 'ephemeral';
+    }
+  }
+}
+```
+
+when using the AI SDK integration.

@@ -1,0 +1,122 @@
+---
+title: Tools
+description: Provide your agents with capabilities via hosted tools or custom function tools
+---
+
+import { Code } from '@astrojs/starlight/components';
+import toolsFunctionExample from '../../../../../examples/docs/tools/functionTools.ts?raw';
+import toolsHostedToolsExample from '../../../../../examples/docs/tools/hostedTools.ts?raw';
+import nonStrictSchemaTools from '../../../../../examples/docs/tools/nonStrictSchemaTools.ts?raw';
+import agentsAsToolsExample from '../../../../../examples/docs/tools/agentsAsTools.ts?raw';
+import mcpLocalServer from '../../../../../examples/docs/tools/mcpLocalServer.ts?raw';
+
+Tools let an Agent **take actions** – fetch data, call external APIs, execute code, or even use a
+computer. The JavaScript/TypeScript SDK supports four categories:
+
+1. **Hosted tools** – run alongside the model on OpenAI servers. _(web search, file search, computer use, code interpreter, image generation)_
+2. **Function tools** – wrap any local function with a JSON schema so the LLM can call it.
+3. **Agents as tools** – expose an entire Agent as a callable tool.
+4. **Local MCP servers** – attach a Model Context Protocol server running on your machine.
+
+---
+
+## 1. Hosted tools
+
+When you use the `OpenAIResponsesModel` you can add the following built‑in tools:
+
+| Tool                    | Type string          | Purpose                               |
+| ----------------------- | -------------------- | ------------------------------------- |
+| Web search              | `'web_search'`       | Internet search.                      |
+| File / retrieval search | `'file_search'`      | Query vector stores hosted on OpenAI. |
+| Computer use            | `'computer'`         | Automate GUI interactions.            |
+| Code Interpreter        | `'code_interpreter'` | Run code in a sandboxed environment.  |
+| Image generation        | `'image_generation'` | Generate images based on text.        |
+
+<Code lang="typescript" code={toolsHostedToolsExample} title="Hosted tools" />
+
+The exact parameter sets match the OpenAI Responses API – refer to the official documentation
+for advanced options like `rankingOptions` or semantic filters.
+
+---
+
+## 2. Function tools
+
+You can turn **any** function into a tool with the `tool()` helper.
+
+<Code
+  lang="typescript"
+  code={toolsFunctionExample}
+  title="Function tool with Zod parameters"
+/>
+
+### Options reference
+
+| Field           | Required | Description                                                                                                                                                                                                          |
+| --------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `name`          | No       | Defaults to the function name (e.g., `get_weather`).                                                                                                                                                                 |
+| `description`   | Yes      | Clear, human-readable description shown to the LLM.                                                                                                                                                                  |
+| `parameters`    | Yes      | Either a Zod schema or a raw JSON schema object. Zod parameters automatically enable **strict** mode.                                                                                                                |
+| `strict`        | No       | When `true` (default), the SDK returns a model error if the arguments don't validate. Set to `false` for fuzzy matching.                                                                                             |
+| `execute`       | Yes      | `(args, context) => string                                                                                               \| Promise<string>`– your business logic. The optional second parameter is the`RunContext`. |
+| `errorFunction` | No       | Custom handler `(context, error) => string` for transforming internal errors into a user-visible string.                                                                                                             |
+
+### Non‑strict JSON‑schema tools
+
+If you need the model to _guess_ invalid or partial input you can disable strict mode when using
+raw JSON schema:
+
+<Code
+  lang="typescript"
+  code={nonStrictSchemaTools}
+  title="Non-strict JSON schema tools"
+/>
+
+---
+
+## 3. Agents as tools
+
+Sometimes you want an Agent to _assist_ another Agent without fully handing off the
+conversation. Use `agent.asTool()`:
+
+<Code lang="typescript" code={agentsAsToolsExample} title="Agents as tools" />
+
+Under the hood the SDK:
+
+- Creates a function tool with a single `input` parameter.
+- Runs the sub‑agent with that input when the tool is called.
+- Returns either the last message or the output extracted by `customOutputExtractor`.
+
+---
+
+## 4. Local MCP servers
+
+You can expose tools via a local [Model Context Protocol](https://modelcontextprotocol.io/) server and attach them to an agent.
+Use `MCPServerStdio` to spawn and connect to the server:
+
+<Code lang="typescript" code={mcpLocalServer} title="Local MCP server" />
+
+See [`filesystem-example.ts`](https://github.com/openai/openai-agents-js/tree/main/examples/mcp/filesystem-example.ts) for a complete example.
+
+---
+
+## Tool use behaviour
+
+Refer to the [Agents guide](/openai-agents-js/guides/agents#forcing-tool-use) for controlling when and how a model
+must use tools (`tool_choice`, `toolUseBehavior`, etc.).
+
+---
+
+## Best practices
+
+- **Short, explicit descriptions** – describe _what_ the tool does _and when to use it_.
+- **Validate inputs** – use Zod schemas for strict JSON validation where possible.
+- **Avoid side‑effects in error handlers** – `errorFunction` should return a helpful string, not throw.
+- **One responsibility per tool** – small, composable tools lead to better model reasoning.
+
+---
+
+## Next steps
+
+- Learn about [forcing tool use](/openai-agents-js/guides/agents#forcing-tool-use).
+- Add [guardrails](/openai-agents-js/guides/guardrails) to validate tool inputs or outputs.
+- Dive into the TypeDoc reference for [`tool()`](/openai-agents-js/openai/agents/functions/tool) and the various hosted tool types.
