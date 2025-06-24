@@ -297,10 +297,12 @@ function getCallSpecificConfig(logger: LoggerInstance, channel?: Channel): CallS
     // The `Tool` type from `app/types.ts` and `FunctionTool` from `@openai/agents/realtime` might need careful mapping if not directly compatible.
     // For now, let's assume they are structurally compatible or RealtimeAgent's tools are a subset of OpenAIRealtimeAPIConfig.tools.
     oaiConf.tools = primaryAgentConfig.tools as any[] || []; // Cast as any[] if types are not perfectly matching but structurally compatible.
-    logger.info(`Loaded agent configuration for key: ${activeAgentKey}. Instructions: "${oaiConf.instructions.substring(0,50)}...", Tools count: ${oaiConf.tools.length}`);
+    // Ensure instructions is a string for logging
+    const instructionsForLog = oaiConf.instructions || "";
+    logger.info(`Loaded agent configuration for key: ${activeAgentKey}. Instructions: "${instructionsForLog.substring(0,50)}...", Tools count: ${oaiConf.tools.length}`);
   } else {
     logger.warn(`Agent configuration for key "${activeAgentKey}" not found or is empty. Falling back to default instructions and no tools.`);
-    // Fallback to default instructions if agent config is missing (and remove OPENAI_INSTRUCTIONS env var later)
+    // Fallback to default instructions if agent config is missing
     oaiConf.instructions = "Eres un asistente de IA amigable y servicial. Responde de manera concisa.";
     oaiConf.tools = [];
   }

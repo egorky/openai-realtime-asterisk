@@ -65,9 +65,12 @@ export interface AppRecognitionConfig {
   asyncSttProvider?: "openai_whisper_api" | "google_speech_v1" | string; // string for extensibility
   asyncSttOpenaiModel?: string;
   asyncSttOpenaiApiKey?: string;
-  asyncSttLanguage?: string; // Optional language hint
+  asyncSttLanguage?: string; // Optional language hint for OpenAI
   asyncSttAudioFormat?: "mulaw" | "wav" | "pcm_s16le" | string; // Format of audio passed to async transcriber
   asyncSttAudioSampleRate?: number;
+  // Google Specific Async STT settings
+  asyncSttGoogleLanguageCode?: string; // e.g., "en-US", "es-ES"
+  asyncSttGoogleCredentials?: string; // Optional: Path to Google Cloud credentials JSON file
 }
 
 export interface DtmfConfig {
