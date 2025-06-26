@@ -58,6 +58,12 @@ export interface CallResources {
   currentTurnStartTime: string; // Timestamp para el inicio del turno actual del llamante
   isFirstInteraction: boolean; // Para rastrear la primera interacción para el cambio de modo
   streamedTtsChunkFiles: string[]; // Para almacenar rutas de archivos de chunks TTS transmitidos para limpieza
+
+  // Playlist Management for TTS streaming
+  ttsPlaybackQueue: string[]; // URIs of audio chunks
+  currentPlayingSoundId: string | null; // ID of the currently playing sound from the queue
+  isTtsPlaying: boolean; // Flag to indicate if the TTS queue is being processed
+  fullTtsAudioBuffer: Buffer[]; // To accumulate all TTS audio chunks for saving in "stream" mode
 }
 
 // Interfaz para la información de llamada activa que se puede enviar al frontend.

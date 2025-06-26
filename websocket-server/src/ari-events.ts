@@ -29,6 +29,20 @@ export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.info(`[${callId}] _onOpenAISpeechStarted: OpenAI speech recognition started (or first transcript received).`);
+
+    // TTS Interruption Logic
+    if (call.isTtsPlaying || call.ttsPlaybackQueue.length > 0) {
+      call.callLogger.info(`[${callId}] OpenAI speech started, interrupting TTS playback queue.`);
+      _stopAllPlaybacks(serviceInstance, call) // This should also stop currentPlayingSoundId if active
+        .then(() => {
+          call.callLogger.info(`[${callId}] TTS playbacks stopped due to user speech.`);
+        })
+        .catch(e => call.callLogger.error(`[${callId}] Error stopping TTS playbacks on speech interruption: ${e.message}`));
+      call.ttsPlaybackQueue = []; // Clear the queue
+      call.isTtsPlaying = false;
+      call.currentPlayingSoundId = null; // Ensure this is cleared
+    }
+
     if (call.noSpeechBeginTimer) {
       call.callLogger.info(`[${callId}] Clearing noSpeechBeginTimer due to speech started.`);
       clearTimeout(call.noSpeechBeginTimer);
@@ -124,34 +138,61 @@ export async function _onOpenAIAudioChunk(serviceInstance: AriClientService, cal
       return;
     }
 
+    // If we receive an audio chunk, it means OpenAI has started generating speech.
+    // Clear timers related to waiting for speech to begin.
+    if (!call.speechHasBegun) {
+        call.speechHasBegun = true; // Mark that speech has started based on receiving audio data
+        loggerToUse.info(`[${callId}] Speech implicitly started upon receiving first audio chunk from OpenAI.`);
+        if (call.noSpeechBeginTimer) {
+            loggerToUse.info(`[${callId}] Clearing noSpeechBeginTimer due to receiving audio chunk.`);
+            clearTimeout(call.noSpeechBeginTimer);
+            call.noSpeechBeginTimer = null;
+        }
+        // Consider clearing initialOpenAIStreamIdleTimer as well if appropriate,
+        // as receiving audio means the stream is not idle from OpenAI's perspective.
+        if (call.initialOpenAIStreamIdleTimer) {
+            loggerToUse.info(`[${callId}] Clearing initialOpenAIStreamIdleTimer due to receiving audio chunk.`);
+            clearTimeout(call.initialOpenAIStreamIdleTimer);
+            call.initialOpenAIStreamIdleTimer = null;
+        }
+    }
+
+
     if (playbackMode === "stream") {
       loggerToUse.debug(`Streaming TTS audio chunk, length: ${audioChunkBase64.length}.`);
       try {
         const audioBuffer = Buffer.from(audioChunkBase64, 'base64');
         if (audioBuffer.length === 0) {
-          loggerToUse.warn(`[StreamPlayback] Decoded audio chunk is empty for call ${callId}. Skipping playback of this chunk.`);
+          loggerToUse.warn(`[StreamPlayback] Decoded audio chunk is empty for call ${callId}. Skipping queueing of this chunk.`);
           return;
         }
 
+        // Save the raw audio buffer for later full backup
+        call.fullTtsAudioBuffer.push(audioBuffer);
+
         const recordingsBaseDir = '/var/lib/asterisk/sounds';
-        const openaiRecordingsDir = path.join(recordingsBaseDir, 'openai_stream_chunks');
-        if (!fs.existsSync(openaiRecordingsDir)) {
-          fs.mkdirSync(openaiRecordingsDir, { recursive: true });
+        const openaiStreamChunksDir = path.join(recordingsBaseDir, 'openai_stream_chunks');
+        if (!fs.existsSync(openaiStreamChunksDir)) {
+          fs.mkdirSync(openaiStreamChunksDir, { recursive: true });
         }
         const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-        const chunkFilename = `openai_tts_chunk_${callId}_${timestamp}.ulaw`;
-        const absoluteChunkPath = path.join(openaiRecordingsDir, chunkFilename);
+        // Ensure unique filenames, e.g., by adding a counter or more precise timestamp if needed
+        const chunkFilename = `tts_chunk_${callId}_${timestamp}_${call.ttsPlaybackQueue.length}.ulaw`;
+        const absoluteChunkPath = path.join(openaiStreamChunksDir, chunkFilename);
 
-        fs.writeFileSync(absoluteChunkPath, audioBuffer);
+        fs.writeFileSync(absoluteChunkPath, audioBuffer); // Assuming audioBuffer is in the correct format (e.g., ulaw)
         loggerToUse.info(`[StreamPlayback] Saved TTS chunk to ${absoluteChunkPath}`);
 
-        call.streamedTtsChunkFiles.push(absoluteChunkPath);
-        // playbackAudio ahora está en ari-actions.ts y necesita serviceInstance
-        await serviceInstance.playbackAudio(callId, null, `sound:openai_stream_chunks/${chunkFilename.replace(/\.ulaw$/, '')}`);
-        loggerToUse.info(`[StreamPlayback] Initiated playback for TTS chunk ${chunkFilename}`);
+        const soundUri = `sound:openai_stream_chunks/${chunkFilename.replace(/\.ulaw$/, '')}`;
+        call.ttsPlaybackQueue.push(soundUri);
+        call.streamedTtsChunkFiles.push(absoluteChunkPath); // Keep track for cleanup
+
+        // Dynamically import to avoid circular dependencies if _processTtsPlaybackQueue is in ari-actions
+        const { _processTtsPlaybackQueue } = await import('./ari-actions');
+        _processTtsPlaybackQueue(serviceInstance, callId);
 
       } catch (e: any) {
-        loggerToUse.error(`[StreamPlayback] Error processing or playing TTS chunk for call ${callId}: ${e.message}`);
+        loggerToUse.error(`[StreamPlayback] Error processing or queueing TTS chunk for call ${callId}: ${e.message}`);
       }
     } else { // full_chunk mode
       if (!call.ttsAudioChunks) {
@@ -176,10 +217,59 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
     loggerToUse.info(`_onOpenAIAudioStreamEnd for call ${callId}. Playback mode: ${playbackMode}.`);
 
     if (playbackMode === "stream") {
-      loggerToUse.info(`[StreamPlayback] Audio stream ended. All chunks should have been processed and played individually.`);
-      return;
+      loggerToUse.info(`[StreamPlayback] Audio stream ended. All chunks should have been processed and played individually or queued.`);
+      // Save the full concatenated audio if in stream mode and buffer has content
+      if (call.fullTtsAudioBuffer.length > 0) {
+        const fullAudioBuffer = Buffer.concat(call.fullTtsAudioBuffer);
+        loggerToUse.info(`[StreamPlayback] Concatenated ${call.fullTtsAudioBuffer.length} streamed chunks. Total backup audio size: ${fullAudioBuffer.length} bytes.`);
+
+        if (fullAudioBuffer.length > 0) {
+          try {
+            const recordingsBaseDir = '/var/lib/asterisk/sounds';
+            const streamBackupDir = path.join(recordingsBaseDir, 'openai_stream_backup');
+            if (!fs.existsSync(streamBackupDir)) {
+              fs.mkdirSync(streamBackupDir, { recursive: true });
+            }
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+            // Determine extension based on output format, similar to full_chunk
+            const outputFormat = call.config.openAIRealtimeAPI.outputAudioFormat?.toLowerCase();
+            let backupFilenameOnly = `stream_backup_${callId}_${timestamp}`;
+            let backupFilenameWithExt: string;
+            let finalBackupBuffer = fullAudioBuffer;
+
+            if (outputFormat?.startsWith('pcm')) {
+              const bytesPerSample = 2; const numChannels = 1;
+              const outputSampleRate = call.config.openAIRealtimeAPI.outputAudioSampleRate || 8000;
+              const numFrames = fullAudioBuffer.length / (bytesPerSample * numChannels);
+              const wavHeader = createWavHeader({ numFrames, numChannels, sampleRate: outputSampleRate, bytesPerSample });
+              finalBackupBuffer = Buffer.concat([wavHeader, fullAudioBuffer]);
+              backupFilenameWithExt = `${backupFilenameOnly}.wav`;
+            } else if (outputFormat === 'g711_ulaw' || outputFormat === 'mulaw_8000hz' || outputFormat === 'ulaw') {
+              backupFilenameWithExt = `${backupFilenameOnly}.ulaw`;
+            } else if (outputFormat === 'mp3') {
+               backupFilenameWithExt = `${backupFilenameOnly}.mp3`;
+            } else if (outputFormat === 'opus') {
+               backupFilenameWithExt = `${backupFilenameOnly}.opus`;
+            } else {
+              backupFilenameWithExt = `${backupFilenameOnly}.raw`;
+            }
+            const absoluteBackupPath = path.join(streamBackupDir, backupFilenameWithExt);
+            fs.writeFileSync(absoluteBackupPath, finalBackupBuffer);
+            loggerToUse.info(`[StreamPlayback] Full backup audio saved to ${absoluteBackupPath}`);
+          } catch (saveError: any) {
+            loggerToUse.error(`[StreamPlayback] Failed to save full backup audio for call ${callId}: ${saveError.message}`, saveError);
+          }
+        } else {
+          loggerToUse.warn(`[StreamPlayback] Full backup audio buffer was empty after concatenation for call ${callId}. Nothing to save.`);
+        }
+        call.fullTtsAudioBuffer = []; // Clear the buffer after saving
+      } else {
+        loggerToUse.info(`[StreamPlayback] No audio chunks accumulated in fullTtsAudioBuffer for backup.`);
+      }
+      return; // End of stream mode specific handling
     }
 
+    // Logic for "full_chunk" mode (remains largely the same)
     if (!call.ttsAudioChunks) {
       call.callLogger.error(`_onOpenAIAudioStreamEnd (full_chunk): CRITICAL - ttsAudioChunks is undefined.`);
       return;
@@ -449,6 +539,11 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       currentTurnStartTime: new Date().toISOString(),
       isFirstInteraction: true,
       streamedTtsChunkFiles: [],
+      // Initialize new playlist fields
+      ttsPlaybackQueue: [],
+      currentPlayingSoundId: null,
+      isTtsPlaying: false,
+      fullTtsAudioBuffer: [],
     };
     serviceInstance.activeCalls.set(callId, callResources);
     serviceInstance.currentPrimaryCallId = callId;
@@ -826,6 +921,10 @@ export function _handlePlaybackFinished(serviceInstance: AriClientService, callI
       call.pendingVADBufferFlush = false;
       call.isFlushingVADBuffer = false;
 
+    // Playlist specific cleanup
+    call.currentPlayingSoundId = null; // Clear the ID of the sound that just finished (or was stopped)
+    call.isTtsPlaying = false; // Mark TTS as not playing
+
       if (call.noSpeechBeginTimer) { clearTimeout(call.noSpeechBeginTimer); call.noSpeechBeginTimer = null; call.callLogger.debug("Cleared noSpeechBeginTimer post-TTS.");}
       if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; call.callLogger.debug("Cleared speechEndSilenceTimer post-TTS.");}
       if (call.initialOpenAIStreamIdleTimer) { clearTimeout(call.initialOpenAIStreamIdleTimer); call.initialOpenAIStreamIdleTimer = null; call.callLogger.debug("Cleared initialOpenAIStreamIdleTimer post-TTS.");}
@@ -833,7 +932,21 @@ export function _handlePlaybackFinished(serviceInstance: AriClientService, callI
       call.currentTurnStartTime = new Date().toISOString();
       call.callerAudioBufferForCurrentTurn = [];
 
-      call.callLogger.info(`OpenAI TTS done. Transitioning to listen for caller based on mode: ${currentActivationMode}. New turn start time: ${call.currentTurnStartTime}`);
+    call.callLogger.info(`OpenAI TTS playback (or interruption) handled. Reason: ${reason}. Transitioning to listen for caller based on mode: ${currentActivationMode}. New turn start time: ${call.currentTurnStartTime}`);
+
+    // If the queue was not interrupted and has more items, process the next one.
+    // The interruption logic in _onOpenAISpeechStarted would clear the queue.
+    if (call.ttsPlaybackQueue.length > 0) {
+      call.callLogger.info(`TTS queue has more items (${call.ttsPlaybackQueue.length}). Processing next.`);
+      // Dynamically import to avoid circular dependencies
+      import('./ari-actions').then(({ _processTtsPlaybackQueue }) => {
+        _processTtsPlaybackQueue(serviceInstance, callId);
+      }).catch(e => call.callLogger.error(`Error importing _processTtsPlaybackQueue in _handlePlaybackFinished: ${e.message}`));
+      return; // Return here because _processTtsPlaybackQueue will handle the next state or further listening.
+    } else {
+        call.callLogger.info(`TTS queue is empty after playback/interruption. Proceeding to standard post-TTS logic.`);
+    }
+
 
       switch (currentActivationMode) {
         case 'fixedDelay':

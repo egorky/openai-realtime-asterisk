@@ -287,6 +287,64 @@ export async function playbackAudio(
     }
 }
 
+// Procesar la cola de reproducción de TTS para el modo stream
+export async function _processTtsPlaybackQueue(serviceInstance: AriClientService, callId: string): Promise<void> {
+  const call = serviceInstance.activeCalls.get(callId);
+  if (!call || call.isCleanupCalled) {
+    (call?.callLogger || serviceInstance.logger).warn(`_processTtsPlaybackQueue: Call ${callId} not active or cleanup called. Aborting queue processing.`);
+    return;
+  }
+
+  if (call.isTtsPlaying) {
+    call.callLogger.debug(`_processTtsPlaybackQueue: TTS is already playing for call ${callId}. Queue will be processed once current playback finishes.`);
+    return;
+  }
+
+  if (call.ttsPlaybackQueue.length === 0) {
+    call.callLogger.debug(`_processTtsPlaybackQueue: TTS playback queue is empty for call ${callId}.`);
+    call.isTtsPlaying = false; // Asegurarse de que esté false si la cola está vacía
+    return;
+  }
+
+  call.isTtsPlaying = true;
+  const mediaUriToPlay = call.ttsPlaybackQueue.shift(); // Obtener y remover el primer elemento
+
+  if (!mediaUriToPlay) { // Debería ser redundante por el check de length, pero es una salvaguarda
+    call.callLogger.warn(`_processTtsPlaybackQueue: Dequeued a null/undefined media URI for call ${callId}. This shouldn't happen.`);
+    call.isTtsPlaying = false;
+    // Intentar procesar el siguiente si la cola aún tiene elementos
+    if (call.ttsPlaybackQueue.length > 0) {
+        _processTtsPlaybackQueue(serviceInstance, callId);
+    }
+    return;
+  }
+
+  call.callLogger.info(`_processTtsPlaybackQueue: Playing next TTS chunk from queue for call ${callId}: ${mediaUriToPlay}. Queue size: ${call.ttsPlaybackQueue.length}`);
+
+  try {
+    // Usar la función playbackAudio existente, que ya maneja la creación de Playback y los eventos.
+    // La diferencia clave es que _handlePlaybackFinished para TTS necesitará llamar a _processTtsPlaybackQueue.
+    // Aquí no pasamos audioPayloadB64, solo mediaUri.
+    await playbackAudio(serviceInstance, callId, null, mediaUriToPlay);
+    // El ID del playback se asignará dentro de playbackAudio a call.waitingPlayback
+    // y se usará para el currentPlayingSoundId si se decide que waitingPlayback es el correcto para esto.
+    // Por ahora, playbackAudio ya maneja la lógica de "waitingPlayback".
+    // Si se necesita un ID específico para el sonido de la cola, podría requerir un ajuste en playbackAudio
+    // o almacenar el ID aquí si playbackAudio lo devuelve.
+    // Asumimos que _handlePlaybackFinished se encargará de llamar a _processTtsPlaybackQueue de nuevo.
+
+  } catch (error: any) {
+    call.callLogger.error(`_processTtsPlaybackQueue: Error initiating playback for ${mediaUriToPlay} on call ${callId}: ${error.message}`);
+    call.isTtsPlaying = false;
+    // Intentar el siguiente en la cola si falla uno. Podría ser una opción o llevar a un bucle si todos fallan.
+    // Considerar una lógica de reintentos o de error máximo.
+    if (call.ttsPlaybackQueue.length > 0) {
+      setTimeout(() => _processTtsPlaybackQueue(serviceInstance, callId), 100); // Pequeño delay para evitar bucles rápidos en fallos persistentes
+    }
+  }
+}
+
+
 // Termina una llamada específica.
 export async function endCall(serviceInstance: AriClientService, channelId: string): Promise<void> {
     const call = serviceInstance.activeCalls.get(channelId);
