@@ -123,7 +123,6 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
   const headers = { 'Authorization': `Bearer ${apiKey}`, 'OpenAI-Beta': 'realtime=v1' };
 
   sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket: ${wsUrl.split('?')[0]}?model=...`);
-  ariClient.logger.info(`[${callId}] Sending event: openai_session_starting`); // Use ariClient's logger for consistency if sessionLogger is not directly sendEventToFrontend capable
   (ariClient as AriClientService).sendEventToFrontend({ // Cast to access sendEventToFrontend
     type: 'openai_session_starting',
     callId: callId,
