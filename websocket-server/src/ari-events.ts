@@ -1321,7 +1321,7 @@ export async function _onChannelTalkingStarted(serviceInstance: AriClientService
       callId: channel.id,
       timestamp: new Date().toISOString(),
       source: 'ARI_EVENTS',
-      payload: { durationMs: event.duration },
+      payload: { },
       logLevel: 'DEBUG'
     });
 
