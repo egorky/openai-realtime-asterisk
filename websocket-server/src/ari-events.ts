@@ -27,8 +27,17 @@ import { createWavHeader } from './ari-utils'; // Asumiendo que ari-utils.ts exi
 
 export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId: string): void {
     const call = serviceInstance.activeCalls.get(callId);
+    const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.info(`[${callId}] _onOpenAISpeechStarted: OpenAI speech recognition started (or first transcript received).`);
+    serviceInstance.sendEventToFrontend({
+        type: 'openai_speech_started',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: {},
+        logLevel: 'INFO'
+    });
 
     // TTS Interruption Logic
     if (call.isTtsPlaying || call.ttsPlaybackQueue.length > 0) {
@@ -36,6 +45,14 @@ export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId
       _stopAllPlaybacks(serviceInstance, call) // This should also stop currentPlayingSoundId if active
         .then(() => {
           call.callLogger.info(`[${callId}] TTS playbacks stopped due to user speech.`);
+          serviceInstance.sendEventToFrontend({
+            type: 'tts_playback_interrupted',
+            callId: callId,
+            timestamp: new Date().toISOString(),
+            source: 'ARI_EVENTS', // Or OPENAI_CALLBACKS as it's triggered by it
+            payload: { reason: 'user_speech_started' },
+            logLevel: 'INFO'
+          });
         })
         .catch(e => call.callLogger.error(`[${callId}] Error stopping TTS playbacks on speech interruption: ${e.message}`));
       call.ttsPlaybackQueue = []; // Clear the queue
@@ -60,6 +77,14 @@ export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.debug(`[${callId}] _onOpenAIInterimResult: OpenAI interim transcript: "${transcript}"`);
+    serviceInstance.sendEventToFrontend({
+        type: 'openai_interim_transcript',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: { transcript: transcript },
+        logLevel: 'DEBUG'
+    });
 
     if (!call.speechHasBegun) {
         if (call.noSpeechBeginTimer) {
@@ -97,6 +122,14 @@ export function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: 
 
     call.callLogger.info(`_onOpenAIFinalResult CALLED for callId: ${callId}. Current ttsAudioChunks.length: ${call.ttsAudioChunks?.length ?? 'N/A'}`);
     call.callLogger.info(`OpenAI final transcript received: "${transcript}"`);
+    serviceInstance.sendEventToFrontend({
+        type: 'openai_final_transcript',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: { transcript: transcript },
+        logLevel: 'INFO'
+    });
 
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
@@ -109,6 +142,14 @@ export function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: 
     }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
 
     try {
+      serviceInstance.sendEventToFrontend({
+        type: 'openai_requesting_response',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'SESSION_MANAGER', // sessionManager makes the call
+        payload: { triggeringTranscript: transcript },
+        logLevel: 'INFO'
+      });
       sessionManager.requestOpenAIResponse(callId, transcript, call.config);
     } catch (e: any) {
       call.callLogger.error(`Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
@@ -191,6 +232,19 @@ export async function _onOpenAIAudioChunk(serviceInstance: AriClientService, cal
         const { _processTtsPlaybackQueue } = await import('./ari-actions');
         _processTtsPlaybackQueue(serviceInstance, callId);
 
+        serviceInstance.sendEventToFrontend({
+          type: 'openai_tts_chunk_received_and_queued',
+          callId: callId,
+          timestamp: new Date().toISOString(),
+          source: 'OPENAI_CALLBACKS',
+          payload: {
+            chunkUri: soundUri,
+            queueSize: call.ttsPlaybackQueue.length,
+            chunkSizeBytes: audioBuffer.length
+          },
+          logLevel: 'TRACE'
+        });
+
       } catch (e: any) {
         loggerToUse.error(`[StreamPlayback] Error processing or queueing TTS chunk for call ${callId}: ${e.message}`);
       }
@@ -201,6 +255,17 @@ export async function _onOpenAIAudioChunk(serviceInstance: AriClientService, cal
       }
       call.callLogger.debug(`(Full Chunk Mode) Received TTS audio chunk, length: ${audioChunkBase64.length}. Accumulating. Previous #chunks: ${call.ttsAudioChunks.length}`);
       call.ttsAudioChunks.push(audioChunkBase64);
+      serviceInstance.sendEventToFrontend({
+        type: 'openai_tts_chunk_accumulated',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: {
+          accumulatedChunks: call.ttsAudioChunks.length,
+          currentChunkSizeBytes: audioChunkBase64.length
+        },
+        logLevel: 'TRACE'
+      });
     }
 }
 
@@ -215,6 +280,8 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
 
     const playbackMode = call.config.appConfig.appRecognitionConfig.ttsPlaybackMode || "full_chunk";
     loggerToUse.info(`_onOpenAIAudioStreamEnd for call ${callId}. Playback mode: ${playbackMode}.`);
+    let savedFilePath: string | null = null;
+
 
     if (playbackMode === "stream") {
       loggerToUse.info(`[StreamPlayback] Audio stream ended. All chunks should have been processed and played individually or queued.`);
@@ -256,6 +323,40 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
             const absoluteBackupPath = path.join(streamBackupDir, backupFilenameWithExt);
             fs.writeFileSync(absoluteBackupPath, finalBackupBuffer);
             loggerToUse.info(`[StreamPlayback] Full backup audio saved to ${absoluteBackupPath}`);
+            savedFilePath = absoluteBackupPath; // Store for event
+          } catch (saveError: any) {
+            loggerToUse.error(`[StreamPlayback] Failed to save full backup audio for call ${callId}: ${saveError.message}`, saveError);
+          }
+        } else {
+          loggerToUse.warn(`[StreamPlayback] Full backup audio buffer was empty after concatenation for call ${callId}. Nothing to save.`);
+        }
+        call.fullTtsAudioBuffer = []; // Clear the buffer after saving
+      } else {
+        loggerToUse.info(`[StreamPlayback] No audio chunks accumulated in fullTtsAudioBuffer for backup.`);
+      }
+      // Send event after attempting to save
+      serviceInstance.sendEventToFrontend({
+        type: 'openai_tts_stream_ended',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: {
+          playbackMode: playbackMode,
+          totalStreamedBytes: fullAudioBuffer?.length || 0, // Use the concatenated buffer length
+          savedFilePath: savedFilePath
+        },
+        logLevel: 'INFO'
+      });
+      return; // End of stream mode specific handling
+    }
+
+    // Logic for "full_chunk" mode (remains largely the same)
+    let accumulatedChunksCount = 0;
+    if (call.ttsAudioChunks) {
+      accumulatedChunksCount = call.ttsAudioChunks.length;
+    }
+
+    if (!call.ttsAudioChunks) {
           } catch (saveError: any) {
             loggerToUse.error(`[StreamPlayback] Failed to save full backup audio for call ${callId}: ${saveError.message}`, saveError);
           }
@@ -406,6 +507,18 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
         .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
     }
     call.ttsAudioChunks = [];
+    serviceInstance.sendEventToFrontend({
+        type: 'openai_tts_stream_ended', // For full_chunk, this means all chunks received before playback
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: {
+          playbackMode: playbackMode,
+          totalAccumulatedChunks: accumulatedChunksCount, // Use the count before clearing
+          savedFilePath: soundPathForPlayback ? path.join('/var/lib/asterisk/sounds', soundPathForPlayback + (filenameWithExt?.substring(filenameOnly.length) || '.ulaw')) : null
+        },
+        logLevel: 'INFO'
+      });
 }
 
 export function _onOpenAIError(serviceInstance: AriClientService, callId: string, error: any): void {
@@ -414,6 +527,14 @@ export function _onOpenAIError(serviceInstance: AriClientService, callId: string
     const errorMessage = error.message || (typeof error === 'string' ? error : JSON.stringify(error));
     call.callLogger.error(`OpenAI stream error reported by sessionManager:`, errorMessage);
     call.openAIStreamError = error;
+    serviceInstance.sendEventToFrontend({
+        type: 'openai_session_error',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: { errorMessage: errorMessage, errorDetails: JSON.stringify(error) }, // Stringify error for safety
+        logLevel: 'ERROR'
+    });
 
     logConversationToRedis(callId, {
       actor: 'error',
@@ -431,6 +552,14 @@ export function _onOpenAISessionEnded(serviceInstance: AriClientService, callId:
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.info(`OpenAI session ended event from sessionManager. Reason: ${reason}`);
+    serviceInstance.sendEventToFrontend({
+        type: 'openai_session_ended',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'OPENAI_CALLBACKS',
+        payload: { reason: reason },
+        logLevel: 'INFO'
+    });
     logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `OpenAI session ended. Reason: ${reason}`})
       .catch(e => call.callLogger.error(`RedisLog Error (OpenAI session ended): ${e.message}`));
     call.openAIStreamingActive = false;
@@ -550,11 +679,32 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
     serviceInstance.notifyActiveCallsChanged();
     callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}. Set as current primary call.`);
 
+    serviceInstance.sendEventToFrontend({
+      type: 'call_stasis_start',
+      callId: callId,
+      timestamp: new Date().toISOString(),
+      source: 'ARI_EVENTS',
+      payload: {
+        callerId: incomingChannel.caller?.number || 'UnknownCaller',
+        channelName: incomingChannel.name,
+        dialplanInfo: incomingChannel.dialplan
+      },
+      logLevel: 'INFO'
+    });
+
     try {
       callLogger.info(`Attempting to answer incoming channel ${callId}.`);
       try {
         await incomingChannel.answer();
         callLogger.info(`Successfully answered incoming channel ${callId}.`);
+        serviceInstance.sendEventToFrontend({
+          type: 'call_answered',
+          callId: callId,
+          timestamp: new Date().toISOString(),
+          source: 'ARI_EVENTS',
+          payload: {},
+          logLevel: 'INFO'
+        });
       } catch (err: any) {
         callLogger.error(`FAILED to answer incoming channel ${callId}. Error: ${err.message || JSON.stringify(err)}`);
         throw err;
@@ -597,6 +747,21 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       callLogger.info(`Successfully added externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
       await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });
       callLogger.info(`Successfully added snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+
+      serviceInstance.sendEventToFrontend({
+        type: 'call_resources_initialized',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_EVENTS',
+        payload: {
+          rtpServerAddress: `${rtpServerAddress.host}:${rtpServerAddress.port}`,
+          externalMediaChannelId: callResources.externalMediaChannel?.id,
+          snoopChannelId: callResources.snoopChannel?.id,
+          userBridgeId: callResources.userBridge?.id,
+          snoopBridgeId: callResources.snoopBridge?.id
+        },
+        logLevel: 'INFO'
+      });
 
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = serviceInstance.activeCalls.get(callId);
@@ -773,6 +938,7 @@ export async function _onDtmfReceived(serviceInstance: AriClientService, event: 
       call.callLogger.warn(`DTMF event for channel ${channel.id} but current call channel is ${call.channel.id}. Ignoring.`);
       return;
     }
+    const wasDtmfModeActivePreviously = call.dtmfModeActive;
 
     call.callLogger.info(`DTMF digit '${event.digit}' received on channel ${channel.id}.`);
     const dtmfConfig = call.config.appConfig.dtmfConfig;
@@ -821,6 +987,29 @@ export async function _onDtmfReceived(serviceInstance: AriClientService, event: 
 
     call.collectedDtmfDigits += event.digit;
     call.callLogger.info(`Collected DTMF for call ${call.channel.id}: ${call.collectedDtmfDigits}`);
+
+    serviceInstance.sendEventToFrontend({
+      type: 'dtmf_received',
+      callId: call.channel.id,
+      timestamp: new Date().toISOString(),
+      source: 'ARI_EVENTS',
+      payload: {
+        digit: event.digit,
+        currentCollectedDigits: call.collectedDtmfDigits
+      },
+      logLevel: 'INFO'
+    });
+
+    if (!wasDtmfModeActivePreviously && call.dtmfModeActive) {
+        serviceInstance.sendEventToFrontend({
+            type: 'dtmf_mode_activated',
+            callId: call.channel.id,
+            timestamp: new Date().toISOString(),
+            source: 'ARI_EVENTS',
+            payload: { reason: `DTMF digit '${event.digit}' received` },
+            logLevel: 'INFO'
+        });
+    }
 
     if (call.dtmfInterDigitTimer) clearTimeout(call.dtmfInterDigitTimer);
     const interDigitTimeoutMs = (dtmfConfig.dtmfInterDigitTimeoutSeconds) * 1000;
@@ -1018,6 +1207,11 @@ export function _handleVADDelaysCompleted(serviceInstance: AriClientService, cal
                 _fullCleanup(serviceInstance, callId, true, "VAD_MODE_MAX_WAIT_POST_INITIAL_DELAY_TIMEOUT");
             }, maxWait * 1000);
             call.callLogger.info(`VAD (vadMode): Started max wait timer (${maxWait}s) for speech to begin after initial delay.`);
+            serviceInstance.sendEventToFrontend({
+              type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
+              payload: { timerName: 'vadMaxWaitAfterPromptTimer_vadMode_postInitialDelay', action: 'set', durationSeconds: maxWait },
+              logLevel: 'DEBUG'
+            });
         }
       }
     }
@@ -1030,6 +1224,11 @@ export function _handlePostPromptVADLogic(serviceInstance: AriClientService, cal
     }
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
     call.callLogger.info(`VAD: Handling post-prompt logic for vadRecogActivation: '${appRecogConf.vadRecogActivation}'.`);
+    serviceInstance.sendEventToFrontend({
+      type: 'vad_post_prompt_logic_started', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
+      payload: { vadRecogActivation: appRecogConf.vadRecogActivation, speechDetectedDuringPrompt: call.vadSpeechDetected },
+      logLevel: 'DEBUG'
+    });
 
     if (appRecogConf.vadRecogActivation === 'afterPrompt') {
       if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) {
@@ -1056,9 +1255,19 @@ export function _handlePostPromptVADLogic(serviceInstance: AriClientService, cal
           call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
             if (call.isCleanupCalled || call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) return;
             call.callLogger.warn(`VAD (afterPrompt): Max wait ${maxWait}s for speech (post-prompt) reached. Ending call.`);
+            serviceInstance.sendEventToFrontend({
+              type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
+              payload: { timerName: 'vadMaxWaitAfterPromptTimer_afterPrompt', action: 'expired', durationSeconds: maxWait },
+              logLevel: 'WARN'
+            });
             if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
             _fullCleanup(serviceInstance, callId, true, "VAD_AFTERPROMPT_MAX_WAIT_TIMEOUT");
           }, maxWait * 1000);
+          serviceInstance.sendEventToFrontend({
+            type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
+            payload: { timerName: 'vadMaxWaitAfterPromptTimer_afterPrompt', action: 'set', durationSeconds: maxWait },
+            logLevel: 'DEBUG'
+          });
         }
       }
     } else if (appRecogConf.vadRecogActivation === 'vadMode') {
@@ -1069,10 +1278,20 @@ export function _handlePostPromptVADLogic(serviceInstance: AriClientService, cal
               call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
                   if (call.isCleanupCalled || call.openAIStreamingActive || call.vadRecognitionTriggeredAfterInitialDelay) return;
                   call.callLogger.warn(`VAD (vadMode): Max wait ${maxWait}s for speech (after prompt/initial delays) reached. Ending call.`);
+                  serviceInstance.sendEventToFrontend({
+                    type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
+                    payload: { timerName: 'vadMaxWaitAfterPromptTimer_vadMode_postPrompt', action: 'expired', durationSeconds: maxWait },
+                    logLevel: 'WARN'
+                  });
                   if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
                   _fullCleanup(serviceInstance, callId, true, "VAD_MODE_MAX_WAIT_POST_PROMPT_TIMEOUT");
               }, maxWait * 1000);
               call.callLogger.info(`VAD (vadMode): Started max wait timer (${maxWait}s) for speech after prompt/initial delay.`);
+              serviceInstance.sendEventToFrontend({
+                type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
+                payload: { timerName: 'vadMaxWaitAfterPromptTimer_vadMode_postPrompt', action: 'set', durationSeconds: maxWait },
+                logLevel: 'DEBUG'
+              });
           }
       }
     }
@@ -1085,6 +1304,14 @@ export async function _onChannelTalkingStarted(serviceInstance: AriClientService
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech started on channel ${channel.id}.`);
+    serviceInstance.sendEventToFrontend({
+      type: 'vad_speech_detected_start', // More specific than 'vad_speech_detected'
+      callId: channel.id,
+      timestamp: new Date().toISOString(),
+      source: 'ARI_EVENTS',
+      payload: { durationMs: event.duration }, // duration might be available in ChannelTalkingStarted, check type
+      logLevel: 'DEBUG'
+    });
 
     if (call.openAIStreamingActive) {
         call.callLogger.debug(`TALK_DETECT: Speech started, but OpenAI stream already active. Ignoring.`);
@@ -1198,6 +1425,14 @@ export async function _onChannelTalkingFinished(serviceInstance: AriClientServic
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech finished on channel ${channel.id}. Last speech duration: ${event.duration}ms.`);
+    serviceInstance.sendEventToFrontend({
+      type: 'vad_speech_detected_end', // More specific
+      callId: channel.id,
+      timestamp: new Date().toISOString(),
+      source: 'ARI_EVENTS',
+      payload: { durationMs: event.duration },
+      logLevel: 'DEBUG'
+    });
     call.vadSpeechDetected = false;
 
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
@@ -1218,6 +1453,14 @@ export async function _onChannelTalkingFinished(serviceInstance: AriClientServic
 export function onAppOwnedChannelStasisEnd(serviceInstance: AriClientService, event: StasisEnd, channel: Channel): void {
     const callLogger = serviceInstance.logger.child({ callId: channel.id, callerId: `app-owned-${channel.name.split('/')[0]}` }, undefined, serviceInstance);
     callLogger.info(`App-owned channel ${channel.name} (${channel.id}) left Stasis. Cleaning up associated resources if any.`);
+    serviceInstance.sendEventToFrontend({
+        type: 'app_owned_channel_stasis_end',
+        callId: null, // Not tied to a main call directly in this context
+        timestamp: new Date().toISOString(),
+        source: 'ARI_EVENTS',
+        payload: { channelId: channel.id, channelName: channel.name },
+        logLevel: 'DEBUG'
+      });
     // Potentially remove from appOwnedChannelIds if it was added.
     serviceInstance.appOwnedChannelIds.delete(channel.id);
 
@@ -1232,6 +1475,14 @@ export async function onStasisEnd(serviceInstance: AriClientService, event: Stas
     const call = serviceInstance.activeCalls.get(channel.id);
     if (call) {
         call.callLogger.info(`Main channel ${channel.id} StasisEnd event. Initiating cleanup.`);
+        serviceInstance.sendEventToFrontend({
+            type: 'call_stasis_end',
+            callId: channel.id,
+            timestamp: new Date().toISOString(),
+            source: 'ARI_EVENTS',
+            payload: { channelName: channel.name, reason: 'StasisEnd event received' },
+            logLevel: 'INFO'
+          });
         // El _fullCleanup ya está en el 'once' de StasisEnd en onStasisStart,
         // así que esta llamada podría ser redundante o causar doble limpieza.
         // Se comenta para evitarlo. Si el 'once' no cubre todos los casos, se puede reactivar.
@@ -1243,10 +1494,26 @@ export async function onStasisEnd(serviceInstance: AriClientService, event: Stas
 
 export function onAriError(serviceInstance: AriClientService, err: any): void {
     serviceInstance.logger.error('General ARI Client Error:', err);
+    serviceInstance.sendEventToFrontend({
+        type: 'ari_connection_error',
+        callId: null,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_SERVICE',
+        payload: { errorMessage: err.message || JSON.stringify(err), errorDetails: err },
+        logLevel: 'ERROR'
+      });
 }
 
 export function onAriClose(serviceInstance: AriClientService): void {
     serviceInstance.logger.info('ARI connection closed. Cleaning up all active calls.');
+    serviceInstance.sendEventToFrontend({
+        type: 'ari_connection_status',
+        callId: null,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_SERVICE',
+        payload: { status: 'disconnected', reason: 'ARI connection closed' },
+        logLevel: 'WARN'
+      });
     const callIds = Array.from(serviceInstance.activeCalls.keys());
     for (const callId of callIds) {
         const call = serviceInstance.activeCalls.get(callId);

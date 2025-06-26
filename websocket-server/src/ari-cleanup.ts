@@ -48,8 +48,16 @@ export async function _fullCleanup(
         // call.callLogger.debug(`_fullCleanup for ${callId} already called or in progress. Skipping.`);
         return;
       }
-      call.isCleanupCalled = true;
+      call.isCleanupCalled = true; // Mark cleanup started immediately to prevent re-entry
       call.callLogger.info(`Full cleanup initiated for call ${callId}. Reason: ${reason}. Hangup main: ${hangupMainChannel}`);
+      serviceInstance.sendEventToFrontend({
+        type: 'call_cleanup_started',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_CLEANUP',
+        payload: { reason: reason, hangupMainChannel: hangupMainChannel },
+        logLevel: 'INFO'
+      });
 
       // Enviar evento al frontend antes de limpiar currentPrimaryCallId
       if (serviceInstance.currentPrimaryCallId === callId) {
@@ -114,6 +122,16 @@ export async function _fullCleanup(
 
       // Llamar a cleanupCallResources que maneja los recursos de Asterisk
       await cleanupCallResources(serviceInstance, callId, hangupMainChannel, false, call.callLogger);
+
+      call.callLogger.info(`Full cleanup COMPLETED for call ${callId}.`);
+      serviceInstance.sendEventToFrontend({
+        type: 'call_cleanup_completed',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_CLEANUP',
+        payload: { reason: reason },
+        logLevel: 'INFO'
+      });
 
     } else {
       // Usar el logger general de serviceInstance si call no existe

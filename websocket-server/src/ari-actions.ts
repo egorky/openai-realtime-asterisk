@@ -34,6 +34,14 @@ export async function _activateOpenAIStreaming(
       await sessionManager.startOpenAISession(callId, serviceInstance, call.config);
       call.callLogger.info(`[${callId}] Session manager ensured OpenAI session is active.`);
       call.openAIStreamingActive = true;
+      serviceInstance.sendEventToFrontend({
+        type: 'openai_stream_activated',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_ACTIONS',
+        payload: { reason: reason, expectingUserSpeech: isExpectingUserSpeechNext },
+        logLevel: 'INFO'
+      });
 
       if (call.pendingVADBufferFlush && call.vadAudioBuffer.length > 0) {
         call.callLogger.info(`[${callId}] Flushing ${call.vadAudioBuffer.length} VAD audio packets to OpenAI.`);
@@ -97,6 +105,14 @@ export async function _activateOpenAIStreaming(
 
     } catch (error: any) {
         call.callLogger.error(`[${callId}] Error during _activateOpenAIStreaming: ${(error instanceof Error ? error.message : String(error))}`);
+        serviceInstance.sendEventToFrontend({
+            type: 'openai_stream_activation_failed',
+            callId: callId,
+            timestamp: new Date().toISOString(),
+            source: 'ARI_ACTIONS',
+            payload: { reason: reason, errorMessage: error.message },
+            logLevel: 'ERROR'
+        });
         logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Error activating OpenAI stream: ${error.message}`})
           .catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
         call.openAIStreamingActive = false;
@@ -108,9 +124,11 @@ export async function _activateOpenAIStreaming(
 
 // Detiene todos los playbacks activos para una llamada.
 export async function _stopAllPlaybacks(serviceInstance: AriClientService, call: CallResources): Promise<void> {
-    const playbacksToStop: (Playback | undefined)[] = [call.mainPlayback, call.waitingPlayback, call.postRecognitionWaitingPlayback];
+    let wasPlaying = false;
+    const playbacksToStop: (Playback | undefined)[] = [call.mainPlayback, call.waitingPlayback, call.postRecognitionWaitingPlayback, call.currentPlayingSoundId ? {id: call.currentPlayingSoundId} as Playback : undefined];
     for (const playback of playbacksToStop) {
       if (playback && playback.id) { // Verificar playback.id también
+        wasPlaying = true; // Assume something was playing if we attempt to stop
         try {
           call.callLogger.debug(`Stopping playback ${playback.id}.`);
           // Verificar si serviceInstance.client existe
@@ -129,9 +147,20 @@ export async function _stopAllPlaybacks(serviceInstance: AriClientService, call:
         }
       }
     }
+    if(wasPlaying){
+        serviceInstance.sendEventToFrontend({
+            type: 'playback_all_stopped_action',
+            callId: call.channel.id,
+            timestamp: new Date().toISOString(),
+            source: 'ARI_ACTIONS',
+            payload: { reason: "Explicit stop all playbacks call from _stopAllPlaybacks" },
+            logLevel: 'DEBUG'
+          });
+    }
     call.mainPlayback = undefined;
     call.waitingPlayback = undefined;
     call.postRecognitionWaitingPlayback = undefined;
+    call.currentPlayingSoundId = null; // Ensure this is also cleared
 }
 
 
@@ -146,6 +175,14 @@ export async function _finalizeDtmfInput(serviceInstance: AriClientService, call
     }
 
     call.callLogger.info(`Finalizing DTMF input for call ${callId}. Reason: ${reason}. Collected digits: '${call.collectedDtmfDigits}'`);
+    serviceInstance.sendEventToFrontend({
+        type: 'dtmf_input_finalized',
+        callId: call.channel.id,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_ACTIONS',
+        payload: { finalDigits: call.collectedDtmfDigits, reason: reason },
+        logLevel: 'INFO'
+    });
 
     logConversationToRedis(callId, {
       actor: 'dtmf',
@@ -274,8 +311,28 @@ export async function playbackAudio(
 
       await call.channel.play({ media: mediaToPlay }, call.waitingPlayback); // Pasar el objeto playback
       call.callLogger.info(`OpenAI TTS Playback ${playbackId} started for ${channelId}.`);
+      serviceInstance.sendEventToFrontend({
+        type: 'playback_started',
+        callId: channelId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_ACTIONS',
+        payload: {
+          playbackId: playbackId, // Use the captured playbackId
+          mediaUri: mediaToPlay.startsWith('sound:') ? mediaToPlay : 'base64_payload_or_direct_file',
+          purpose: 'openai_tts' // Differentiate from greeting
+        },
+        logLevel: 'INFO'
+      });
     } catch (err: any) {
       call.callLogger.error(`Error playing OpenAI TTS audio for ${channelId}: ${err.message || JSON.stringify(err)}`);
+      serviceInstance.sendEventToFrontend({
+        type: 'playback_failed_to_start',
+        callId: channelId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_ACTIONS',
+        payload: { mediaUri: mediaToPlay, errorMessage: err.message, purpose: 'openai_tts' },
+        logLevel: 'ERROR'
+      });
       if (call.waitingPlayback) { // Limpiar si el playback se creó pero play falló
         if (call.waitingPlaybackFailedHandler && serviceInstance.client) {
             serviceInstance.client.removeListener('PlaybackFailed' as any, call.waitingPlaybackFailedHandler); // Remover handler
@@ -320,6 +377,14 @@ export async function _processTtsPlaybackQueue(serviceInstance: AriClientService
   }
 
   call.callLogger.info(`_processTtsPlaybackQueue: Playing next TTS chunk from queue for call ${callId}: ${mediaUriToPlay}. Queue size: ${call.ttsPlaybackQueue.length}`);
+  serviceInstance.sendEventToFrontend({
+    type: 'tts_playback_queue_processing_started',
+    callId: callId,
+    timestamp: new Date().toISOString(),
+    source: 'ARI_ACTIONS',
+    payload: { playingUri: mediaUriToPlay, remainingInQueue: call.ttsPlaybackQueue.length },
+    logLevel: 'DEBUG'
+  });
 
   try {
     // Usar la función playbackAudio existente, que ya maneja la creación de Playback y los eventos.
@@ -332,6 +397,7 @@ export async function _processTtsPlaybackQueue(serviceInstance: AriClientService
     // Si se necesita un ID específico para el sonido de la cola, podría requerir un ajuste en playbackAudio
     // o almacenar el ID aquí si playbackAudio lo devuelve.
     // Asumimos que _handlePlaybackFinished se encargará de llamar a _processTtsPlaybackQueue de nuevo.
+    // El evento 'playback_started' se emite desde dentro de playbackAudio.
 
   } catch (error: any) {
     call.callLogger.error(`_processTtsPlaybackQueue: Error initiating playback for ${mediaUriToPlay} on call ${callId}: ${error.message}`);
@@ -350,9 +416,25 @@ export async function endCall(serviceInstance: AriClientService, channelId: stri
     const call = serviceInstance.activeCalls.get(channelId);
     if (!call) {
       serviceInstance.logger.warn(`Attempted to end non-existent call: ${channelId}`);
+      serviceInstance.sendEventToFrontend({
+        type: 'call_end_failed_not_found',
+        callId: channelId,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_ACTIONS',
+        payload: { reason: "Call to end not found in active calls." },
+        logLevel: 'WARN'
+      });
       return;
     }
     call.callLogger.info(`endCall invoked. Initiating full cleanup.`);
+    serviceInstance.sendEventToFrontend({
+      type: 'call_ending_action_triggered',
+      callId: channelId,
+      timestamp: new Date().toISOString(),
+      source: 'ARI_ACTIONS',
+      payload: { reason: "Explicit endCall request" },
+      logLevel: 'INFO'
+    });
     // _fullCleanup debe ser importado o parte de AriClientService
     await _fullCleanup(serviceInstance, channelId, true, "EXPLICIT_ENDCALL_REQUEST");
 }

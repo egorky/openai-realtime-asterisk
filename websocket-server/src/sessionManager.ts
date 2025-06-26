@@ -123,6 +123,15 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
   const headers = { 'Authorization': `Bearer ${apiKey}`, 'OpenAI-Beta': 'realtime=v1' };
 
   sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket: ${wsUrl.split('?')[0]}?model=...`);
+  ariClient.logger.info(`[${callId}] Sending event: openai_session_starting`); // Use ariClient's logger for consistency if sessionLogger is not directly sendEventToFrontend capable
+  (ariClient as AriClientService).sendEventToFrontend({ // Cast to access sendEventToFrontend
+    type: 'openai_session_starting',
+    callId: callId,
+    timestamp: new Date().toISOString(),
+    source: 'SESSION_MANAGER',
+    payload: { wsUrl: wsUrl.split('?')[0] + '?model=...' },
+    logLevel: 'INFO'
+  });
   // sessionLogger.debug(`[${callId}] OpenAI Realtime WS Headers:`, headers);
 
   const ws = new WebSocket(wsUrl, { headers });
@@ -151,6 +160,14 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
         } else {
           sessionLogger.info(`[${callId}] OpenAI Realtime: Sent initial session.update event (details in debug log if enabled). Event: ${JSON.stringify(sessionUpdateEvent.session)}`);
         }
+        (ariClient as AriClientService).sendEventToFrontend({
+          type: 'openai_session_established',
+          callId: callId,
+          timestamp: new Date().toISOString(),
+          source: 'SESSION_MANAGER',
+          payload: { initialConfig: sessionUpdateEvent.session },
+          logLevel: 'INFO'
+        });
 
         // Send initial user prompt if configured
         const initialUserPrompt = process.env.INITIAL_USER_PROMPT;
@@ -407,6 +424,16 @@ export function stopOpenAISession(callId: string, reason: string): void {
   const session = activeOpenAISessions.get(callId);
   const loggerToUse = session?.ariClient?.logger || console;
   loggerToUse.info(`SessionManager: Request to stop OpenAI Realtime session for callId ${callId}. Reason: ${reason}`);
+  if (session?.ariClient) { // Check if ariClient exists to send event
+    (session.ariClient as AriClientService).sendEventToFrontend({
+      type: 'openai_session_stopping',
+      callId: callId,
+      timestamp: new Date().toISOString(),
+      source: 'SESSION_MANAGER',
+      payload: { reason: reason },
+      logLevel: 'INFO'
+    });
+  }
   if (session?.ws && isOpen(session.ws)) {
     loggerToUse.info(`SessionManager: Closing OpenAI Realtime WebSocket for ${callId}.`);
     session.ws.close(1000, reason);
@@ -428,6 +455,14 @@ export function sendAudioToOpenAI(callId: string, audioPayload: Buffer): void {
       session.ws.send(eventString);
       // El log de debug ya es bastante bueno aquí, no necesita el JSON completo usualmente.
       sessionLogger.debug(`[${callId}] OpenAI Realtime: Sent input_audio_buffer.append (base64 chunk length: ${base64AudioChunk.length}, JSON event length: ${eventString.length})`);
+      (session.ariClient as AriClientService).sendEventToFrontend({
+        type: 'openai_audio_sent',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'SESSION_MANAGER',
+        payload: { chunkSizeBytes: base64AudioChunk.length }, // base64 length, not raw buffer
+        logLevel: 'TRACE'
+      });
     } catch (e:any) {
       sessionLogger.error(`[${callId}] Error sending audio event to OpenAI: ${e.message}`);
     }
@@ -538,7 +573,28 @@ export function sendSessionUpdateToOpenAI(callId: string, currentOpenAIConfig: O
   try {
     session.ws.send(JSON.stringify(sessionUpdateEvent));
     loggerToUse.info(`[${callId}] SessionManager: Successfully sent session.update to OpenAI.`);
+    // Send event to frontend
+    if (session.ariClient) { // Make sure ariClient is available
+        (session.ariClient as AriClientService).sendEventToFrontend({
+            type: 'openai_session_config_updated_sent', // More specific event type
+            callId: callId,
+            timestamp: new Date().toISOString(),
+            source: 'SESSION_MANAGER',
+            payload: { updatedConfig: sessionUpdatePayload },
+            logLevel: 'INFO'
+        });
+    }
   } catch (e: any) {
     loggerToUse.error(`[${callId}] SessionManager: Error sending session.update to OpenAI: ${e.message}`);
+    if (session.ariClient) {
+        (session.ariClient as AriClientService).sendEventToFrontend({
+            type: 'openai_session_config_update_failed',
+            callId: callId,
+            timestamp: new Date().toISOString(),
+            source: 'SESSION_MANAGER',
+            payload: { attemptedConfig: sessionUpdatePayload, errorMessage: e.message },
+            logLevel: 'ERROR'
+        });
+    }
   }
 }

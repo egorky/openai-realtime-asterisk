@@ -191,6 +191,18 @@ server.listen(PORT, HOST_IP, async () => {
   }
 });
 
+/**
+ * Sends a generic event object to all connected frontend clients on the /logs WebSocket.
+ * Events should adhere to the standardized format:
+ * {
+ *   type: "event_type_string",
+ *   callId: "string | null",
+ *   timestamp: "ISO8601_string",
+ *   source: "SERVER_COMPONENT_STRING",
+ *   payload: { ...event-specific_data... },
+ *   logLevel: "INFO | WARN | ERROR | DEBUG | TRACE" (optional)
+ * }
+ */
 export function sendGenericEventToFrontend(event: any) {
   // If the event is specific to a callId, and we want to target only frontends interested in that callId,
   // this broadcast approach might need refinement. For now, it sends to all /logs clients.
