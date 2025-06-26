@@ -1,6 +1,9 @@
 // Este archivo contendrá la lógica para cargar y gestionar configuraciones.
 // Incluirá baseConfig, currentCallSpecificConfig, getCallSpecificConfig y las funciones getVar*.
 
+import dotenv from 'dotenv'; // Asegurar que dotenv se importe
+dotenv.config(); // Llamar a dotenv.config() al inicio
+
 import fs from 'node:fs';
 import path from 'node:path';
 import { CallSpecificConfig, RuntimeConfig, AppRecognitionConfig, DtmfConfig, OpenAIRealtimeAPIConfig, LoggerInstance } from './types';

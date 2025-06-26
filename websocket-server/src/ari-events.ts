@@ -552,8 +552,9 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       callLogger.info(`Recognition Activation Mode: ${activationMode}, InitialUserPrompt Set: ${initialUserPromptIsSet}`);
 
       let effectiveActivationMode = activationMode;
-      if (callResources.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
-        effectiveActivationMode = appRecogConf.firstInteractionRecognitionMode as "fixedDelay" | "Immediate" | "vad";
+      const firModeStasis = appRecogConf.firstInteractionRecognitionMode;
+      if (callResources.isFirstInteraction && (firModeStasis === "fixedDelay" || firModeStasis === "Immediate" || firModeStasis === "vad")) {
+        effectiveActivationMode = firModeStasis;
         callLogger.info(`Using FIRST_INTERACTION_RECOGNITION_MODE for StasisStart: ${effectiveActivationMode}`);
       } else {
         callLogger.info(`Using global RECOGNITION_ACTIVATION_MODE for StasisStart: ${effectiveActivationMode}`);
@@ -763,8 +764,9 @@ export function _handlePlaybackFinished(serviceInstance: AriClientService, callI
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
     let currentActivationMode = appRecogConf.recognitionActivationMode;
 
-    if (call.isFirstInteraction && appRecogConf.firstInteractionRecognitionMode && appRecogConf.firstInteractionRecognitionMode !== "") {
-      currentActivationMode = appRecogConf.firstInteractionRecognitionMode as "fixedDelay" | "Immediate" | "vad";
+    const firModePlayback = appRecogConf.firstInteractionRecognitionMode;
+    if (call.isFirstInteraction && (firModePlayback === "fixedDelay" || firModePlayback === "Immediate" || firModePlayback === "vad")) {
+      currentActivationMode = firModePlayback;
       call.callLogger.info(`Using FIRST_INTERACTION_RECOGNITION_MODE: ${currentActivationMode}`);
     } else {
       call.callLogger.info(`Using global RECOGNITION_ACTIVATION_MODE: ${currentActivationMode}`);
