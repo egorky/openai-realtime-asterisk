@@ -1,7 +1,7 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
 import { CallSpecificConfig, OpenAIRealtimeAPIConfig, AriClientInterface } from "./types";
-import { AriClientService } from "./ari-client"; // Presumiblemente para tipos o instancias si es necesario
+import { AriClientService } from "./ari-service"; // Apuntar a la nueva ubicación de la clase
 import { executeTool, OpenAIToolCall, ToolResultPayload } from './toolExecutor';
 
 

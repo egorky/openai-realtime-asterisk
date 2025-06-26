@@ -9,7 +9,8 @@ import {
   handleFrontendConnection,
 } from "./sessionManager";
 import functions from "./functionHandlers";
-import { initializeAriClient, ariClientServiceInstance, ActiveCallInfo } from "./ari-client"; // Importar ariClientServiceInstance y ActiveCallInfo
+import { initializeAriClient, ariClientServiceInstance } from "./ari-service"; // Importar desde ari-service
+import { ActiveCallInfo } from "./ari-call-resources"; // Importar tipo directamente
 import { getConversationHistory } from "./redis-client"; // Importar la nueva función
 
 dotenv.config();
