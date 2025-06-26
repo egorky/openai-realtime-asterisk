@@ -1063,7 +1063,7 @@ export async function _onDtmfReceived(serviceInstance: AriClientService, event: 
     }
 }
 
-export function _handlePlaybackFinished(serviceInstance: AriClientService, callId: string, reason: string): void {
+export async function _handlePlaybackFinished(serviceInstance: AriClientService, callId: string, reason: string): Promise<void> {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) {
       return;
@@ -1255,7 +1255,7 @@ export function _handleVADDelaysCompleted(serviceInstance: AriClientService, cal
     }
 }
 
-export function _handlePostPromptVADLogic(serviceInstance: AriClientService, callId: string): void {
+export async function _handlePostPromptVADLogic(serviceInstance: AriClientService, callId: string): Promise<void> {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled || call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
