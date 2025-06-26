@@ -227,6 +227,13 @@ export async function _onOpenAIAudioChunk(serviceInstance: AriClientService, cal
         call.ttsPlaybackQueue.push(soundUri);
         call.streamedTtsChunkFiles.push(absoluteChunkPath); // Keep track for cleanup
 
+        if (!call.isOverallTtsResponseActive) {
+          call.isOverallTtsResponseActive = true;
+          call.callLogger.info(`[StreamPlayback] Setting isOverallTtsResponseActive = true as first chunk of a TTS response is processed.`);
+          // Potentially activate TALK_DETECT here for the duration of the TTS response if in VAD mode
+          // This will be handled more comprehensively in ari-actions.ts (playbackAudio) and _handlePlaybackFinished
+        }
+
         // Dynamically import to avoid circular dependencies if _processTtsPlaybackQueue is in ari-actions
         const { _processTtsPlaybackQueue } = await import('./ari-actions');
         _processTtsPlaybackQueue(serviceInstance, callId);
@@ -688,6 +695,7 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       ttsPlaybackQueue: [],
       currentPlayingSoundId: null,
       isTtsPlaying: false,
+      isOverallTtsResponseActive: false, // Initialize new flag
       fullTtsAudioBuffer: [],
     };
     serviceInstance.activeCalls.set(callId, callResources);
@@ -1139,16 +1147,34 @@ export function _handlePlaybackFinished(serviceInstance: AriClientService, callI
     call.callLogger.info(`OpenAI TTS playback (or interruption) handled. Reason: ${reason}. Transitioning to listen for caller based on mode: ${currentActivationMode}. New turn start time: ${call.currentTurnStartTime}`);
 
     if (call.ttsPlaybackQueue.length > 0) {
-      call.callLogger.info(`TTS queue has more items (${call.ttsPlaybackQueue.length}). Processing next.`);
+      call.callLogger.info(`TTS queue has more items (${call.ttsPlaybackQueue.length}). Processing next. isOverallTtsResponseActive remains true.`);
+      // isOverallTtsResponseActive remains true
       import('./ari-actions').then(({ _processTtsPlaybackQueue }) => {
         _processTtsPlaybackQueue(serviceInstance, callId);
       }).catch(e => call.callLogger.error(`Error importing _processTtsPlaybackQueue in _handlePlaybackFinished: ${e.message}`));
-      return;
+      return; // IMPORTANT: Do not proceed to post-TTS VAD logic if queue is not empty
     } else {
-        call.callLogger.info(`TTS queue is empty after playback/interruption. Proceeding to standard post-TTS logic.`);
+        call.callLogger.info(`TTS queue is empty. Full TTS response playback finished or was interrupted and cleared.`);
+        if (call.isOverallTtsResponseActive) {
+            call.isOverallTtsResponseActive = false;
+            call.callLogger.info(`Set isOverallTtsResponseActive = false.`);
+            // If VAD was active for TTS barge-in, disable it now that TTS is fully complete.
+            // isVADBufferingActive might have been set true by playbackAudio if TALK_DETECT was enabled for the TTS stream.
+            if (appRecogConf.recognitionActivationMode === 'vad' && call.isVADBufferingActive) {
+                call.callLogger.info(`VAD Mode: Overall TTS finished. Attempting to remove TALK_DETECT if it was set for TTS barge-in.`);
+                try {
+                    await call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' });
+                    call.callLogger.info(`VAD Mode: Successfully removed TALK_DETECT after overall TTS completion.`);
+                } catch (e: any) {
+                    call.callLogger.warn(`VAD Mode: Error removing TALK_DETECT after overall TTS: ${e.message}`);
+                }
+                call.isVADBufferingActive = false; // Reset this flag as the TTS-specific VAD session is over.
+            }
+        }
+        call.callLogger.info(`Proceeding to standard post-TTS logic to listen for user.`);
     }
 
-
+      // This switch will now only be reached when the entire TTS queue is empty
       switch (currentActivationMode) {
         case 'fixedDelay':
           const delaySeconds = appRecogConf.bargeInDelaySeconds;
@@ -1235,77 +1261,79 @@ export function _handlePostPromptVADLogic(serviceInstance: AriClientService, cal
       return;
     }
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
-    call.callLogger.info(`VAD: Handling post-prompt logic for vadRecogActivation: '${appRecogConf.vadRecogActivation}'.`);
+    call.callLogger.info(`VAD: Handling post-prompt/TTS logic. Current vadRecogActivation: '${appRecogConf.vadRecogActivation}'.`);
     serviceInstance.sendEventToFrontend({
       type: 'vad_post_prompt_logic_started', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
-      payload: { vadRecogActivation: appRecogConf.vadRecogActivation, speechDetectedDuringPrompt: call.vadSpeechDetected },
+      payload: { vadRecogActivation: appRecogConf.vadRecogActivation, speechDetectedDuringPromptOrTTS: call.vadSpeechDetected }, // vadSpeechDetected might be stale from previous phase
       logLevel: 'DEBUG'
     });
 
-    if (appRecogConf.vadRecogActivation === 'afterPrompt') {
-      if (call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) {
-        call.callLogger.debug(`VAD (afterPrompt): Stream already active or VAD triggered. No action from post-prompt logic.`);
+    // Ensure TALK_DETECT is active for listening to the user, as any previous TALK_DETECT for TTS barge-in would have been cleared.
+    // Also, reset vadSpeechDetected for the new listening phase.
+    call.vadSpeechDetected = false;
+    call.vadSpeechActiveDuringDelay = false; // Reset this as well for vadMode's initial silence delay
+    call.isVADBufferingActive = true; // Indicate we are now in a VAD listening phase (buffering for potential speech)
+    call.vadAudioBuffer = [];      // Clear any old VAD buffer
+
+    try {
+        const talkThresholdForAri = appRecogConf.vadTalkThreshold;
+        const silenceThresholdMsForAri = appRecogConf.vadSilenceThresholdMs;
+        const talkDetectValue = `${talkThresholdForAri},${silenceThresholdMsForAri}`;
+        call.callLogger.info(`VAD: Setting TALK_DETECT for user speech. Value: '${talkDetectValue}'`);
+        await call.channel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+    } catch (e: any) {
+        call.callLogger.error(`VAD: FAILED to set TALK_DETECT for user speech: ${e.message}.`);
+        // Potentially end call or try fallback if VAD is critical
+        _fullCleanup(serviceInstance, callId, true, "VAD_SETUP_FAILURE_POST_TTS");
         return;
-      }
+    }
 
-      if (call.vadSpeechDetected) {
-        call.callLogger.info(`VAD (afterPrompt): Speech was detected *during* the prompt. Activating OpenAI stream now.`);
-        call.vadRecognitionTriggeredAfterInitialDelay = true;
-        _activateOpenAIStreaming(serviceInstance, callId, "vad_afterPrompt_speech_during_prompt_playback");
-        call.pendingVADBufferFlush = true;
+    // Clear any existing timers that might conflict
+    if(call.vadInitialSilenceDelayTimer) clearTimeout(call.vadInitialSilenceDelayTimer);
+    if(call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
+    call.vadInitialSilenceDelayTimer = null;
+    call.vadMaxWaitAfterPromptTimer = null;
 
-        if(call.channel) {
-            call.callLogger.info(`VAD (afterPrompt): Removing TALK_DETECT as stream is activating due to speech during prompt.`);
-            call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' })
-                .catch(e => call.callLogger.warn(`VAD (afterPrompt): Error removing TALK_DETECT: ${e.message}`));
+    if (appRecogConf.vadRecogActivation === 'vadMode') {
+        const initialSilenceDelayS = appRecogConf.vadInitialSilenceDelaySeconds;
+        call.vadInitialSilenceDelayCompleted = (initialSilenceDelayS <= 0); // Re-evaluate based on current turn's needs
+        call.vadRecognitionTriggeredAfterInitialDelay = false; // Reset for the new turn
+
+        if (!call.vadInitialSilenceDelayCompleted) {
+            call.callLogger.info(`VAD (vadMode - post-TTS/prompt): Starting vadInitialSilenceDelaySeconds: ${initialSilenceDelayS}s.`);
+            call.vadInitialSilenceDelayTimer = setTimeout(() => {
+                if(call.isCleanupCalled || call.openAIStreamingActive) return; // Check if stream started due to early barge-in
+                call.vadInitialSilenceDelayCompleted = true;
+                call.callLogger.info(`VAD (vadMode - post-TTS/prompt): vadInitialSilenceDelaySeconds completed.`);
+                _handleVADDelaysCompleted(serviceInstance, callId); // This will check vadSpeechActiveDuringDelay
+            }, initialSilenceDelayS * 1000);
+        } else {
+            // If no initial silence delay, proceed as if it completed instantly
+            _handleVADDelaysCompleted(serviceInstance, callId);
         }
-      } else {
-        call.callLogger.info(`VAD (afterPrompt): Prompt finished, no speech detected during prompt. TALK_DETECT is active. Starting vadMaxWaitAfterPromptSeconds timer.`);
+    } else if (appRecogConf.vadRecogActivation === 'afterPrompt') {
+        // For 'afterPrompt', we directly start waiting for speech or timeout.
+        // TALK_DETECT is already set above.
+        call.callLogger.info(`VAD (afterPrompt - post-TTS/prompt): TALK_DETECT is active. Starting vadMaxWaitAfterPromptSeconds timer.`);
         const maxWait = appRecogConf.vadMaxWaitAfterPromptSeconds;
         if (maxWait > 0) {
-          if(call.vadMaxWaitAfterPromptTimer) clearTimeout(call.vadMaxWaitAfterPromptTimer);
-          call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
-            if (call.isCleanupCalled || call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) return;
-            call.callLogger.warn(`VAD (afterPrompt): Max wait ${maxWait}s for speech (post-prompt) reached. Ending call.`);
-            serviceInstance.sendEventToFrontend({
-              type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
-              payload: { timerName: 'vadMaxWaitAfterPromptTimer_afterPrompt', action: 'expired', durationSeconds: maxWait },
-              logLevel: 'WARN'
-            });
-            if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
-            _fullCleanup(serviceInstance, callId, true, "VAD_AFTERPROMPT_MAX_WAIT_TIMEOUT");
-          }, maxWait * 1000);
-          serviceInstance.sendEventToFrontend({
-            type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
-            payload: { timerName: 'vadMaxWaitAfterPromptTimer_afterPrompt', action: 'set', durationSeconds: maxWait },
-            logLevel: 'DEBUG'
-          });
-        }
-      }
-    } else if (appRecogConf.vadRecogActivation === 'vadMode') {
-      call.callLogger.info(`VAD (vadMode): Post-prompt logic invoked. Initial silence delay should have been handled. TALK_DETECT is active.`);
-      if (!call.openAIStreamingActive && !call.vadRecognitionTriggeredAfterInitialDelay && call.vadInitialSilenceDelayCompleted) {
-          const maxWait = appRecogConf.vadMaxWaitAfterPromptSeconds;
-          if (maxWait > 0 && !call.vadMaxWaitAfterPromptTimer) {
-              call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
-                  if (call.isCleanupCalled || call.openAIStreamingActive || call.vadRecognitionTriggeredAfterInitialDelay) return;
-                  call.callLogger.warn(`VAD (vadMode): Max wait ${maxWait}s for speech (after prompt/initial delays) reached. Ending call.`);
-                  serviceInstance.sendEventToFrontend({
+            call.vadMaxWaitAfterPromptTimer = setTimeout(() => {
+                if (call.isCleanupCalled || call.vadRecognitionTriggeredAfterInitialDelay || call.openAIStreamingActive) return;
+                call.callLogger.warn(`VAD (afterPrompt - post-TTS/prompt): Max wait ${maxWait}s for speech reached. Ending call.`);
+                serviceInstance.sendEventToFrontend({
                     type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
-                    payload: { timerName: 'vadMaxWaitAfterPromptTimer_vadMode_postPrompt', action: 'expired', durationSeconds: maxWait },
+                    payload: { timerName: 'vadMaxWaitAfterPromptTimer_afterPrompt_postTTS', action: 'expired', durationSeconds: maxWait },
                     logLevel: 'WARN'
-                  });
-                  if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
-                  _fullCleanup(serviceInstance, callId, true, "VAD_MODE_MAX_WAIT_POST_PROMPT_TIMEOUT");
-              }, maxWait * 1000);
-              call.callLogger.info(`VAD (vadMode): Started max wait timer (${maxWait}s) for speech after prompt/initial delay.`);
-              serviceInstance.sendEventToFrontend({
+                });
+                if(call.channel) { call.channel.setChannelVar({ variable: 'TALK_DETECT(remove)', value: 'true' }).catch(e => call.callLogger.warn(`VAD: Error removing TALK_DETECT on timeout: ${e.message}`)); }
+                _fullCleanup(serviceInstance, callId, true, "VAD_AFTERPROMPT_MAX_WAIT_TIMEOUT_POST_TTS");
+            }, maxWait * 1000);
+            serviceInstance.sendEventToFrontend({
                 type: 'timer_event', callId: callId, timestamp: new Date().toISOString(), source: 'ARI_EVENTS',
-                payload: { timerName: 'vadMaxWaitAfterPromptTimer_vadMode_postPrompt', action: 'set', durationSeconds: maxWait },
+                payload: { timerName: 'vadMaxWaitAfterPromptTimer_afterPrompt_postTTS', action: 'set', durationSeconds: maxWait },
                 logLevel: 'DEBUG'
-              });
-          }
-      }
+            });
+        }
     }
 }
 

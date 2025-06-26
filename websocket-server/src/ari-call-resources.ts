@@ -63,6 +63,7 @@ export interface CallResources {
   ttsPlaybackQueue: string[]; // URIs of audio chunks
   currentPlayingSoundId: string | null; // ID of the currently playing sound from the queue
   isTtsPlaying: boolean; // Flag to indicate if the TTS queue is being processed
+  isOverallTtsResponseActive: boolean; // True if any part of a multi-chunk TTS is playing or queued
   fullTtsAudioBuffer: Buffer[]; // To accumulate all TTS audio chunks for saving in "stream" mode
 }
 

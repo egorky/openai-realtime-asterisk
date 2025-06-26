@@ -237,24 +237,35 @@ export async function playbackAudio(
     }
 
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
-    if (!call.dtmfModeActive && appRecogConf.recognitionActivationMode === 'vad') {
-        try {
-            const talkThresholdForAri = appRecogConf.vadTalkThreshold;
-            const silenceThresholdMsForAri = appRecogConf.vadSilenceThresholdMs;
-            const talkDetectValue = `${talkThresholdForAri},${silenceThresholdMsForAri}`;
 
-            call.callLogger.info(`VAD Mode: Ensuring TALK_DETECT is active for TTS playback barge-in. Value: '${talkDetectValue}'`);
-            await call.channel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
-            call.isVADBufferingActive = true;
-            call.vadAudioBuffer = [];
-            call.pendingVADBufferFlush = false;
-            call.isFlushingVADBuffer = false;
-        } catch (e: any) {
-            call.callLogger.warn(`Error setting TALK_DETECT for TTS barge-in on channel ${call.channel.id}: ${e.message}.`);
-        }
+    // If an overall TTS response is active, VAD/TALK_DETECT for barge-in is managed
+    // at a higher level (when the queue processing starts/ends).
+    // playbackAudio for individual chunks should not interfere with this overall management.
+    if (call.isOverallTtsResponseActive) {
+        call.callLogger.debug(`VAD Mode: Overall TTS response active. TALK_DETECT management for TTS stream handled by queue processor.`);
+        // isVADBufferingActive should already be true if TALK_DETECT was set for the overall stream.
+        // We don't want to reset vadAudioBuffer here for every chunk.
     } else {
-        call.isVADBufferingActive = false;
-        call.vadAudioBuffer = [];
+        // Original logic for standalone playbacks (e.g., greetings) or if not in overall TTS stream
+        if (!call.dtmfModeActive && appRecogConf.recognitionActivationMode === 'vad') {
+            try {
+                const talkThresholdForAri = appRecogConf.vadTalkThreshold;
+                const silenceThresholdMsForAri = appRecogConf.vadSilenceThresholdMs;
+                const talkDetectValue = `${talkThresholdForAri},${silenceThresholdMsForAri}`;
+
+                call.callLogger.info(`VAD Mode: Ensuring TALK_DETECT is active for standalone playback barge-in. Value: '${talkDetectValue}'`);
+                await call.channel.setChannelVar({ variable: 'TALK_DETECT(set)', value: talkDetectValue });
+                call.isVADBufferingActive = true;
+                call.vadAudioBuffer = []; // Clear buffer for a new standalone VAD session with playback
+                call.pendingVADBufferFlush = false;
+                call.isFlushingVADBuffer = false;
+            } catch (e: any) {
+                call.callLogger.warn(`Error setting TALK_DETECT for standalone playback barge-in on channel ${call.channel.id}: ${e.message}.`);
+            }
+        } else { // Not VAD mode or DTMF active for this standalone playback
+            call.isVADBufferingActive = false;
+            // call.vadAudioBuffer = []; // Consider if buffer should always be cleared if not VAD buffering
+        }
     }
 
     try {
