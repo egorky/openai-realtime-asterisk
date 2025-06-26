@@ -143,7 +143,7 @@ export interface LoggerInstance {
   error: (message: string, ...args: any[]) => void;
   warn: (message: string, ...args: any[]) => void;
   debug: (message: string, ...args: any[]) => void;
-  child: (bindings: object) => LoggerInstance;
+  child: (bindings: object, callSpecificLogLevel?: string, ariClientServiceRef?: any) => LoggerInstance; // Updated signature
   silly?: (message: string, ...args: any[]) => void; // Added
   isLevelEnabled?: (level: string) => boolean;    // Added
 }
