@@ -131,11 +131,27 @@ export class AriClientService implements AriClientInterface {
     return this.activeCalls.get(callId);
   }
 
-  // Este método ahora es parte de ari-events.ts o ari-service.ts
+  /**
+   * Sends a standardized event object to the frontend via the central sendGenericEventToFrontend function.
+   * Ensures that if a primary callId exists and the event payload doesn't specify one, it gets added.
+   * Standard event format:
+   * {
+   *   type: "event_type_string",
+   *   callId: "string | null",
+   *   timestamp: "ISO8601_string",
+   *   source: "SERVER_COMPONENT_STRING",
+   *   payload: { ...event-specific_data... },
+   *   logLevel: "INFO | WARN | ERROR | DEBUG | TRACE" (optional)
+   * }
+   */
   public sendEventToFrontend(event: any) {
     const eventToSend = { ...event };
     if (event.payload && !event.payload.callId && this.currentPrimaryCallId) {
       eventToSend.payload.callId = this.currentPrimaryCallId;
+    }
+    // Ensure a timestamp if not already present (though ideally it's set at point of origin)
+    if (!eventToSend.timestamp) {
+      eventToSend.timestamp = new Date().toISOString();
     }
     sendGenericEventToFrontend(eventToSend);
   }
@@ -284,8 +300,26 @@ export class AriClientService implements AriClientInterface {
 
       await this.client.start(ASTERISK_ARI_APP_NAME);
       this.logger.info(`ARI Stasis application '${ASTERISK_ARI_APP_NAME}' started and listening for calls.`);
+      this.sendEventToFrontend({
+        type: 'ari_connection_status',
+        callId: null,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_SERVICE',
+        payload: { status: 'connected_and_app_started', appName: ASTERISK_ARI_APP_NAME },
+        logLevel: 'INFO'
+      });
     } catch (err: any) {
       this.logger.error('FATAL: Failed to connect/start Stasis app:', err instanceof Error ? err.message : String(err), err instanceof Error ? err.stack : '');
+      // Send event for connection failure if it happens here before client error handlers are attached
+      // This might be redundant if client.on('error') always catches it.
+      sendGenericEventToFrontend({ // Use sendGenericEventToFrontend as 'this.sendEventToFrontend' might not be fully set up
+        type: 'ari_connection_status',
+        callId: null,
+        timestamp: new Date().toISOString(),
+        source: 'ARI_SERVICE',
+        payload: { status: 'failed_to_connect_or_start_app', error: err.message },
+        logLevel: 'FATAL' // Or ERROR
+      });
       throw err;
     }
   }

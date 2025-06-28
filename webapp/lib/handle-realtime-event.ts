@@ -21,70 +21,59 @@ export interface ActiveCallListItem {
 export default function handleRealtimeEvent(
   ev: any,
   setItems: React.Dispatch<React.SetStateAction<Item[]>>,
-  setAriCallInfo: React.Dispatch<React.SetStateAction<AriCallInfo>>,
+  setAriCallInfoState: React.Dispatch<React.SetStateAction<AriCallInfo>>, // Renamed to avoid conflict
+  ariCallInfo: AriCallInfo, // Added ariCallInfo state
   setActiveCallsList?: React.Dispatch<React.SetStateAction<ActiveCallListItem[]>>,
-  currentSelectedCallId?: string | null // Nuevo parámetro
+  currentSelectedCallId?: string | null
 ) {
   // Helper function to create a new item with default fields
   function createNewItem(base: Partial<Item>): Item {
     return {
       object: "realtime.item", // Default object type, can be overridden by base
-      timestamp: new Date().toLocaleTimeString(),
+      timestamp: new Date().toLocaleTimeString(), // Default timestamp, can be overridden
       ...base,
     } as Item; // Cast to Item, ensure all required fields are covered or optional
   }
 
   // Helper function to update an existing item if found by id, or add a new one if not.
+  // This function is not currently used by the new system message logic but kept for original functionality.
   function updateOrAddItem(id: string, updates: Partial<Item>): void {
     setItems((prev) => {
       const idx = prev.findIndex((m) => m.id === id);
       if (idx >= 0) {
         const updated = [...prev];
-        // Ensure crucial fields like 'role' and 'type' are preserved if not in updates
         updated[idx] = {
-            object: updated[idx].object, // Preserve original object type
-            type: updated[idx].type,     // Preserve original item type
-            role: updated[idx].role,     // Preserve original role
+            object: updated[idx].object,
+            type: updated[idx].type,
+            role: updated[idx].role,
             ...updated[idx],
             ...updates,
-            timestamp: updated[idx].timestamp || new Date().toLocaleTimeString(), // Preserve or set timestamp
+            timestamp: updates.timestamp || updated[idx].timestamp || new Date().toLocaleTimeString(),
         };
         return updated;
       } else {
-        // For new items, ensure 'id' is part of the base for createNewItem
-        return [...prev, createNewItem({ id, ...updates })];
+        return [...prev, createNewItem({ id, ...updates, timestamp: updates.timestamp || new Date().toLocaleTimeString() })];
       }
     });
   }
 
-
-  // Try to determine event structure (new with payload vs. old direct structure)
   const eventType = ev.type;
   const payload = ev.payload;
-
-  // Log all events for easier debugging
-  // console.log("Handling Realtime Event:", ev);
-
+  const eventTimestamp = ev.timestamp ? new Date(ev.timestamp).toLocaleTimeString() : new Date().toLocaleTimeString();
 
   switch (eventType) {
     case "active_calls_list": {
       if (setActiveCallsList && Array.isArray(payload)) {
-        console.log("Active Calls List Update:", payload);
         setActiveCallsList(payload);
-      } else if (!setActiveCallsList) {
-          console.warn("Received active_calls_list but setActiveCallsList is not provided to handleRealtimeEvent.");
       } else {
-        console.warn("Received active_calls_list with invalid payload:", payload);
+        console.warn("Received active_calls_list with invalid payload or missing handler:", payload);
       }
       break;
     }
-    case "ari_call_status_update": { // This event might update a specific call in the list or the main selected call.
+    case "ari_call_status_update": {
       if (payload) {
-        console.log("ARI Call Status Update (individual):", payload);
-        // Option 1: Update the global/primary AriCallInfo if it matches.
-        // This might be relevant if the UI always shows one "main" call's status prominently.
-        setAriCallInfo(prev => {
-          if (prev.callId === payload.callId || !prev.callId) { // Update if it's the current primary or no primary yet
+        setAriCallInfoState(prev => {
+          if (prev.callId === payload.callId || !prev.callId || payload.callId === currentSelectedCallId) {
             return {
               status: payload.status,
               callId: payload.callId,
@@ -93,11 +82,9 @@ export default function handleRealtimeEvent(
               reason: payload.reason,
             };
           }
-          return prev; // Otherwise, keep the existing primary call info
+          return prev;
         });
 
-        // Option 2: Update the specific call in the activeCallsList.
-        // This is more robust for a multi-call display.
         if (setActiveCallsList) {
             setActiveCallsList(prevList =>
                 prevList.map(call =>
@@ -108,51 +95,123 @@ export default function handleRealtimeEvent(
             );
         }
 
-        // If call ended or errored, maybe clear transcription items or add a system message *if this is the selected call*.
-        // This logic needs to be tied to a selectedCallId state in CallInterface.
-        // For now, let's keep the original system message logic but it should be conditional.
         if (payload.status === "ended" || payload.status === "error") {
-          setItems((prev) => [
-            ...prev,
-            createNewItem({
-              id: `call_status_${payload.callId}_${Date.now()}`, // Include callId in message id
-              type: "system_message",
-              role: "system",
-              content: [{ type: "text", text: `Call ${payload.callId} ${payload.status}. ${payload.reason ? `Reason: ${payload.reason}` : ''} ${payload.errorMessage ? `Error: ${payload.errorMessage}`: ''}`.trim() }],
-              status: "completed",
-            }),
-          ]);
+          if (payload.callId === currentSelectedCallId || (currentSelectedCallId === null && ariCallInfo && payload.callId === ariCallInfo.callId)) {
+            setItems((prev) => [
+              ...prev,
+              createNewItem({
+                id: `call_status_${payload.callId}_${Date.now()}`,
+                type: "message",
+                role: "system",
+                content: [{ type: "text", text: `Call ${payload.callId} ${payload.status}. ${payload.reason ? `Reason: ${payload.reason}` : ''} ${payload.errorMessage ? `Error: ${payload.errorMessage}`: ''}`.trim() }],
+                status: "completed",
+                timestamp: eventTimestamp,
+              }),
+            ]);
+          }
         }
       }
       break;
     }
-    case "session.created": { // This typically implies a new OpenAI session, often tied to a new call context.
+    // Centralized handler for various system/AI events
+    case "system_message":
+    case "cleanup_resource_release_event":
+    case "openai_requesting_response":
+    case "openai_tts_stream_ended":
+    case "openai_session_ended":
+    case "vad_speech_detected_start":
+    case "vad_speech_detected_end":
+    case "timer_event":
+    case "tts_playback_interrupted":
+    case "openai_stream_activated":
+    case "openai_stream_activation_failed":
+    case "playback_started":
+    case "playback_failed_to_start":
+    case "playback_all_stopped_action":
+    case "dtmf_mode_activated":
+    case "dtmf_input_finalized":
+    case "call_answered":
+    case "call_resources_initialized":
+    case "vad_post_prompt_logic_started":
+    case "openai_tts_chunk_received_and_queued":
+    case "openai_tts_chunk_accumulated":
+    {
+        if (ev.callId && ev.callId !== currentSelectedCallId) {
+            return;
+        }
+
+        let messageText = `Event: ${eventType}`;
+        if (payload) {
+            if (eventType === "openai_requesting_response") messageText = `System: Requesting OpenAI response for input: '${payload.triggeringTranscript?.substring(0, 50)}...'`;
+            else if (eventType === "openai_tts_stream_ended") messageText = `System: TTS audio stream finished. Mode: ${payload.playbackMode}. ${payload.savedFilePath ? `Saved to: ${payload.savedFilePath.split('/').pop()}` : (payload.error || '')}`;
+            else if (eventType === "openai_session_ended") messageText = `System: OpenAI session ended. Reason: ${payload.reason}`;
+            else if (eventType === "vad_speech_detected_start") messageText = `VAD: Speech detected.`;
+            else if (eventType === "vad_speech_detected_end") messageText = `VAD: Silence detected. Duration: ${payload.durationMs}ms.`;
+            else if (eventType === "timer_event") messageText = `Timer: '${payload.timerName}' ${payload.action}${payload.durationSeconds ? ` for ${payload.durationSeconds}s` : ''}.`;
+            else if (eventType === "tts_playback_interrupted") messageText = `System: TTS playback interrupted. Reason: ${payload.reason}.`;
+            else if (eventType === "openai_stream_activated") messageText = `System: OpenAI stream activated. Reason: ${payload.reason}.`;
+            else if (eventType === "openai_stream_activation_failed") messageText = `System: OpenAI stream activation failed. Reason: ${payload.reason}, Error: ${payload.errorMessage}.`;
+            else if (eventType === "playback_started") messageText = `System: Playback started - ID: ${payload.playbackId}, Purpose: ${payload.purpose}.`;
+            else if (eventType === "playback_failed_to_start") messageText = `System: Playback failed to start - Purpose: ${payload.purpose}, Error: ${payload.errorMessage}.`;
+            else if (eventType === "playback_all_stopped_action") messageText = `System: All playbacks stopped. Reason: ${payload.reason}.`;
+            else if (eventType === "dtmf_mode_activated") messageText = `System: DTMF mode activated. Reason: ${payload.reason}.`;
+            else if (eventType === "dtmf_input_finalized") messageText = `System: DTMF input finalized: '${payload.finalDigits}'. Reason: ${payload.reason}.`;
+            else if (eventType === "call_answered") messageText = `System: Call answered.`;
+            else if (eventType === "call_resources_initialized") messageText = `System: Call resources initialized.`;
+            else if (eventType === "vad_post_prompt_logic_started") messageText = `VAD: Post-prompt/TTS VAD logic started. Mode: ${payload.vadRecogActivation}.`;
+            else if (eventType === "openai_tts_chunk_received_and_queued") messageText = `System: TTS chunk queued. URI: ${payload.chunkUri}, Queue: ${payload.queueSize}.`;
+            else if (eventType === "openai_tts_chunk_accumulated") messageText = `System: TTS chunk accumulated. Total: ${payload.accumulatedChunks}.`;
+            else if (payload.message) messageText = payload.message;
+            else messageText = `Event: ${eventType} - ${JSON.stringify(payload).substring(0,100)}...`;
+        }
+
+        setItems((prev) => [
+            ...prev,
+            createNewItem({
+              id: `${eventType}_${ev.callId || 'global'}_${Date.now()}_${Math.random()}`,
+              type: "message",
+              role: "system",
+              content: [{ type: "text", text: messageText }],
+              status: "completed",
+              timestamp: eventTimestamp,
+            }),
+        ]);
+        break;
+    }
+    case "session.created": {
       setItems([]);
-      // Reset global/primary ARI call info. The specific call will get its status via active_calls_list or ari_call_status_update.
-      setAriCallInfo({ status: "idle", callId: null, callerId: null });
-      // It might also be prudent to clear the active calls list here if a "session.created" means a full backend reset,
-      // but that depends on backend logic. For now, assume it's per-call or global.
-      // if (setActiveCallsList) setActiveCallsList([]);
+      setAriCallInfoState({ status: "idle", callId: null, callerId: null });
       break;
     }
     case "conversation_history": {
       if (payload && Array.isArray(payload) && ev.callId === currentSelectedCallId) {
         console.log(`Received conversation history for selected call ${ev.callId}:`, payload);
-        // Convert backend ConversationTurn[] to frontend Item[]
-        // This mapping might need to be more sophisticated depending on type differences
-        const historyItems: Item[] = payload.map((turn: any) => ({ // 'any' for backend turn type flexibility
-          id: `${turn.actor}_${turn.timestamp}_${Math.random().toString(36).substring(7)}`, // Create a unique enough ID
-          object: "realtime.item", // Or map from turn if available
-          type: turn.type === "tts_prompt" ? "message" : (turn.type === "transcript" ? "message" : turn.type), // Map backend types to frontend types
-          role: turn.actor === "dtmf" ? "system" : turn.actor, // Map 'dtmf' actor to 'system' role for display
-          content: [{ type: "text", text: turn.content }],
-          status: "completed",
-          timestamp: new Date(turn.timestamp).toLocaleTimeString(),
-          // Potentially map other fields if Item has them (e.g. call_id for function calls)
-        }));
+        const historyItems: Item[] = payload.map((turn: any) => {
+          let itemType: Item['type'] = "message"; // Default to message
+          if (turn.type === "function_call" || turn.type === "function_call_output") {
+            itemType = turn.type;
+          }
+          let itemRole: Item['role'] = turn.actor;
+          if (turn.actor === "dtmf" || turn.actor === "system") {
+            itemRole = "system";
+          }
+
+          return {
+            id: `${turn.actor}_${turn.timestamp}_${Math.random().toString(36).substring(7)}`,
+            object: "realtime.item",
+            type: itemType,
+            role: itemRole,
+            content: [{ type: "text", text: turn.content }],
+            status: "completed",
+            timestamp: new Date(turn.timestamp).toLocaleTimeString(),
+            name: turn.type === "function_call" ? turn.name : undefined, // Specific to function_call
+            output: turn.type === "function_call_output" ? turn.output : undefined, // Specific to function_call_output
+            call_id: turn.call_id // for function_call and function_call_output
+          };
+        });
         setItems(historyItems);
       } else if (ev.callId !== currentSelectedCallId) {
-        console.log(`Received conversation history for non-selected call ${ev.callId}. Ignoring.`);
+        // console.log(`Received conversation history for non-selected call ${ev.callId}. Ignoring for display.`);
       } else {
         console.warn("Received conversation_history with invalid payload or mismatched callId:", ev);
       }
@@ -160,107 +219,80 @@ export default function handleRealtimeEvent(
     }
     case "config_update_ack": {
         console.log("Config update acknowledged by backend:", ev);
-        // Optionally, add a system message to the transcript
+        if (ev.callId && ev.callId !== currentSelectedCallId) {
+            return;
+        }
         setItems((prev) => [
             ...prev,
             createNewItem({
-                id: `config_ack_${Date.now()}`,
-                type: "system_message",
+                id: `config_ack_${ev.callId}_${Date.now()}`,
+                type: "message",
                 role: "system",
                 content: [{ type: "text", text: `Configuration update processed for call ${ev.callId}.` }],
                 status: "completed",
+                timestamp: eventTimestamp,
             }),
         ]);
         break;
     }
-    case "error": { // Generic error from backend
-        console.error("Received error event from backend:", ev.message);
+    case "error": {
+        console.error("Received error event from backend:", payload?.message || ev.message);
+        if (ev.callId && ev.callId !== currentSelectedCallId) {
+            return;
+        }
         setItems((prev) => [
             ...prev,
             createNewItem({
-                id: `backend_error_${Date.now()}`,
-                type: "system_message",
+                id: `backend_error_${ev.callId || 'global'}_${Date.now()}`,
+                type: "message",
                 role: "system",
-                content: [{ type: "text", text: `Backend Error: ${ev.message}` }],
+                content: [{ type: "text", text: `Backend Error: ${payload?.message || ev.message}` }],
                 status: "completed",
+                timestamp: eventTimestamp,
             }),
         ]);
-        // Potentially update ARI status if it's a critical error
-        // setAriCallInfo(prev => ({ ...prev, status: "error", errorMessage: ev.message }));
         break;
     }
 
-    // Cases from the original switch, assuming they don't use a nested 'payload'
-    // and their 'type' is directly ev.type
+    // Original OpenAI SDK event handlers (might be deprecated if all events are standardized)
     case "input_audio_buffer.speech_started": {
-      // Create a user message item with running status and placeholder content
-      const { item_id } = ev;
-      setItems((prev) => [
-        ...prev,
-        createNewItem({
-          id: item_id,
-          type: "message",
-          role: "user",
-          content: [{ type: "text", text: "..." }],
-          status: "running",
-        }),
-      ]);
+      if (ev.call_id && ev.call_id !== currentSelectedCallId) return;
+      const { item_id } = ev; // Assuming ev contains item_id directly for these older events
+      updateOrAddItem(item_id, {
+        id: item_id, // Ensure id is passed for potential creation by updateOrAddItem
+        type: "message",
+        role: "user",
+        content: [{ type: "text", text: "..." }],
+        status: "running",
+        timestamp: eventTimestamp
+      });
       break;
     }
 
     case "conversation.item.created": {
+      if (ev.item?.call_id && ev.item.call_id !== currentSelectedCallId && currentSelectedCallId) return; // Allow if no call selected yet
       const { item } = ev;
       if (item.type === "message") {
-        // A completed message from user or assistant
-        const updatedContent =
-          item.content && item.content.length > 0 ? item.content : [];
-        setItems((prev) => {
-          const idx = prev.findIndex((m) => m.id === item.id);
-          if (idx >= 0) {
-            const updated = [...prev];
-            updated[idx] = {
-              ...updated[idx],
-              ...item,
-              content: updatedContent,
-              status: "completed",
-              timestamp:
-                updated[idx].timestamp || new Date().toLocaleTimeString(),
-            };
-            return updated;
-          } else {
-            return [
-              ...prev,
-              createNewItem({
-                ...item,
-                content: updatedContent,
-                status: "completed",
-              }),
-            ];
-          }
+        const updatedContent = item.content && item.content.length > 0 ? item.content : [];
+        updateOrAddItem(item.id, {
+          ...item,
+          content: updatedContent,
+          status: "completed",
+          timestamp: eventTimestamp
         });
       }
-      // NOTE: We no longer handle function_call items here.
-      // The handling of function_call items has been moved to the "response.output_item.done" event.
       else if (item.type === "function_call_output") {
-        // Function call output item created
-        // Add the output item and mark the corresponding function_call as completed
-        // Also display in transcript as tool message with the response
         setItems((prev) => {
           const newItems = [
             ...prev,
             createNewItem({
               ...item,
               role: "tool",
-              content: [
-                {
-                  type: "text",
-                  text: `Function call response: ${item.output}`,
-                },
-              ],
+              content: [{ type: "text", text: `Function call response: ${item.output}` }],
               status: "completed",
+              timestamp: eventTimestamp,
             }),
           ];
-
           return newItems.map((m) =>
             m.call_id === item.call_id && m.type === "function_call"
               ? { ...m, status: "completed" }
@@ -272,7 +304,7 @@ export default function handleRealtimeEvent(
     }
 
     case "conversation.item.input_audio_transcription.completed": {
-      // Update the user message with the final transcript
+      if (ev.call_id && ev.call_id !== currentSelectedCallId) return;
       const { item_id, transcript } = ev;
       setItems((prev) =>
         prev.map((m) =>
@@ -281,6 +313,7 @@ export default function handleRealtimeEvent(
                 ...m,
                 content: [{ type: "text", text: transcript }],
                 status: "completed",
+                timestamp: eventTimestamp,
               }
             : m
         )
@@ -289,91 +322,59 @@ export default function handleRealtimeEvent(
     }
 
     case "response.content_part.added": {
+      if (ev.call_id && ev.call_id !== currentSelectedCallId) return;
       const { item_id, part, output_index } = ev;
-      // Append new content to the assistant message if output_index == 0
       if (part.type === "text" && output_index === 0) {
-        setItems((prev) => {
-          const idx = prev.findIndex((m) => m.id === item_id);
-          if (idx >= 0) {
-            const updated = [...prev];
-            const existingContent = updated[idx].content || [];
-            updated[idx] = {
-              ...updated[idx],
-              content: [
-                ...existingContent,
-                { type: part.type, text: part.text },
-              ],
-            };
-            return updated;
-          } else {
-            // If the item doesn't exist yet, create it as a running assistant message
-            return [
-              ...prev,
-              createNewItem({
-                id: item_id,
-                type: "message",
-                role: "assistant",
-                content: [{ type: part.type, text: part.text }],
-                status: "running",
-              }),
-            ];
-          }
+         updateOrAddItem(item_id, {
+            id: item_id,
+            type: "message",
+            role: "assistant",
+            content: [{ type: part.type, text: part.text }], // Appends in updateOrAddItem logic if item exists
+            status: "running",
+            timestamp: eventTimestamp
         });
       }
       break;
     }
 
     case "response.audio_transcript.delta": {
-      // Streaming transcript text (assistant)
+      if (ev.call_id && ev.call_id !== currentSelectedCallId) return;
       const { item_id, delta, output_index } = ev;
       if (output_index === 0 && delta) {
         setItems((prev) => {
-          const idx = prev.findIndex((m) => m.id === item_id);
-          if (idx >= 0) {
-            const updated = [...prev];
-            const existingContent = updated[idx].content || [];
-            updated[idx] = {
-              ...updated[idx],
-              content: [...existingContent, { type: "text", text: delta }],
-            };
-            return updated;
-          } else {
-            return [
-              ...prev,
-              createNewItem({
-                id: item_id,
-                type: "message",
-                role: "assistant",
-                content: [{ type: "text", text: delta }],
-                status: "running",
-              }),
-            ];
-          }
+            const idx = prev.findIndex((m) => m.id === item_id && m.role === "assistant");
+            if (idx >= 0) {
+                const updated = [...prev];
+                const currentItemContent = updated[idx].content || [];
+                const lastTextPart = currentItemContent.length > 0 ? currentItemContent[currentItemContent.length -1] : null;
+                if(lastTextPart && lastTextPart.type === 'text') {
+                    lastTextPart.text += delta;
+                } else {
+                    currentItemContent.push({ type: "text", text: delta });
+                }
+                updated[idx] = { ...updated[idx], content: currentItemContent, status: "running", timestamp: eventTimestamp };
+                return updated;
+            } else {
+                return [...prev, createNewItem({ id: item_id, type: "message", role: "assistant", content: [{ type: "text", text: delta }], status: "running", timestamp: eventTimestamp })];
+            }
         });
       }
       break;
     }
 
     case "response.output_item.done": {
+      if (ev.item?.call_id && ev.item.call_id !== currentSelectedCallId && currentSelectedCallId) return;
       const { item } = ev;
       if (item.type === "function_call") {
-        // A new function call item
-        // Display it in the transcript as an assistant message indicating a function is being requested
-        console.log("function_call", item);
+        console.log("function_call (response.output_item.done)", item);
         setItems((prev) => [
           ...prev,
           createNewItem({
             ...item,
-            role: "assistant",
-            content: [
-              {
-                type: "text",
-                text: `${item.name}(${JSON.stringify(
-                  JSON.parse(item.arguments)
-                )})`,
-              },
-            ],
-            status: "running",
+            role: "assistant", // Indicates assistant is making a function call
+            content: [ { type: "text", text: `${item.name}(${JSON.stringify( JSON.parse(item.arguments))})` } ],
+            status: "running", // Function call is initiated, waiting for output
+            timestamp: eventTimestamp,
           }),
         ]);
       }
@@ -381,6 +382,7 @@ export default function handleRealtimeEvent(
     }
 
     default:
+      // console.log("Unhandled event type in handleRealtimeEvent:", eventType);
       break;
   }
 }

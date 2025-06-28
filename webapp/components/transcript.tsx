@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bot, Phone, MessageSquare, Wrench } from "lucide-react";
+import { Bot, Phone, MessageSquare, Wrench, Info } from "lucide-react"; // Added Info icon
 import { Item } from "@/components/types";
 
 type TranscriptProps = {
@@ -48,8 +48,9 @@ const Transcript: React.FC<TranscriptProps> = ({ items }) => {
             {transcriptItems.map((msg, i) => {
               const isUser = msg.role === "user";
               const isTool = msg.role === "tool";
-              // Default to assistant if not user or tool
-              const Icon = isUser ? Phone : isTool ? Wrench : Bot;
+              const isSystem = msg.role === "system";
+              // Default to assistant if not user, tool, or system
+              const Icon = isUser ? Phone : isTool ? Wrench : isSystem ? Info : Bot;
 
               // Combine all text parts into a single string for display
               const displayText = msg.content
@@ -63,23 +64,30 @@ const Transcript: React.FC<TranscriptProps> = ({ items }) => {
                       isUser
                         ? "bg-background border-border"
                         : isTool
-                        ? "bg-secondary border-secondary"
-                        : "bg-secondary border-secondary"
+                        ? "bg-yellow-100 border-yellow-300 dark:bg-yellow-800 dark:border-yellow-700" // Tool specific
+                        : isSystem
+                        ? "bg-blue-100 border-blue-300 dark:bg-blue-800 dark:border-blue-700" // System specific
+                        : "bg-secondary border-secondary" // Assistant default
                     }`}
                   >
-                    <Icon className="h-4 w-4" />
+                    <Icon className={`h-4 w-4 ${isTool ? "text-yellow-700 dark:text-yellow-300" : isSystem ? "text-blue-700 dark:text-blue-300" : ""}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1.5">
                       <span
                         className={`text-sm font-medium ${
-                          isUser ? "text-muted-foreground" : "text-foreground"
+                          isUser ? "text-muted-foreground"
+                          : isTool ? "text-yellow-800 dark:text-yellow-200"
+                          : isSystem ? "text-blue-800 dark:text-blue-200"
+                          : "text-foreground"
                         }`}
                       >
                         {isUser
                           ? "Caller"
                           : isTool
                           ? "Tool Response"
+                          : isSystem
+                          ? "System Event"
                           : "Assistant"}
                       </span>
                       <span className="text-xs text-muted-foreground">
