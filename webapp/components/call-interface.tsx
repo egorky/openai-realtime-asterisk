@@ -56,8 +56,8 @@ const CallInterface = () => {
 
       newWs.onmessage = (event) => {
         const data = JSON.parse(event.data);
-        // Pass selectedCallId to handleRealtimeEvent for context-aware updates (e.g. for history)
-        handleRealtimeEvent(data, setItems, setAriCallInfo, setActiveCallsList, selectedCallId);
+        // Pass selectedCallId and ariCallInfo to handleRealtimeEvent for context-aware updates
+        handleRealtimeEvent(data, setItems, setAriCallInfo, ariCallInfo, setActiveCallsList, selectedCallId);
       };
 
       newWs.onclose = () => {
@@ -128,8 +128,8 @@ const CallInterface = () => {
 
         <div className="grid grid-cols-12 gap-4 h-full">
           {/* Left Column */}
-          {/* REMOVED overflow-hidden to allow child ScrollArea to manage its own overflow */}
-          <div className="col-span-3 flex flex-col h-full">
+          {/* Adding overflow-hidden back to ensure this column does not expand its parent if SessionConfigurationPanel's content is too large. SessionConfigurationPanel has its own ScrollArea. */}
+          <div className="col-span-3 flex flex-col h-full overflow-hidden">
             <SessionConfigurationPanel
               callStatus={logsWsStatus}
               selectedCallId={selectedCallId}

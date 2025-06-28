@@ -21,9 +21,10 @@ export interface ActiveCallListItem {
 export default function handleRealtimeEvent(
   ev: any,
   setItems: React.Dispatch<React.SetStateAction<Item[]>>,
-  setAriCallInfo: React.Dispatch<React.SetStateAction<AriCallInfo>>,
+  setAriCallInfoState: React.Dispatch<React.SetStateAction<AriCallInfo>>, // Renamed to avoid conflict
+  ariCallInfo: AriCallInfo, // Added ariCallInfo state
   setActiveCallsList?: React.Dispatch<React.SetStateAction<ActiveCallListItem[]>>,
-  currentSelectedCallId?: string | null // Nuevo parámetro
+  currentSelectedCallId?: string | null
 ) {
   // Helper function to create a new item with default fields
   function createNewItem(base: Partial<Item>): Item {
@@ -71,7 +72,7 @@ export default function handleRealtimeEvent(
     }
     case "ari_call_status_update": {
       if (payload) {
-        setAriCallInfo(prev => {
+        setAriCallInfoState(prev => {
           if (prev.callId === payload.callId || !prev.callId || payload.callId === currentSelectedCallId) {
             return {
               status: payload.status,
@@ -179,7 +180,7 @@ export default function handleRealtimeEvent(
     }
     case "session.created": {
       setItems([]);
-      setAriCallInfo({ status: "idle", callId: null, callerId: null });
+      setAriCallInfoState({ status: "idle", callId: null, callerId: null });
       break;
     }
     case "conversation_history": {
