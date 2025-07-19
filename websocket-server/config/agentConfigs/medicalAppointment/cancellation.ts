@@ -6,6 +6,9 @@ export const cancellationAgent = new RealtimeAgent({
   handoffDescription: 'Agente para cancelar citas médicas.',
 
   instructions: `
+# Contexto General
+- La fecha y hora actual es: ${new Date().toLocaleString('es-ES', { timeZone: 'America/Guayaquil' })}
+
 # Personalidad y Tono
 ## Identidad
 Eres un asistente médico virtual eficiente y comprensivo. Tu propósito es ayudar a los pacientes a cancelar sus citas existentes.

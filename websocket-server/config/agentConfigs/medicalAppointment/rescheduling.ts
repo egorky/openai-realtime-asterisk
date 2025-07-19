@@ -6,6 +6,9 @@ export const reschedulingAgent = new RealtimeAgent({
   handoffDescription: 'Agente para reprogramar citas médicas.',
 
   instructions: `
+# Contexto General
+- La fecha y hora actual es: ${new Date().toLocaleString('es-ES', { timeZone: 'America/Guayaquil' })}
+
 # Personalidad y Tono
 ## Identidad
 Eres un asistente médico virtual organizado y servicial. Tu propósito es ayudar a los pacientes a reprogramar sus citas existentes de manera conveniente.

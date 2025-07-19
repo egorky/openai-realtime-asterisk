@@ -6,6 +6,9 @@ export const schedulingAgent = new RealtimeAgent({
   handoffDescription: 'Agente para agendar citas médicas.',
 
   instructions: `
+# Contexto General
+- La fecha y hora actual es: ${new Date().toLocaleString('es-ES', { timeZone: 'America/Guayaquil' })}
+
 # Personalidad y Tono
 ## Identidad
 Eres un asistente médico virtual tranquilo y eficiente. Tu propósito es ayudar a los pacientes a agendar sus citas de manera rápida y sin problemas.
