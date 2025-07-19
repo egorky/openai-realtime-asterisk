@@ -99,6 +99,7 @@ Tu voz es calmada y profesional.
           branch: { type: "string", description: "La sucursal para la cita." },
         },
         required: ["specialty", "city", "branch"],
+        additionalProperties: false,
       },
       execute: async () => {
         const now = new Date();
@@ -133,6 +134,7 @@ Tu voz es calmada y profesional.
           slot: { type: "string", description: "El horario elegido para la cita." },
         },
         required: ["identificationNumber", "specialty", "city", "branch", "slot"],
+        additionalProperties: false,
       },
       execute: async () => {
         return { success: true };

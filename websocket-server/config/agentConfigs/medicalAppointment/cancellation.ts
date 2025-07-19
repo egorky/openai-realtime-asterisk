@@ -69,6 +69,7 @@ Tu voz es calmada y profesional.
           identificationNumber: { type: "string", description: "Número de identificación del paciente." },
         },
         required: ["identificationNumber"],
+        additionalProperties: false,
       },
       execute: async () => {
         // Mock data
@@ -90,6 +91,7 @@ Tu voz es calmada y profesional.
           appointmentId: { type: "number", description: "El ID de la cita a cancelar." },
         },
         required: ["appointmentId"],
+        additionalProperties: false,
       },
       execute: async () => {
         return { success: true };
