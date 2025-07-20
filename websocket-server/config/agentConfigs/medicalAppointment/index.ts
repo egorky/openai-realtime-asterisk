@@ -2,10 +2,6 @@ import { schedulingAgent } from './scheduling';
 import { cancellationAgent } from './cancellation';
 import { reschedulingAgent } from './rescheduling';
 import { simulatedHumanAgent } from './simulatedHuman';
-import { medicalSupervisorAgent } from './supervisor';
-
-// El supervisor puede transferir a cualquiera de los agentes de servicio.
-medicalSupervisorAgent.handoffs = [schedulingAgent, cancellationAgent, reschedulingAgent];
 
 // Cada agente de servicio puede transferir a cualquier otro agente de servicio.
 schedulingAgent.handoffs = [cancellationAgent, reschedulingAgent];
@@ -22,7 +18,6 @@ reschedulingAgent.handoffs = [schedulingAgent, cancellationAgent];
 
 
 export const medicalAppointmentScenario = [
-  medicalSupervisorAgent,
   schedulingAgent,
   cancellationAgent,
   reschedulingAgent,
