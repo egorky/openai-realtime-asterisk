@@ -65,6 +65,7 @@ export interface CallResources {
   isTtsPlaying: boolean; // Flag to indicate if the TTS queue is being processed
   isOverallTtsResponseActive: boolean; // True if any part of a multi-chunk TTS is playing or queued
   fullTtsAudioBuffer: Buffer[]; // To accumulate all TTS audio chunks for saving in "stream" mode
+  pendingToolCall?: string;
 }
 
 // Interfaz para la información de llamada activa que se puede enviar al frontend.

@@ -75,17 +75,14 @@ Tu voz es calmada y profesional.
   },
   {
     "id": "6_offer_slots",
-    "description": "Ofrecer horarios disponibles.",
+    "description": "Solicitar la búsqueda de horarios disponibles.",
     "instructions": [
-      "Informa al paciente que buscarás los horarios disponibles.",
-      "Llama a la herramienta 'getAvailableSlots'.",
-      "Ofrece al paciente los tres horarios devueltos."
+      "Informa al paciente que buscarás los horarios disponibles y luego solicita la búsqueda con la frase 'Necesito buscar los horarios disponibles'."
     ],
     "examples": [
-      "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor.",
-      "He encontrado algunos horarios disponibles para ti: [slot1], [slot2], y [slot3]. ¿Cuál de estos te funciona?"
+      "Perfecto, déjame consultar los horarios disponibles para ti. Necesito buscar los horarios disponibles."
     ],
-    "transitions": [{ "next_step": "7_confirm_appointment", "condition": "El paciente ha elegido un horario." }]
+    "transitions": [{ "next_step": "7_confirm_appointment", "condition": "Se han proporcionado los horarios." }]
   },
   {
     "id": "7_confirm_appointment",
@@ -98,39 +95,6 @@ Tu voz es calmada y profesional.
 `,
 
   tools: [
-    tool({
-      name: "getAvailableSlots",
-      description: "Obtiene una lista de horarios de citas disponibles para una especialidad, ciudad y sucursal específicas.",
-      parameters: {
-        type: "object",
-        properties: {
-          specialty: { type: "string", description: "La especialidad médica." },
-          city: { type: "string", description: "La ciudad para la cita." },
-          branch: { type: "string", description: "La sucursal para la cita." },
-        },
-        required: ["specialty", "city", "branch"],
-        additionalProperties: false,
-      },
-      execute: async () => {
-        const now = new Date();
-        const tomorrow = new Date(now);
-        tomorrow.setDate(now.getDate() + 1);
-        const dayAfterTomorrow = new Date(now);
-        dayAfterTomorrow.setDate(now.getDate() + 2);
-
-        const formatDate = (date: Date) => {
-          return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
-        };
-
-        return {
-          slots: [
-            `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
-            `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
-            `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
-          ]
-        };
-      },
-    }),
     tool({
       name: "scheduleAppointment",
       description: "Agenda una cita médica para un paciente en un horario específico.",

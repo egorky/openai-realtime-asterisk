@@ -1,5 +1,25 @@
 import { FunctionHandler } from "./types";
 
+export async function getAvailableSlots(args: { specialty: string; city: string; branch: string }) {
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const dayAfterTomorrow = new Date(now);
+  dayAfterTomorrow.setDate(now.getDate() + 2);
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+
+  return {
+    slots: [
+      `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
+      `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
+      `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
+    ]
+  };
+}
+
 const functions: FunctionHandler[] = [];
 
 functions.push({
