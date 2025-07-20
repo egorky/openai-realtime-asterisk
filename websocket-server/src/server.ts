@@ -218,8 +218,8 @@ export function sendGenericEventToFrontend(event: any) {
         }
       }
     });
-  } else {
+  } // else {
     // Changed from console.warn to console.debug to reduce noise when no frontend is connected.
-    console.debug("Cannot send generic event to frontend, no /logs WebSocket clients connected or open.");
-  }
+   // console.debug("Cannot send generic event to frontend, no /logs WebSocket clients connected or open.");
+ // }
 }
