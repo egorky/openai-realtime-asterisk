@@ -160,7 +160,8 @@ async function _playTTSThenGetSlots(serviceInstance: AriClientService, callId: s
 
   // Generate TTS for the waiting message
   const waitingMessage = "Un momento, por favor, estoy consultando los horarios.";
-  await sessionManager.requestOpenAIResponse(callId, waitingMessage, call.config, false);
+  const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
+  await sessionManager.requestOpenAIResponse(callId, waitingMessage, configForTTS);
 
   // The audio will be played via the _onOpenAIAudioChunk and _onOpenAIAudioStreamEnd callbacks.
   // We need a way to know that after this TTS is played, we should call the getAvailableSlots tool.
