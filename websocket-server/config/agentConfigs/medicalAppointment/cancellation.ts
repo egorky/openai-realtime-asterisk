@@ -1,4 +1,5 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
+import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
 
 export const cancellationAgent = new RealtimeAgent({
   name: 'cancellation',
@@ -6,6 +7,7 @@ export const cancellationAgent = new RealtimeAgent({
   handoffDescription: 'Agente para cancelar citas médicas.',
 
   instructions: `
+${RECOMMENDED_PROMPT_PREFIX}
 # Contexto General
 - La fecha y hora actual es: ${new Date().toLocaleString('es-ES', { timeZone: 'America/Guayaquil' })}
 
