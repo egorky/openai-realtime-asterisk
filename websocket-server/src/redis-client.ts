@@ -161,3 +161,17 @@ export async function getConversationHistory(callId: string): Promise<Conversati
     return null;
   }
 }
+
+export async function saveSessionParams(callId: string, params: Record<string, any>): Promise<void> {
+  if (!redisClient || !redisAvailable) {
+    return;
+  }
+
+  const redisKey = `sessionParams:${callId}`;
+
+  try {
+    await redisClient.set(redisKey, JSON.stringify(params), 'EX', REDIS_CONVERSATION_TTL_SECONDS);
+  } catch (error: any) {
+    console.error(`[RedisClient] Error saving session params to Redis for callId ${callId}:`, error.message);
+  }
+}

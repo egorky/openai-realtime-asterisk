@@ -5,7 +5,7 @@ import { CallSpecificConfig, LoggerInstance, AppRecognitionConfig } from './type
 import { CallResources } from './ari-call-resources';
 import { AriClientService } from './ari-service'; // Necesario para 'this' y acceso a activeCalls, client, etc.
 import * as sessionManager from './sessionManager';
-import { logConversationToRedis, ConversationTurn } from './redis-client';
+import { logConversationToRedis, ConversationTurn, saveSessionParams } from './redis-client';
 import { transcribeAudioAsync } from './async-transcriber';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
@@ -115,6 +115,45 @@ export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId
     }, silenceTimeout);
 }
 
+async function _extractAndSaveSessionParams(callId: string, transcript: string, call: CallResources): Promise<void> {
+  const paramsToSave: Record<string, any> = {};
+  const lowerTranscript = transcript.toLowerCase();
+
+  const idKeywords = ['cédula', 'identificación', 'id'];
+  const specialtyKeywords = ['especialidad', 'atender en'];
+  const cityKeywords = ['ciudad', 'vivo en'];
+  const branchKeywords = ['sucursal', 'atienden en'];
+
+  const extractValue = (keywords: string[]): string | null => {
+    for (const keyword of keywords) {
+      const index = lowerTranscript.indexOf(keyword);
+      if (index !== -1) {
+        const remaining = transcript.substring(index + keyword.length);
+        const match = remaining.match(/(\d+|\w+)/); // Extract next word or number
+        if (match) return match[0];
+      }
+    }
+    return null;
+  };
+
+  const identification = extractValue(idKeywords);
+  if (identification) paramsToSave.identificationNumber = identification;
+
+  const specialty = extractValue(specialtyKeywords);
+  if (specialty) paramsToSave.specialty = specialty;
+
+  const city = extractValue(cityKeywords);
+  if (city) paramsToSave.city = city;
+
+  const branch = extractValue(branchKeywords);
+  if (branch) paramsToSave.branch = branch;
+
+  if (Object.keys(paramsToSave).length > 0) {
+    call.callLogger.info(`Extracted session params: ${JSON.stringify(paramsToSave)}`);
+    await saveSessionParams(callId, paramsToSave);
+  }
+}
+
 export function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: string, transcript: string): void {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
@@ -139,6 +178,8 @@ export function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: 
       type: 'transcript',
       content: transcript,
     }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
+
+    _extractAndSaveSessionParams(callId, transcript, call).catch(e => call.callLogger.error(`Error extracting/saving session params: ${e.message}`));
 
     try {
       serviceInstance.sendEventToFrontend({

@@ -73,8 +73,15 @@ Tu voz es calmada y profesional.
   {
     "id": "6_offer_slots",
     "description": "Ofrecer horarios disponibles.",
-    "instructions": ["Llama a la herramienta 'getAvailableSlots' y ofrece al paciente los tres horarios devueltos."],
-    "examples": ["He encontrado algunos horarios disponibles para ti: [slot1], [slot2], y [slot3]. ¿Cuál de estos te funciona?"],
+    "instructions": [
+      "Informa al paciente que buscarás los horarios disponibles.",
+      "Llama a la herramienta 'getAvailableSlots'.",
+      "Ofrece al paciente los tres horarios devueltos."
+    ],
+    "examples": [
+      "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor.",
+      "He encontrado algunos horarios disponibles para ti: [slot1], [slot2], y [slot3]. ¿Cuál de estos te funciona?"
+    ],
     "transitions": [{ "next_step": "7_confirm_appointment", "condition": "El paciente ha elegido un horario." }]
   },
   {

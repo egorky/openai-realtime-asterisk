@@ -93,7 +93,7 @@ export const miAgente = new RealtimeAgent({
 
 ## 4. Configurando el Escenario en `index.ts`
 
-El `index.ts` de tu escenario une a todos los agentes.
+El `index.ts` de tu escenario une a todos los agentes y define sus interacciones.
 
 **Ejemplo de `nombreDelEscenario/index.ts`:**
 
@@ -107,7 +107,7 @@ import { agenteDeCancelacion } from './cancelacion';
 // Desde el agente de saludo, se puede pasar a los otros dos.
 (agenteDeSaludo.handoffs as any).push(agenteDeAgendamiento, agenteDeCancelacion);
 
-// Los otros agentes pueden volver al de saludo o entre ellos.
+// Los otros agentes pueden volver al de saludo o entre ellos si el usuario cambia de tema.
 (agenteDeAgendamiento.handoffs as any).push(agenteDeCancelacion, agenteDeSaludo);
 (agenteDeCancelacion.handoffs as any).push(agenteDeAgendamiento, agenteDeSaludo);
 
@@ -126,6 +126,53 @@ export const nombreDeLaEmpresa = 'Mi Empresa S.A.';
 
 -   **Agente de Entrada**: El primer agente que aparece en el array exportado (en el ejemplo, `agenteDeSaludo`) será el **agente de entrada** del escenario, es decir, el primero en responder la llamada.
 -   **Handoffs**: Se configuran las posibles transiciones entre agentes. Esto le da al sistema la capacidad de pasar la conversación de un especialista a otro de forma fluida.
+
+### 4.1. Usando un Agente Supervisor para Enrutamiento (Avanzado)
+
+Para escenarios más complejos donde la primera interacción del usuario determina el flujo completo de la llamada (ej. agendar, cancelar o reprogramar), puedes usar un **agente supervisor**.
+
+Un agente supervisor es un agente especial, sin herramientas y con instrucciones muy simples, cuyo único propósito es decidir a qué otro agente transferir la llamada.
+
+**Creación del Supervisor (`supervisor.ts`):**
+
+```typescript
+import { RealtimeAgent } from '@openai/agents/realtime';
+import { agenteAgendamiento } from './agendamiento';
+import { agenteCancelacion } from './cancelacion';
+
+export const miSupervisor = new RealtimeAgent({
+  name: 'miSupervisor',
+  voice: 'echo', // Voz neutral, no hablará.
+  handoffDescription: 'Supervisor que enruta la llamada.',
+  instructions: `
+    # Rol
+    Eres un supervisor que enruta llamadas. Analiza la petición del usuario y transfiérelo inmediatamente al agente correcto. No hables.
+
+    # Agentes
+    - **agenteAgendamiento**: Para agendar citas.
+    - **agenteCancelacion**: Para cancelar citas.
+  `,
+  tools: [],
+  handoffs: [agenteAgendamiento, agenteCancelacion], // Puede transferir a estos agentes.
+});
+```
+
+**Modificación del `index.ts` del Escenario:**
+
+Para usar el supervisor, colócalo como el **primer agente** en el array del escenario.
+
+```typescript
+import { miSupervisor } from './supervisor';
+// ... otras importaciones
+
+export const miEscenarioCompleto = [
+  miSupervisor, // El supervisor es ahora el agente de entrada.
+  agenteDeAgendamiento,
+  agenteDeCancelacion,
+];
+```
+
+Ahora, cuando una llamada entre, `miSupervisor` la recibirá, analizará la intención del usuario y la transferirá silenciosamente al agente correspondiente.
 
 ## 5. Activando tu Nuevo Escenario
 
