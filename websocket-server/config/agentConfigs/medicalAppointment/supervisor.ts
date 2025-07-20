@@ -6,7 +6,6 @@ import { reschedulingAgent } from './rescheduling';
 export const medicalSupervisorAgent = new RealtimeAgent({
   name: 'medicalSupervisor',
   voice: 'echo', // Usar una voz neutral, ya que no debería hablar directamente.
-  maxDurationSeconds: 600,
   handoffDescription: 'Supervisor para enrutar a los agentes de citas médicas.',
   instructions: `
 # Rol y Objetivo
