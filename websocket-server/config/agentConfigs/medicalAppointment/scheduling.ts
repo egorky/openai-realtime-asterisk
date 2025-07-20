@@ -1,6 +1,11 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
 
+export const branches = {
+  guayaquil: ["Kennedy", "Alborada", "Sur", "Centro", "Ceibos"],
+  quito: ["Norte", "Sur", "Centro", "Cumbayá", "Tumbaco"],
+};
+
 export const schedulingAgent = new RealtimeAgent({
   name: 'scheduling',
   voice: 'sage',
@@ -77,12 +82,12 @@ Tu voz es calmada y profesional.
   },
   {
     "id": "6_offer_slots",
-    "description": "Solicitar la búsqueda de horarios disponibles.",
+    "description": "Informar sobre la búsqueda de horarios.",
     "instructions": [
-      "Informa al paciente que buscarás los horarios disponibles y luego solicita la búsqueda con la frase 'Necesito buscar los horarios disponibles'."
+      "Informa al paciente que buscarás los horarios disponibles y que espere un momento."
     ],
     "examples": [
-      "Perfecto, déjame consultar los horarios disponibles para ti. Necesito buscar los horarios disponibles."
+      "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor."
     ],
     "transitions": [{ "next_step": "7_confirm_appointment", "condition": "Se han proporcionado los horarios." }]
   },

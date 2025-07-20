@@ -8,6 +8,7 @@ import * as sessionManager from './sessionManager';
 import { logConversationToRedis, ConversationTurn, saveSessionParams, getSessionParams } from './redis-client';
 import { transcribeAudioAsync } from './async-transcriber';
 import { getAvailableSlots, scheduleAppointment } from './functionHandlers';
+import { branches } from '../config/agentConfigs/medicalAppointment/scheduling';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
 import { _activateOpenAIStreaming, _stopAllPlaybacks, _finalizeDtmfInput } from './ari-actions';
@@ -204,7 +205,10 @@ export async function _onOpenAIFinalResult(serviceInstance: AriClientService, ca
 
     await _extractAndSaveSessionParams(callId, transcript, call).catch(e => call.callLogger.error(`Error extracting/saving session params: ${e.message}`));
 
-    if (transcript.toLowerCase().includes("necesito buscar los horarios disponibles")) {
+    const allBranches = [...branches.guayaquil, ...branches.quito];
+    const transcriptContainsBranch = allBranches.some(branch => transcript.toLowerCase().includes(branch.toLowerCase()));
+
+    if (call.finalTranscription.toLowerCase().includes("sucursal") && transcriptContainsBranch) {
       await _playTTSThenGetSlots(serviceInstance, callId, call);
     } else if (call.finalTranscription.toLowerCase().includes("confirmar cita")) { // A simple way to detect confirmation
       await _extractSlotAndSchedule(callId, transcript, call);
