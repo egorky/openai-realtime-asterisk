@@ -50,4 +50,10 @@ functions.push({
   },
 });
 
+export async function scheduleAppointment(args: { identificationNumber: string; specialty: string; city: string; branch: string; slot: string }) {
+  // Aquí iría la lógica para llamar a la API real y agendar la cita.
+  // Por ahora, solo devolvemos un éxito simulado.
+  return { success: true };
+}
+
 export default functions;

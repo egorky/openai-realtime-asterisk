@@ -260,14 +260,10 @@ async function shutdown(signal: string) {
   });
 
   // 3. Disconnect ARI Client
-  if (ariClientServiceInstance && ariClientServiceInstance.client) {
-    console.log("Disconnecting from Asterisk ARI...");
-    try {
-      await ariClientServiceInstance.client.stop();
-      console.log("ARI connection stopped.");
-    } catch (err: any) {
-      console.error("Error stopping ARI client:", err.message);
-    }
+  if (ariClientServiceInstance) {
+    console.log("Shutting down ARI client and all calls...");
+    await ariClientServiceInstance.shutdownAllCalls();
+    console.log("ARI client and calls shut down.");
   }
 
   // 4. Disconnect Redis

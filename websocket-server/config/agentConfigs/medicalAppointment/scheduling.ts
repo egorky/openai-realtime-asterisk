@@ -89,7 +89,7 @@ Tu voz es calmada y profesional.
   {
     "id": "7_confirm_appointment",
     "description": "Confirmar la cita.",
-    "instructions": ["Llama a la herramienta 'scheduleAppointment' para confirmar la cita y luego informa al paciente."],
+    "instructions": ["Confirma verbalmente que la cita ha sido agendada y despídete."],
     "examples": ["Excelente. Tu cita ha sido agendada para el [fecha] a las [hora]. Gracias por usar nuestro servicio. ¡Adiós!"],
     "transitions": []
   }
