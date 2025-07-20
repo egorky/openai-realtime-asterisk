@@ -15,4 +15,4 @@ export const medicalAppointmentScenario = [
   simulatedHumanAgent,
 ];
 
-export const medicalAppointmentCompanyName = 'Servicios Médicos Vitales';
+export const medicalAppointmentCompanyName = 'Vida Sana S.A.';
