@@ -11,7 +11,7 @@ import {
 import functions from "./functionHandlers";
 import { initializeAriClient, ariClientServiceInstance } from "./ari-service"; // Importar desde ari-service
 import { ActiveCallInfo } from "./ari-call-resources"; // Importar tipo directamente
-import { getConversationHistory } from "./redis-client"; // Importar la nueva función
+import { getConversationHistory, disconnectRedis } from "./redis-client"; // Importar la nueva función
 
 dotenv.config();
 
@@ -223,3 +223,58 @@ export function sendGenericEventToFrontend(event: any) {
    // console.debug("Cannot send generic event to frontend, no /logs WebSocket clients connected or open.");
  // }
 }
+
+async function shutdown(signal: string) {
+  console.log(`\nReceived ${signal}. Shutting down gracefully...`);
+
+  // 1. Close WebSocket Server
+  console.log("Closing WebSocket server...");
+  await new Promise<void>((resolve, reject) => {
+    wss.close((err) => {
+      if (err) {
+        console.error("Error closing WebSocket server:", err);
+        reject(err);
+      } else {
+        console.log("WebSocket server closed.");
+        resolve();
+      }
+    });
+    // Force close any remaining clients
+    logClients.forEach(client => {
+      client.terminate();
+    });
+  });
+
+  // 2. Close HTTP Server
+  console.log("Closing HTTP server...");
+  await new Promise<void>((resolve, reject) => {
+    server.close((err) => {
+      if (err) {
+        console.error("Error closing HTTP server:", err);
+        reject(err);
+      } else {
+        console.log("HTTP server closed.");
+        resolve();
+      }
+    });
+  });
+
+  // 3. Disconnect ARI Client
+  if (ariClientServiceInstance) {
+    console.log("Shutting down ARI client and all calls...");
+    await ariClientServiceInstance.shutdownAllCalls();
+    console.log("ARI client and calls shut down.");
+  }
+
+  // 4. Disconnect Redis
+  console.log("Disconnecting from Redis...");
+  await disconnectRedis();
+
+  console.log("Graceful shutdown complete.");
+  process.exit(0);
+}
+
+// Listen for shutdown signals
+process.on('SIGINT', () => shutdown('SIGINT')); // Ctrl+C
+process.on('SIGTERM', () => shutdown('SIGTERM')); // `kill` command
+process.on('SIGUSR2', () => shutdown('SIGUSR2')); // nodemon restart

@@ -354,6 +354,17 @@ export class AriClientService implements AriClientInterface {
   public async _fullCleanup(callId: string, hangupMainChannel: boolean, reason: string): Promise<void> {
     await _fullCleanup(this, callId, hangupMainChannel, reason);
   }
+
+  public async shutdownAllCalls(): Promise<void> {
+    this.logger.info("Shutting down all active calls...");
+    const callIds = Array.from(this.activeCalls.keys());
+    for (const callId of callIds) {
+      await this._fullCleanup(callId, true, "SERVER_SHUTDOWN");
+    }
+    if (this.client) {
+      await this.client.stop();
+    }
+  }
 }
 
 // --- Inicialización del servicio ---

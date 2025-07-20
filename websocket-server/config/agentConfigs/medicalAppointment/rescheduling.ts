@@ -1,4 +1,5 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
+import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
 
 export const reschedulingAgent = new RealtimeAgent({
   name: 'rescheduling',
@@ -6,6 +7,7 @@ export const reschedulingAgent = new RealtimeAgent({
   handoffDescription: 'Agente para reprogramar citas médicas.',
 
   instructions: `
+${RECOMMENDED_PROMPT_PREFIX}
 # Contexto General
 - La fecha y hora actual es: ${new Date().toLocaleString('es-ES', { timeZone: 'America/Guayaquil' })}
 

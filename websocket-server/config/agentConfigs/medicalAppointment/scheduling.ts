@@ -1,4 +1,10 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
+import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
+
+export const branches = {
+  guayaquil: ["Kennedy", "Alborada", "Sur", "Centro", "Ceibos"],
+  quito: ["Norte", "Sur", "Centro", "Cumbayá", "Tumbaco"],
+};
 
 export const schedulingAgent = new RealtimeAgent({
   name: 'scheduling',
@@ -6,6 +12,7 @@ export const schedulingAgent = new RealtimeAgent({
   handoffDescription: 'Agente para agendar citas médicas.',
 
   instructions: `
+${RECOMMENDED_PROMPT_PREFIX}
 # Contexto General
 - La fecha y hora actual es: ${new Date().toLocaleString('es-ES', { timeZone: 'America/Guayaquil' })}
 
@@ -29,7 +36,10 @@ Tu voz es calmada y profesional.
   - Quito: Norte, Sur, Centro, Cumbayá, Tumbaco
 
 # Instrucciones Generales
-- Sigue los estados de conversación para agendar la cita.
+- Tu función principal es agendar citas. Sin embargo, si el usuario indica que quiere cancelar o reprogramar una cita, debes transferirlo inmediatamente al agente correspondiente.
+- **Handoff a 'cancellation'**: Si el usuario usa palabras como "cancelar", "eliminar cita", "ya no puedo ir".
+- **Handoff a 'rescheduling'**: Si el usuario usa palabras como "reprogramar", "cambiar mi cita", "mover la fecha".
+- Si la intención es agendar, sigue los estados de conversación para agendar la cita.
 - Verifica la información proporcionada por el usuario repitiéndola.
 - Utiliza las herramientas proporcionadas para obtener información y agendar la cita.
 
@@ -72,15 +82,19 @@ Tu voz es calmada y profesional.
   },
   {
     "id": "6_offer_slots",
-    "description": "Ofrecer horarios disponibles.",
-    "instructions": ["Llama a la herramienta 'getAvailableSlots' y ofrece al paciente los tres horarios devueltos."],
-    "examples": ["He encontrado algunos horarios disponibles para ti: [slot1], [slot2], y [slot3]. ¿Cuál de estos te funciona?"],
-    "transitions": [{ "next_step": "7_confirm_appointment", "condition": "El paciente ha elegido un horario." }]
+    "description": "Informar sobre la búsqueda de horarios.",
+    "instructions": [
+      "Informa al paciente que buscarás los horarios disponibles y que espere un momento."
+    ],
+    "examples": [
+      "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor."
+    ],
+    "transitions": [{ "next_step": "7_confirm_appointment", "condition": "Se han proporcionado los horarios." }]
   },
   {
     "id": "7_confirm_appointment",
     "description": "Confirmar la cita.",
-    "instructions": ["Llama a la herramienta 'scheduleAppointment' para confirmar la cita y luego informa al paciente."],
+    "instructions": ["Confirma verbalmente que la cita ha sido agendada y despídete."],
     "examples": ["Excelente. Tu cita ha sido agendada para el [fecha] a las [hora]. Gracias por usar nuestro servicio. ¡Adiós!"],
     "transitions": []
   }
@@ -88,39 +102,6 @@ Tu voz es calmada y profesional.
 `,
 
   tools: [
-    tool({
-      name: "getAvailableSlots",
-      description: "Obtiene una lista de horarios de citas disponibles para una especialidad, ciudad y sucursal específicas.",
-      parameters: {
-        type: "object",
-        properties: {
-          specialty: { type: "string", description: "La especialidad médica." },
-          city: { type: "string", description: "La ciudad para la cita." },
-          branch: { type: "string", description: "La sucursal para la cita." },
-        },
-        required: ["specialty", "city", "branch"],
-        additionalProperties: false,
-      },
-      execute: async () => {
-        const now = new Date();
-        const tomorrow = new Date(now);
-        tomorrow.setDate(now.getDate() + 1);
-        const dayAfterTomorrow = new Date(now);
-        dayAfterTomorrow.setDate(now.getDate() + 2);
-
-        const formatDate = (date: Date) => {
-          return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
-        };
-
-        return {
-          slots: [
-            `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
-            `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
-            `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
-          ]
-        };
-      },
-    }),
     tool({
       name: "scheduleAppointment",
       description: "Agenda una cita médica para un paciente en un horario específico.",

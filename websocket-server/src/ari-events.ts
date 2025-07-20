@@ -5,8 +5,10 @@ import { CallSpecificConfig, LoggerInstance, AppRecognitionConfig } from './type
 import { CallResources } from './ari-call-resources';
 import { AriClientService } from './ari-service'; // Necesario para 'this' y acceso a activeCalls, client, etc.
 import * as sessionManager from './sessionManager';
-import { logConversationToRedis, ConversationTurn } from './redis-client';
+import { logConversationToRedis, ConversationTurn, saveSessionParams, getSessionParams } from './redis-client';
 import { transcribeAudioAsync } from './async-transcriber';
+import { getAvailableSlots, scheduleAppointment } from './functionHandlers';
+import { branches } from '../config/agentConfigs/medicalAppointment/scheduling';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
 import { _activateOpenAIStreaming, _stopAllPlaybacks, _finalizeDtmfInput } from './ari-actions';
@@ -115,7 +117,68 @@ export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId
     }, silenceTimeout);
 }
 
-export function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: string, transcript: string): void {
+async function _extractAndSaveSessionParams(callId: string, transcript: string, call: CallResources): Promise<void> {
+  const paramsToSave: Record<string, any> = {};
+  const lowerTranscript = transcript.toLowerCase();
+
+  const idKeywords = ['cédula', 'identificación', 'id'];
+  const specialtyKeywords = ['especialidad', 'atender en'];
+  const cityKeywords = ['ciudad', 'vivo en'];
+  const branchKeywords = ['sucursal', 'atienden en'];
+
+  const extractValue = (keywords: string[]): string | null => {
+    for (const keyword of keywords) {
+      const index = lowerTranscript.indexOf(keyword);
+      if (index !== -1) {
+        const remaining = transcript.substring(index + keyword.length);
+        const match = remaining.match(/(\d+|\w+)/); // Extract next word or number
+        if (match) return match[0];
+      }
+    }
+    return null;
+  };
+
+  const identification = extractValue(idKeywords);
+  if (identification) paramsToSave.identificationNumber = identification;
+
+  const specialty = extractValue(specialtyKeywords);
+  if (specialty) paramsToSave.specialty = specialty;
+
+  const city = extractValue(cityKeywords);
+  if (city) paramsToSave.city = city;
+
+  const branch = extractValue(branchKeywords);
+  if (branch) paramsToSave.branch = branch;
+
+  if (Object.keys(paramsToSave).length > 0) {
+    call.callLogger.info(`Extracted session params: ${JSON.stringify(paramsToSave)}`);
+    await saveSessionParams(callId, paramsToSave);
+  }
+}
+
+async function _playTTSThenGetSlots(serviceInstance: AriClientService, callId: string, call: CallResources): Promise<void> {
+  call.callLogger.info("Orchestrating tool call for getAvailableSlots");
+
+  // Generate TTS for the waiting message
+  const waitingMessage = "Un momento, por favor, estoy consultando los horarios.";
+  const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
+  await sessionManager.requestOpenAIResponse(callId, waitingMessage, configForTTS);
+
+  // The audio will be played via the _onOpenAIAudioChunk and _onOpenAIAudioStreamEnd callbacks.
+  // We need a way to know that after this TTS is played, we should call the getAvailableSlots tool.
+  // We'll use a flag in the call resources.
+  call.pendingToolCall = "getAvailableSlots";
+}
+
+async function _extractSlotAndSchedule(callId: string, transcript: string, call: CallResources): Promise<void> {
+  const lowerTranscript = transcript.toLowerCase();
+  // This is a very simple way to extract the slot. A more robust solution would use a regex or a more advanced NLP technique.
+  const slot = transcript; // For now, we'll just use the whole transcript as the slot.
+  await saveSessionParams(callId, { slot });
+  call.pendingToolCall = "scheduleAppointment";
+}
+
+export async function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: string, transcript: string): Promise<void> {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
 
@@ -140,23 +203,37 @@ export function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: 
       content: transcript,
     }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
 
-    try {
-      serviceInstance.sendEventToFrontend({
-        type: 'openai_requesting_response',
-        callId: callId,
-        timestamp: new Date().toISOString(),
-        source: 'SESSION_MANAGER', // sessionManager makes the call
-        payload: { triggeringTranscript: transcript },
-        logLevel: 'INFO'
-      });
-      sessionManager.requestOpenAIResponse(callId, transcript, call.config);
-    } catch (e: any) {
-      call.callLogger.error(`Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
-      logConversationToRedis(callId, {
-        actor: 'system',
-        type: 'error_message',
-        content: `Failed to request OpenAI response: ${e.message}`
-      }).catch(redisErr => call.callLogger.error(`RedisLog Error (OpenAI request fail): ${redisErr.message}`));
+    await _extractAndSaveSessionParams(callId, transcript, call).catch(e => call.callLogger.error(`Error extracting/saving session params: ${e.message}`));
+
+    const allBranches = [...branches.guayaquil, ...branches.quito];
+    const transcriptContainsBranch = allBranches.some(branch => transcript.toLowerCase().includes(branch.toLowerCase()));
+
+    if (call.finalTranscription.toLowerCase().includes("sucursal") && transcriptContainsBranch) {
+      await _playTTSThenGetSlots(serviceInstance, callId, call);
+    } else if (call.finalTranscription.toLowerCase().includes("confirmar cita")) { // A simple way to detect confirmation
+      await _extractSlotAndSchedule(callId, transcript, call);
+      const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
+      await sessionManager.requestOpenAIResponse(callId, "Confirmando su cita...", configForTTS);
+    }
+    else {
+      try {
+        serviceInstance.sendEventToFrontend({
+          type: 'openai_requesting_response',
+          callId: callId,
+          timestamp: new Date().toISOString(),
+          source: 'SESSION_MANAGER', // sessionManager makes the call
+          payload: { triggeringTranscript: transcript },
+          logLevel: 'INFO'
+        });
+        sessionManager.requestOpenAIResponse(callId, transcript, call.config);
+      } catch (e: any) {
+        call.callLogger.error(`Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
+        logConversationToRedis(callId, {
+          actor: 'system',
+          type: 'error_message',
+          content: `Failed to request OpenAI response: ${e.message}`
+        }).catch(redisErr => call.callLogger.error(`RedisLog Error (OpenAI request fail): ${redisErr.message}`));
+      }
     }
     call.callLogger.info(`Waiting for OpenAI to generate response (including potential audio).`);
 }
@@ -697,6 +774,7 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       isTtsPlaying: false,
       isOverallTtsResponseActive: false, // Initialize new flag
       fullTtsAudioBuffer: [],
+      pendingToolCall: undefined,
     };
     serviceInstance.activeCalls.set(callId, callResources);
     serviceInstance.currentPrimaryCallId = callId;
@@ -1171,6 +1249,32 @@ export async function _handlePlaybackFinished(serviceInstance: AriClientService,
                 call.isVADBufferingActive = false; // Reset this flag as the TTS-specific VAD session is over.
             }
         }
+
+        if (call.pendingToolCall === "getAvailableSlots") {
+          call.pendingToolCall = undefined;
+          const args = await getSessionParams(callId);
+          if (args) {
+            const slots = await getAvailableSlots(args as any);
+            const toolResult = `Los horarios disponibles son: ${slots.slots.join(', ')}.`;
+            sessionManager.requestOpenAIResponse(callId, toolResult, call.config);
+          } else {
+            call.callLogger.error("Could not retrieve session params to call getAvailableSlots");
+            // Handle error, maybe say something to the user
+          }
+          return;
+        } else if (call.pendingToolCall === "scheduleAppointment") {
+          call.pendingToolCall = undefined;
+          const args = await getSessionParams(callId);
+          if (args) {
+            await scheduleAppointment(args as any);
+            sessionManager.requestOpenAIResponse(callId, "La cita ha sido agendada.", call.config);
+          } else {
+            call.callLogger.error("Could not retrieve session params to schedule appointment");
+            // Handle error, maybe say something to the user
+          }
+          return;
+        }
+
         call.callLogger.info(`Proceeding to standard post-TTS logic to listen for user.`);
     }
 

@@ -161,3 +161,38 @@ export async function getConversationHistory(callId: string): Promise<Conversati
     return null;
   }
 }
+
+export async function saveSessionParams(callId: string, params: Record<string, any>): Promise<void> {
+  if (!redisClient || !redisAvailable) {
+    return;
+  }
+
+  const redisKey = `sessionParams:${callId}`;
+
+  try {
+    const existingParams = await getSessionParams(callId) || {};
+    const newParams = { ...existingParams, ...params };
+    await redisClient.set(redisKey, JSON.stringify(newParams), 'EX', REDIS_CONVERSATION_TTL_SECONDS);
+  } catch (error: any) {
+    console.error(`[RedisClient] Error saving session params to Redis for callId ${callId}:`, error.message);
+  }
+}
+
+export async function getSessionParams(callId: string): Promise<Record<string, any> | null> {
+  if (!redisClient || !redisAvailable) {
+    return null;
+  }
+
+  const redisKey = `sessionParams:${callId}`;
+
+  try {
+    const params = await redisClient.get(redisKey);
+    if (params) {
+      return JSON.parse(params);
+    }
+    return null;
+  } catch (error: any) {
+    console.error(`[RedisClient] Error getting session params from Redis for callId ${callId}:`, error.message);
+    return null;
+  }
+}

@@ -45,9 +45,9 @@ Estas variables se definen en un archivo `.env` en la raíz del directorio `webs
     *   Default: `gpt-4o-mini-realtime-preview-2024-12-17` (controlado por `config.openAIRealtimeAPI.model`).
     *   Ejemplo: `OPENAI_REALTIME_MODEL="gpt-4o-realtime-..."`
 *   **`ACTIVE_AGENT_CONFIG_KEY`**:
-    *   Descripción: Clave que identifica la configuración de agente (escenario) a cargar desde `config/agentConfigs/index.ts`. Determina las instrucciones, herramientas y personalidad del asistente.
+    *   Descripción: Clave que identifica la configuración de agente (escenario) a cargar desde `config/agentConfigs/index.ts`. Determina las instrucciones, herramientas y personalidad del asistente. El primer agente en el array del escenario seleccionado será el que reciba la llamada.
     *   Default: `chatSupervisor` (definido en `config/agentConfigs/index.ts` como `defaultAgentSetKey`).
-    *   Ejemplo: `ACTIVE_AGENT_CONFIG_KEY="customerServiceRetail"`
+    *   Ejemplo: `ACTIVE_AGENT_CONFIG_KEY="medicalAppointment"`
 *   **`OPENAI_RESPONSE_MODALITIES`**:
     *   Descripción: Modalidades de respuesta solicitadas a OpenAI, separadas por coma.
     *   Valores: `audio`, `text`. Combinaciones válidas: `"audio,text"`, `"text"`.
@@ -234,7 +234,7 @@ Estas variables se definen en un archivo `.env` en la raíz del directorio `webs
     *   Default: `undefined` (sin contraseña)
     *   Ejemplo: `REDIS_PASSWORD="yourSecurePassword"`
 *   **`REDIS_CONVERSATION_TTL_SECONDS`**:
-    *   Descripción: Tiempo de vida (TTL) en segundos para los logs de conversación almacenados en Redis.
+    *   Descripción: Tiempo de vida (TTL) en segundos para los logs de conversación y los parámetros de sesión almacenados en Redis.
     *   Default: `3600` (1 hora)
     *   Ejemplo: `REDIS_CONVERSATION_TTL_SECONDS="86400"` (24 horas)
 
