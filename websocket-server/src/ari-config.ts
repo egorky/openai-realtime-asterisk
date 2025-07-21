@@ -212,6 +212,7 @@ export function getCallSpecificConfig(logger: LoggerInstance, channel?: Ari.Chan
       apiKey: getVar(logger, channel, 'AZURE_OPENAI_API_KEY', ''),
       endpoint: getVar(logger, channel, 'AZURE_OPENAI_ENDPOINT', ''),
       deploymentId: getVar(logger, channel, 'AZURE_OPENAI_DEPLOYMENT_ID', ''),
+      apiVersion: getVar(logger, channel, 'AZURE_OPENAI_API_VERSION', ''),
     };
   }
 
@@ -234,13 +235,14 @@ export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 export const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY || "";
 export const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
 export const AZURE_OPENAI_DEPLOYMENT_ID = process.env.AZURE_OPENAI_DEPLOYMENT_ID || "";
+export const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || "";
 export const DEFAULT_RTP_HOST_IP = process.env.RTP_HOST_IP || '127.0.0.1';
 export const MAX_VAD_BUFFER_PACKETS = 200;
 
 if (AI_PROVIDER === "openai" && !OPENAI_API_KEY) {
   console.error("FATAL: AI_PROVIDER is 'openai' but OPENAI_API_KEY environment variable is not set.");
-} else if (AI_PROVIDER === "azure" && (!AZURE_OPENAI_API_KEY || !AZURE_OPENAI_ENDPOINT || !AZURE_OPENAI_DEPLOYMENT_ID)) {
-  console.error("FATAL: AI_PROVIDER is 'azure' but one or more Azure environment variables (API_KEY, ENDPOINT, DEPLOYMENT_ID) are not set.");
+} else if (AI_PROVIDER === "azure" && (!AZURE_OPENAI_API_KEY || !AZURE_OPENAI_ENDPOINT || !AZURE_OPENAI_DEPLOYMENT_ID || !AZURE_OPENAI_API_VERSION)) {
+  console.error("FATAL: AI_PROVIDER is 'azure' but one or more Azure environment variables (API_KEY, ENDPOINT, DEPLOYMENT_ID, API_VERSION) are not set.");
 }
 
 export { baseConfig }; // Exportar baseConfig si es necesario globalmente

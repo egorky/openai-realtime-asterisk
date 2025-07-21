@@ -65,6 +65,10 @@ Estas variables se definen en un archivo `.env` en la raíz del directorio `webs
     *   **Descripción**: **REQUERIDA**. El nombre de tu despliegue (deployment) en Azure OpenAI.
     *   Default: No hay.
     *   Ejemplo: `AZURE_OPENAI_DEPLOYMENT_ID="gpt-4o-realtime"`
+*   **`AZURE_OPENAI_API_VERSION`**:
+    *   **Descripción**: **REQUERIDA**. La versión de la API de Azure OpenAI a utilizar.
+    *   Default: No hay.
+    *   Ejemplo: `AZURE_OPENAI_API_VERSION="2024-05-01-preview"`
 
 ### Configuración General del Agente
 *   **`ACTIVE_AGENT_CONFIG_KEY`**:

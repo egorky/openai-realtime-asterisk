@@ -121,7 +121,9 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       ariClient._onOpenAIError(callId, new Error("Azure OpenAI config not configured on server."));
       return;
     }
-    const client = new OpenAIClient(config.azureOpenAI.endpoint, new AzureKeyCredential(config.azureOpenAI.apiKey));
+    const client = new OpenAIClient(config.azureOpenAI.endpoint, new AzureKeyCredential(config.azureOpenAI.apiKey), {
+      apiVersion: config.azureOpenAI.apiVersion,
+    });
     const { socket } = client.getRealtimeClient(config.azureOpenAI.deploymentId);
     ws = socket;
     sessionLogger.info(`[${callId}] Connecting to Azure OpenAI Realtime WebSocket...`);
