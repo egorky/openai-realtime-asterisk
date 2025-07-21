@@ -111,21 +111,22 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
      sessionLogger.info(`SessionManager: No active OpenAI session found for ${callId}. Creating new session.`);
   }
 
-  let ws;
   const realtimeConfig = config.openAIRealtimeAPI;
   const model = realtimeConfig?.model || "gpt-4o-mini-realtime-preview-2024-12-17";
+  let openai: OpenAI;
 
   if (config.aiProvider === 'azure') {
-    if (!config.azureOpenAI?.endpoint || !config.azureOpenAI?.apiKey || !config.azureOpenAI?.deploymentId) {
+    if (!config.azureOpenAI?.endpoint || !config.azureOpenAI?.apiKey || !config.azureOpenAI?.deploymentId || !config.azureOpenAI?.apiVersion) {
       sessionLogger.error(`SessionManager: CRITICAL - Azure config not found. Cannot start Realtime session for ${callId}.`);
       ariClient._onOpenAIError(callId, new Error("Azure OpenAI config not configured on server."));
       return;
     }
-    const client = new OpenAIClient(config.azureOpenAI.endpoint, new AzureKeyCredential(config.azureOpenAI.apiKey), {
-      apiVersion: config.azureOpenAI.apiVersion,
+    openai = new OpenAI({
+      apiKey: config.azureOpenAI.apiKey,
+      baseURL: `${config.azureOpenAI.endpoint}openai/deployments/${config.azureOpenAI.deploymentId}`,
+      defaultQuery: { 'api-version': config.azureOpenAI.apiVersion },
+      defaultHeaders: { 'api-key': config.azureOpenAI.apiKey },
     });
-    const { socket } = client.getRealtimeClient(config.azureOpenAI.deploymentId);
-    ws = socket;
     sessionLogger.info(`[${callId}] Connecting to Azure OpenAI Realtime WebSocket...`);
   } else {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -134,12 +135,11 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       ariClient._onOpenAIError(callId, new Error("OPENAI_API_KEY not configured on server."));
       return;
     }
-
-    const openai = new OpenAI({ apiKey });
-    const { socket } = openai.realtime.connect({ model });
-    ws = socket;
+    openai = new OpenAI({ apiKey });
     sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket...`);
   }
+
+  const { socket: ws } = openai.realtime.connect({ model });
   const newOpenAISession: OpenAISession = { ws, ariClient, callId, config };
   activeOpenAISessions.set(callId, newOpenAISession);
 
