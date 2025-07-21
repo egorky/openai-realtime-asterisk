@@ -139,6 +139,35 @@ async function _extractSlotAndSchedule(callId: string, transcript: string, call:
   call.pendingToolCall = "scheduleAppointment";
 }
 
+async function _handleToolCall(serviceInstance: AriClientService, callId: string, toolCall: any): Promise<void> {
+  const call = serviceInstance.activeCalls.get(callId);
+  if (!call || call.isCleanupCalled) return;
+
+  const { name, arguments: args } = toolCall.function;
+  call.callLogger.info(`Executing tool: ${name} with args: ${args}`);
+
+  let result;
+  try {
+    const parsedArgs = JSON.parse(args);
+    await saveSessionParams(callId, parsedArgs);
+
+    if (name === 'get_available_slots') {
+      const slots = await getAvailableSlots(parsedArgs);
+      result = `Los horarios disponibles son: ${slots.slots.join(', ')}.`;
+    } else if (name === 'scheduleAppointment') {
+      await scheduleAppointment(parsedArgs);
+      result = "La cita ha sido agendada.";
+    } else {
+      result = `Unknown tool: ${name}`;
+    }
+  } catch (error) {
+    call.callLogger.error(`Error executing tool ${name}:`, error);
+    result = `Error executing tool ${name}: ${error.message}`;
+  }
+
+  sessionManager.requestOpenAIResponse(callId, result, call.config);
+}
+
 export async function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: string, transcript: string): Promise<void> {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
@@ -163,6 +192,15 @@ export async function _onOpenAIFinalResult(serviceInstance: AriClientService, ca
       type: 'transcript',
       content: transcript,
     }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
+
+    const output = (call as any).lastOpenAIResponse?.output;
+    if (output && Array.isArray(output)) {
+      const toolCall = output.find(o => o.type === 'function_call');
+      if (toolCall) {
+        await _handleToolCall(serviceInstance, callId, toolCall);
+        return;
+      }
+    }
 
     const allBranches = [...branches.guayaquil, ...branches.quito];
     const transcriptContainsBranch = allBranches.some(branch => transcript.toLowerCase().includes(branch.toLowerCase()));

@@ -308,7 +308,12 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
           */
           case 'response.done':
             msgSessionLogger.info(`[${callId}] OpenAI response.done. ID: ${serverEvent.response?.id}. Current processingToolCalls: ${session.processingToolCalls || false}`);
-
+            if (session) {
+              const call = (session.ariClient as AriClientService).activeCalls.get(callId);
+              if (call) {
+                (call as any).lastOpenAIResponse = serverEvent.response;
+              }
+            }
             if (session.processingToolCalls) {
               msgSessionLogger.info(`[${callId}] response.done received while/after processing tool calls. Resetting flag, awaiting final LLM response or audio.`);
               session.processingToolCalls = false;
