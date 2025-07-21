@@ -20,6 +20,7 @@ import {
     ASTERISK_ARI_USERNAME,
     ASTERISK_ARI_PASSWORD,
     ASTERISK_ARI_APP_NAME,
+    AI_PROVIDER,
     OPENAI_API_KEY,
     // getCallSpecificConfig // No se usa directamente aquí, sino en onStasisStart
 } from './ari-config';
@@ -58,9 +59,9 @@ import { _fullCleanup } from './ari-cleanup';
 
 dotenv.config(); // Asegurar que dotenv se cargue
 
-if (!OPENAI_API_KEY) {
+if (AI_PROVIDER === 'openai' && !OPENAI_API_KEY) {
     // Usar un console.error aquí porque el logger principal puede no estar completamente inicializado
-    console.error("FATAL: OPENAI_API_KEY environment variable is not set in ari-service.ts.");
+    console.error("FATAL: AI_PROVIDER is 'openai' but OPENAI_API_KEY environment variable is not set in ari-service.ts.");
     // throw new Error("OPENAI_API_KEY is not set. Server cannot start."); // Lanzar error detiene el proceso
 }
 
@@ -75,8 +76,8 @@ export class AriClientService implements AriClientInterface {
   constructor() {
     // Crear el logger principal para este servicio, pasándole `this` para que pueda acceder a los recursos de llamada.
     this.logger = baseModuleLogger.child({ service: 'AriClientService' }, undefined, this);
-    if (!OPENAI_API_KEY) { // Comprobación redundante, pero segura
-        this.logger.error("FATAL: AriClientService constructor - OPENAI_API_KEY is not set.");
+    if (AI_PROVIDER === 'openai' && !OPENAI_API_KEY) { // Comprobación redundante, pero segura
+        this.logger.error("FATAL: AriClientService constructor - AI_PROVIDER is 'openai' but OPENAI_API_KEY is not set.");
     }
     // La carga de baseConfig ahora está en ari-config.ts
     // if (!baseConfig) { throw new Error("Base configuration was not loaded."); }
@@ -371,9 +372,9 @@ export class AriClientService implements AriClientInterface {
 let ariClientServiceInstance: AriClientService | null = null;
 
 export async function initializeAriClient(): Promise<AriClientService> {
-  if (!OPENAI_API_KEY) {
+  if (AI_PROVIDER === 'openai' && !OPENAI_API_KEY) {
       // Usar console.error porque el logger puede no estar listo o la instancia no creada.
-      console.error("FATAL: Cannot initialize AriClientService - OPENAI_API_KEY is not set in initializeAriClient.");
+      console.error("FATAL: Cannot initialize AriClientService - AI_PROVIDER is 'openai' but OPENAI_API_KEY is not set in initializeAriClient.");
       throw new Error("OPENAI_API_KEY is not set. Server cannot start.");
   }
   if (!ariClientServiceInstance) {
