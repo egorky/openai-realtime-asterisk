@@ -126,7 +126,6 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     wsUrl = wsUrl.replace('http', 'ws');
     headers = {
       'api-key': config.azureOpenAI.apiKey,
-      'OpenAI-Beta': 'realtime=v1'
     };
     sessionLogger.info(`[${callId}] Connecting to Azure OpenAI Realtime WebSocket...`);
   } else {
