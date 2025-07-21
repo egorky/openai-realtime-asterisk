@@ -138,7 +138,10 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     }
     const baseUrl = process.env.OPENAI_BASE_URL || "wss://api.openai.com/v1/realtime";
     wsUrl = `${baseUrl}?model=${model}`;
-    headers = { 'Authorization': `Bearer ${apiKey}` };
+    headers = {
+      'Authorization': `Bearer ${apiKey}`,
+      'OpenAI-Beta': 'realtime=v1'
+    };
     sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket...`);
   }
 
