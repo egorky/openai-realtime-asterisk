@@ -217,6 +217,8 @@ async function findNearestStore(zipCode: string | undefined, callLogger: LoggerI
   return results;
 }
 
+import { saveSessionParams } from './redis-client';
+
 // --- Main executeTool Function ---
 export async function executeTool(
   toolCall: OpenAIToolCall,
@@ -242,6 +244,7 @@ export async function executeTool(
 
   try {
     parsedArgs = JSON.parse(toolArgsString);
+    await saveSessionParams(ariCallId, parsedArgs);
   } catch (e: any) {
     callLogger.error(`[ToolExecutor] Fallo al parsear argumentos para herramienta ${toolName}: ${e.message}`);
     resultData = { error: `Formato de argumentos inválido para ${toolName}: ${e.message}` };

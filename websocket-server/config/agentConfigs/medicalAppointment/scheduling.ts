@@ -82,17 +82,29 @@ Tu voz es calmada y profesional.
   },
   {
     "id": "6_offer_slots",
-    "description": "Informar sobre la búsqueda de horarios.",
+    "description": "Informar sobre la búsqueda de horarios y llamar a la herramienta para obtenerlos.",
     "instructions": [
-      "Informa al paciente que buscarás los horarios disponibles y que espere un momento."
+      "Informa al paciente que buscarás los horarios disponibles y que espere un momento.",
+      "Llama a la herramienta `get_available_slots` para obtener los horarios disponibles."
     ],
     "examples": [
       "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor."
     ],
-    "transitions": [{ "next_step": "7_confirm_appointment", "condition": "Se han proporcionado los horarios." }]
+    "transitions": [{ "next_step": "7_present_slots", "condition": "Se han obtenido los horarios." }]
   },
   {
-    "id": "7_confirm_appointment",
+    "id": "7_present_slots",
+    "description": "Presentar los horarios disponibles al paciente.",
+    "instructions": [
+      "Lee los horarios disponibles al paciente y pregúntale cuál prefiere."
+    ],
+    "examples": [
+      "Tenemos los siguientes horarios disponibles: [lista de horarios]. ¿Cuál de estos te gustaría?"
+    ],
+    "transitions": [{ "next_step": "8_confirm_appointment", "condition": "El paciente ha elegido un horario." }]
+  },
+  {
+    "id": "8_confirm_appointment",
     "description": "Confirmar la cita.",
     "instructions": ["Confirma verbalmente que la cita ha sido agendada y despídete."],
     "examples": ["Excelente. Tu cita ha sido agendada para el [fecha] a las [hora]. Gracias por usar nuestro servicio. ¡Adiós!"],
@@ -102,6 +114,30 @@ Tu voz es calmada y profesional.
 `,
 
   tools: [
+    tool({
+      name: 'get_available_slots',
+      description: 'Obtiene los horarios de citas disponibles para una especialidad, ciudad y sucursal específicas.',
+      parameters: {
+        type: 'object',
+        properties: {
+          specialty: { type: 'string', description: 'La especialidad médica.' },
+          city: { type: 'string', description: 'La ciudad para la cita.' },
+          branch: { type: 'string', description: 'La sucursal para la cita.' },
+        },
+        required: ['specialty', 'city', 'branch'],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        // Simulate fetching available slots
+        return {
+          slots: [
+            '2024-07-22 10:00 AM',
+            '2024-07-22 11:00 AM',
+            '2024-07-22 02:00 PM',
+          ],
+        };
+      },
+    }),
     tool({
       name: "scheduleAppointment",
       description: "Agenda una cita médica para un paciente en un horario específico.",

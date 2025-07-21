@@ -116,7 +116,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
   }
 
   const realtimeConfig = config.openAIRealtimeAPI;
-  const baseUrl = "wss://api.openai.com/v1/realtime";
+  const baseUrl = process.env.OPENAI_BASE_URL || "wss://api.openai.com/v1/realtime";
   const model = realtimeConfig?.model || "gpt-4o-mini-realtime-preview-2024-12-17";
   const wsQueryString = `?model=${model}`;
   const wsUrl = baseUrl + wsQueryString;
