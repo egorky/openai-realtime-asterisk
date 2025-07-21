@@ -1,5 +1,6 @@
 import { LoggerInstance, CallSpecificConfig } from './types';
 import { logConversationToRedis } from './redis-client';
+import { getAvailableSlots, scheduleAppointment } from './functionHandlers';
 
 // --- Mock Data ---
 const exampleAccountInfo = {
@@ -309,6 +310,13 @@ export async function executeTool(
         break;
       case 'checkout':
         resultData = await checkout(parsedArgs, callLogger);
+        break;
+
+      case 'get_available_slots':
+        resultData = await getAvailableSlots(parsedArgs);
+        break;
+      case 'scheduleAppointment':
+        resultData = await scheduleAppointment(parsedArgs);
         break;
 
       default:
