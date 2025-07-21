@@ -411,7 +411,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
                 if (isOpen(session.ws)) {
                   const toolResultsEvent = {
                     type: "conversation.item.create",
-                    item: { type: "tool_results", tool_results: [result] }
+                      item: { type: "function_call_output", output: result.output, call_id: result.tool_call_id }
                   };
                   session.ws.send(JSON.stringify(toolResultsEvent));
                   const responseCreateEvent = {
