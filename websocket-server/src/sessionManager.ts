@@ -11,6 +11,7 @@ interface OpenAISession {
   callId: string;
   config: CallSpecificConfig;
   processingToolCalls?: boolean; // Para rastrear si estamos en un ciclo de herramientas
+  functionCallArguments?: string;
 }
 
 const activeOpenAISessions = new Map<string, OpenAISession>();
@@ -387,6 +388,41 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             break;
           case 'response.output_item.done':
             msgSessionLogger.info(`[${callId}] OpenAI response.output_item.done: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
+            break;
+          case 'response.function_call_arguments.delta':
+            if (session) {
+              if (!session.functionCallArguments) {
+                session.functionCallArguments = '';
+              }
+              session.functionCallArguments += serverEvent.delta;
+            }
+            break;
+          case 'response.function_call_arguments.done':
+            if (session) {
+              const toolCall = {
+                function: {
+                  name: serverEvent.name,
+                  arguments: session.functionCallArguments,
+                },
+                call_id: serverEvent.call_id,
+                type: 'function',
+              };
+              executeTool(toolCall as any, callId, msgSessionLogger, session.config).then(result => {
+                if (isOpen(session.ws)) {
+                  const toolResultsEvent = {
+                    type: "conversation.item.create",
+                    item: { type: "tool_results", tool_results: [result] }
+                  };
+                  session.ws.send(JSON.stringify(toolResultsEvent));
+                  const responseCreateEvent = {
+                    type: "response.create",
+                    response: { modalities: session.config.openAIRealtimeAPI?.responseModalities || ["audio", "text"] }
+                  };
+                  session.ws.send(JSON.stringify(responseCreateEvent));
+                }
+              });
+              session.functionCallArguments = '';
+            }
             break;
           case 'rate_limits.updated':
             msgSessionLogger.info(`[${callId}] OpenAI rate_limits.updated:`, serverEvent.rate_limits);
