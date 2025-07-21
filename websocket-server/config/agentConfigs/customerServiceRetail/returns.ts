@@ -81,6 +81,7 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
             type: 'object',
             properties: {},
             required: [],
+            additionalProperties: false,
         },
         execute: async () => ({ success: true }),
     }),
