@@ -11,6 +11,7 @@ interface OpenAISession {
   callId: string;
   config: CallSpecificConfig;
   processingToolCalls?: boolean; // Para rastrear si estamos en un ciclo de herramientas
+  functionCallArguments?: string;
 }
 
 const activeOpenAISessions = new Map<string, OpenAISession>();
@@ -116,7 +117,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
   }
 
   const realtimeConfig = config.openAIRealtimeAPI;
-  const baseUrl = "wss://api.openai.com/v1/realtime";
+  const baseUrl = process.env.OPENAI_BASE_URL || "wss://api.openai.com/v1/realtime";
   const model = realtimeConfig?.model || "gpt-4o-mini-realtime-preview-2024-12-17";
   const wsQueryString = `?model=${model}`;
   const wsUrl = baseUrl + wsQueryString;
@@ -308,7 +309,12 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
           */
           case 'response.done':
             msgSessionLogger.info(`[${callId}] OpenAI response.done. ID: ${serverEvent.response?.id}. Current processingToolCalls: ${session.processingToolCalls || false}`);
-
+            if (session) {
+              const call = (session.ariClient as AriClientService).activeCalls.get(callId);
+              if (call) {
+                (call as any).lastOpenAIResponse = serverEvent.response;
+              }
+            }
             if (session.processingToolCalls) {
               msgSessionLogger.info(`[${callId}] response.done received while/after processing tool calls. Resetting flag, awaiting final LLM response or audio.`);
               session.processingToolCalls = false;
@@ -382,6 +388,41 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             break;
           case 'response.output_item.done':
             msgSessionLogger.info(`[${callId}] OpenAI response.output_item.done: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
+            break;
+          case 'response.function_call_arguments.delta':
+            if (session) {
+              if (!session.functionCallArguments) {
+                session.functionCallArguments = '';
+              }
+              session.functionCallArguments += serverEvent.delta;
+            }
+            break;
+          case 'response.function_call_arguments.done':
+            if (session) {
+              const toolCall = {
+                function: {
+                  name: serverEvent.name,
+                  arguments: session.functionCallArguments,
+                },
+                call_id: serverEvent.call_id,
+                type: 'function',
+              };
+              executeTool(toolCall as any, callId, msgSessionLogger, session.config).then(result => {
+                if (isOpen(session.ws)) {
+                  const toolResultsEvent = {
+                    type: "conversation.item.create",
+                      item: { type: "function_call_output", output: result.output, call_id: result.tool_call_id }
+                  };
+                  session.ws.send(JSON.stringify(toolResultsEvent));
+                  const responseCreateEvent = {
+                    type: "response.create",
+                    response: { modalities: session.config.openAIRealtimeAPI?.responseModalities || ["audio", "text"] }
+                  };
+                  session.ws.send(JSON.stringify(responseCreateEvent));
+                }
+              });
+              session.functionCallArguments = '';
+            }
             break;
           case 'rate_limits.updated':
             msgSessionLogger.info(`[${callId}] OpenAI rate_limits.updated:`, serverEvent.rate_limits);

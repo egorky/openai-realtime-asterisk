@@ -1,5 +1,6 @@
 import { LoggerInstance, CallSpecificConfig } from './types';
 import { logConversationToRedis } from './redis-client';
+import { getAvailableSlots, scheduleAppointment } from './functionHandlers';
 
 // --- Mock Data ---
 const exampleAccountInfo = {
@@ -217,6 +218,8 @@ async function findNearestStore(zipCode: string | undefined, callLogger: LoggerI
   return results;
 }
 
+import { saveSessionParams } from './redis-client';
+
 // --- Main executeTool Function ---
 export async function executeTool(
   toolCall: OpenAIToolCall,
@@ -242,6 +245,7 @@ export async function executeTool(
 
   try {
     parsedArgs = JSON.parse(toolArgsString);
+    await saveSessionParams(ariCallId, parsedArgs);
   } catch (e: any) {
     callLogger.error(`[ToolExecutor] Fallo al parsear argumentos para herramienta ${toolName}: ${e.message}`);
     resultData = { error: `Formato de argumentos inválido para ${toolName}: ${e.message}` };
@@ -306,6 +310,13 @@ export async function executeTool(
         break;
       case 'checkout':
         resultData = await checkout(parsedArgs, callLogger);
+        break;
+
+      case 'get_available_slots':
+        resultData = await getAvailableSlots(parsedArgs);
+        break;
+      case 'scheduleAppointment':
+        resultData = await scheduleAppointment(parsedArgs);
         break;
 
       default:

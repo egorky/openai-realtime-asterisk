@@ -227,7 +227,14 @@ export function sendGenericEventToFrontend(event: any) {
 async function shutdown(signal: string) {
   console.log(`\nReceived ${signal}. Shutting down gracefully...`);
 
-  // 1. Close WebSocket Server
+  // 1. Disconnect ARI Client
+  if (ariClientServiceInstance) {
+    console.log("Shutting down ARI client and all calls...");
+    await ariClientServiceInstance.shutdownAllCalls();
+    console.log("ARI client and calls shut down.");
+  }
+
+  // 2. Close WebSocket Server
   console.log("Closing WebSocket server...");
   await new Promise<void>((resolve, reject) => {
     wss.close((err) => {
@@ -245,7 +252,7 @@ async function shutdown(signal: string) {
     });
   });
 
-  // 2. Close HTTP Server
+  // 3. Close HTTP Server
   console.log("Closing HTTP server...");
   await new Promise<void>((resolve, reject) => {
     server.close((err) => {
@@ -258,13 +265,6 @@ async function shutdown(signal: string) {
       }
     });
   });
-
-  // 3. Disconnect ARI Client
-  if (ariClientServiceInstance) {
-    console.log("Shutting down ARI client and all calls...");
-    await ariClientServiceInstance.shutdownAllCalls();
-    console.log("ARI client and calls shut down.");
-  }
 
   // 4. Disconnect Redis
   console.log("Disconnecting from Redis...");
