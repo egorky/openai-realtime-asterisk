@@ -1,0 +1,11 @@
+packages:
+  - packages/*
+  - examples/*
+  - docs
+
+onlyBuiltDependencies:
+  - '@tailwindcss/oxide'
+  - esbuild
+  - sharp
+
+publishBranch: main
