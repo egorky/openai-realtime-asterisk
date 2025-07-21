@@ -122,7 +122,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       ariClient._onOpenAIError(callId, new Error("Azure OpenAI config not configured on server."));
       return;
     }
-    wsUrl = `${config.azureOpenAI.endpoint}openai/deployments/${config.azureOpenAI.deploymentId}/realtime?api-version=${config.azureOpenAI.apiVersion}`;
+    wsUrl = `${config.azureOpenAI.endpoint}openai/realtime?api-version=${config.azureOpenAI.apiVersion}&deployment=${config.azureOpenAI.deploymentId}`;
     wsUrl = wsUrl.replace('http', 'ws');
     headers = {
       'api-key': config.azureOpenAI.apiKey,
