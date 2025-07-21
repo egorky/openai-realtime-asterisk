@@ -35,15 +35,38 @@ Estas variables se definen en un archivo `.env` en la raíz del directorio `webs
     *   Default: Valor en `config.logging.level` (`info`). `debug` o `silly` son útiles para diagnóstico detallado.
     *   Ejemplo: `LOG_LEVEL="debug"`
 
-### Configuración de OpenAI
+### Configuración del Proveedor de IA
+*   **`AI_PROVIDER`**:
+    *   Descripción: Selecciona el proveedor de servicios de IA a utilizar.
+    *   Valores: `"openai"`, `"azure"`.
+    *   Default: `"openai"`.
+    *   Ejemplo: `AI_PROVIDER="azure"`
+
+### Configuración de OpenAI (si `AI_PROVIDER="openai"`)
 *   **`OPENAI_API_KEY`**:
     *   **Descripción**: **REQUERIDA**. Tu clave API secreta de OpenAI.
     *   Default: No hay (la aplicación fallará si no se provee).
     *   Ejemplo: `OPENAI_API_KEY="sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
 *   **`OPENAI_REALTIME_MODEL`**:
     *   **Descripción**: **REQUERIDA**. El ID del modelo Realtime de OpenAI a utilizar.
-    *   Default: `gpt-4o-mini-realtime-preview-2024-12-17` (controlado por `config.openAIRealtimeAPI.model`).
+    *   Default: `gpt-4o-mini-realtime-preview-2024-12-17`.
     *   Ejemplo: `OPENAI_REALTIME_MODEL="gpt-4o-realtime-..."`
+
+### Configuración de Azure OpenAI (si `AI_PROVIDER="azure"`)
+*   **`AZURE_OPENAI_API_KEY`**:
+    *   **Descripción**: **REQUERIDA**. Tu clave API para el servicio Azure OpenAI.
+    *   Default: No hay.
+    *   Ejemplo: `AZURE_OPENAI_API_KEY="xxxxxxxxxxxxxxxxxxxxxxxxxxxx"`
+*   **`AZURE_OPENAI_ENDPOINT`**:
+    *   **Descripción**: **REQUERIDA**. El endpoint de tu recurso de Azure OpenAI.
+    *   Default: No hay.
+    *   Ejemplo: `AZURE_OPENAI_ENDPOINT="https://tu-recurso.openai.azure.com/"`
+*   **`AZURE_OPENAI_DEPLOYMENT_ID`**:
+    *   **Descripción**: **REQUERIDA**. El nombre de tu despliegue (deployment) en Azure OpenAI.
+    *   Default: No hay.
+    *   Ejemplo: `AZURE_OPENAI_DEPLOYMENT_ID="gpt-4o-realtime"`
+
+### Configuración General del Agente
 *   **`ACTIVE_AGENT_CONFIG_KEY`**:
     *   Descripción: Clave que identifica la configuración de agente (escenario) a cargar desde `config/agentConfigs/index.ts`. Determina las instrucciones, herramientas y personalidad del asistente. El primer agente en el array del escenario seleccionado será el que reciba la llamada.
     *   Default: `chatSupervisor` (definido en `config/agentConfigs/index.ts` como `defaultAgentSetKey`).

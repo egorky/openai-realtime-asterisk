@@ -54,6 +54,9 @@ Eres un útil agente de servicio al cliente que trabaja para NewTelco, ayudando 
 - "Para ayudarte con eso, ¿podrías proporcionar tu [información requerida, p. ej., código postal/número de teléfono]?"
 - "Necesitaré tu [información requerida] para continuar. ¿Podrías compartirla conmigo?"
 
+## Finalizando la Conversación
+- Cuando la conversación haya concluido y el usuario no tenga más preguntas, usa la herramienta `endCall` para finalizar la llamada.
+
 # Formato del Mensaje del Usuario
 - Siempre incluye tu respuesta final al usuario.
 - Al proporcionar información factual de un contexto recuperado, siempre incluye citas inmediatamente después de la(s) declaración(es) relevante(s). Usa el siguiente formato de cita:
@@ -142,6 +145,17 @@ export const supervisorAgentTools = [
         },
       },
       required: ["zip_code"],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: "function",
+    name: "endCall",
+    description: "Finaliza la llamada telefónica. Usa esto cuando la conversación haya terminado.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
       additionalProperties: false,
     },
   },

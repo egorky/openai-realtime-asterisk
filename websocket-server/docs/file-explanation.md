@@ -75,43 +75,43 @@ Este documento detalla el propósito y la funcionalidad de cada archivo principa
         *   `stop()`: Cierra el socket UDP.
 
 *   **`sessionManager.ts`**:
-    *   **Propósito**: Abstraer la comunicación WebSocket con la API Realtime de OpenAI.
+    *   **Propósito**: Abstraer la comunicación WebSocket con el proveedor de IA (OpenAI o Azure OpenAI).
     *   **Funciones Clave**:
-        *   `startOpenAISession()`: Establece (o reutiliza) una conexión WebSocket con la API Realtime de OpenAI. Envía la configuración inicial de la sesión (formato de audio, voz, instrucciones, herramientas).
-        *   Maneja los eventos del ciclo de vida del WebSocket de OpenAI (`open`, `message`, `error`, `close`).
-        *   Al recibir mensajes de OpenAI (`ws.on('message')`):
+        *   `startOpenAISession()`: Basado en la variable de entorno `AI_PROVIDER`, establece una conexión WebSocket con la API Realtime de OpenAI o Azure OpenAI. Utiliza los SDK `@openai/api` o `@azure/openai` correspondientes.
+        *   Maneja los eventos del ciclo de vida del WebSocket (`open`, `message`, `error`, `close`).
+        *   Al recibir mensajes del proveedor de IA (`ws.on('message')`):
             *   Parsea el JSON del evento.
             *   Identifica el tipo de evento (`session.created`, `response.delta`, `response.audio.delta`, `response.done`, `tool_calls`, `error`, etc.).
-            *   Invoca los callbacks correspondientes en la instancia de `AriClientService` (ej. `_onOpenAIInterimResult`, `_onOpenAIAudioChunk`, `_onOpenAIError`, `_onOpenAIFinalResult`).
+            *   Invoca los callbacks correspondientes en la instancia de `AriClientService`.
             *   Si se reciben `tool_calls`, invoca `executeTool()` del `toolExecutor.ts`.
-        *   `sendAudioToOpenAI()`: Envía un buffer de audio (codificado en base64) a OpenAI como un evento `input_audio_buffer.append`.
-        *   `requestOpenAIResponse()`: Envía la transcripción final del usuario a OpenAI (evento `conversation.item.create`) y solicita una respuesta de la IA (evento `response.create`).
-        *   `stopOpenAISession()`: Cierra la conexión WebSocket con OpenAI.
-        *   `sendSessionUpdateToOpenAI()`: Envía una actualización de configuración (ej. cambio de prompt, voz TTS, herramientas) a una sesión de OpenAI activa (evento `session.update`).
+        *   `sendAudioToOpenAI()`: Envía un buffer de audio (codificado en base64) al proveedor de IA.
+        *   `requestOpenAIResponse()`: Envía la transcripción final del usuario al proveedor de IA y solicita una respuesta.
+        *   `stopOpenAISession()`: Cierra la conexión WebSocket.
+        *   `sendSessionUpdateToOpenAI()`: Envía una actualización de configuración (ej. cambio de prompt, voz TTS, herramientas) a una sesión activa.
         *   Mantiene un mapa de sesiones activas (`activeOpenAISessions`).
 
-*   **`async-transcriber.ts`**:
-    *   **Propósito**: Proporcionar una funcionalidad de Speech-to-Text (STT) asíncrona como fallback si la API Realtime de OpenAI no devuelve una transcripción.
+*   **`ari-config.ts`**:
+    *   **Propósito**: Cargar y gestionar todas las configuraciones de la aplicación desde variables de entorno y el archivo `config/default.json`.
     *   **Funciones Clave**:
-        *   `transcribeAudioAsync()`: Función principal que recibe un buffer de audio y la configuración.
-            *   Selecciona el proveedor de STT (`openai_whisper_api`, `google_speech_v1`, `vosk`) basado en la configuración.
-            *   Llama a la función específica del proveedor.
-            *   Registra la transcripción resultante o un error en Redis usando `logConversationToRedis`.
-        *   `transcribeWithOpenAIWhisperAPI()`: Envía el audio a la API Whisper de OpenAI.
-        *   `transcribeWithGoogleSpeechV1()`: Envía el audio a la API Google Cloud Speech-to-Text.
-        *   (Llamará a `transcribeWithVosk` del `vosk-transcriber.ts` cuando se implemente).
-        *   Maneja la creación y eliminación de archivos temporales si es necesario para las APIs.
+        *   `getCallSpecificConfig()`: Crea una configuración específica para cada llamada, fusionando la configuración base con las variables de entorno.
+        *   Carga las variables del proveedor de IA (`AI_PROVIDER`) y las credenciales tanto para OpenAI (`OPENAI_API_KEY`) como para Azure OpenAI (`AZURE_OPENAI_API_KEY`, `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT_ID`).
+        *   Exporta constantes de configuración utilizadas en toda la aplicación.
 
-*   **`vosk-transcriber.ts`** (Nuevo):
-    *   **Propósito**: Implementar la lógica de transcripción utilizando un servidor VOSK offline a través de WebSockets.
+*   **`toolExecutor.ts`**:
+    *   **Propósito**: Ejecutar las "herramientas" (tools/functions) que la IA puede solicitar.
     *   **Funciones Clave**:
-        *   `transcribeWithVosk()`:
-            *   Establece una conexión WebSocket con el servidor VOSK especificado en `VOSK_SERVER_URL`.
-            *   Envía la configuración inicial al servidor VOSK (ej. `sample_rate`).
-            *   Envía el buffer de audio al servidor VOSK. (Nota: puede requerir conversión de uLaw a PCM lineal si el audio interno es uLaw).
-            *   Envía un mensaje de fin de stream (`{"eof" : 1}`).
-            *   Recibe y procesa los mensajes JSON del servidor VOSK, extrayendo transcripciones parciales y finales.
-            *   Retorna la transcripción final.
+        *   `executeTool()`:
+            *   Recibe un objeto `OpenAIToolCall` de `sessionManager.ts`.
+            *   Busca el manejador de la herramienta correspondiente en `functionHandlers.ts`.
+            *   **Caso Especial `endCall`**: Si la herramienta es `endCall`, invoca `ariClientServiceInstance.endCall(ariCallId)` para terminar la llamada de Asterisk.
+            *   Ejecuta la lógica de la herramienta y devuelve un `ToolResultPayload` con el resultado, que `sessionManager.ts` envía de vuelta a la IA.
+
+*   **`functionHandlers.ts`**:
+    *   **Propósito**: Definir los esquemas (schemas) y los manejadores de las "herramientas" (tools) que la IA puede invocar.
+    *   **Funcionalidad**:
+        *   Exporta un array de objetos `FunctionHandler`.
+        *   Incluye la definición del schema para la herramienta `endCall`, que permite a la IA finalizar la llamada.
+        *   Las implementaciones reales de las herramientas se encuentran en `toolExecutor.ts`.
 
 *   **`redis-client.ts`**:
     *   **Propósito**: Gestionar la conexión con un servidor Redis y proporcionar funciones para registrar el historial de la conversación.

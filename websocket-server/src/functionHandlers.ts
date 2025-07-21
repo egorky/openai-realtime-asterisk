@@ -56,4 +56,21 @@ export async function scheduleAppointment(args: { identificationNumber: string; 
   return { success: true };
 }
 
+functions.push({
+  schema: {
+    name: "endCall",
+    type: "function",
+    description: "Ends the phone call. Use this when the conversation is over.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
+    },
+  },
+  handler: async () => {
+    // The actual logic is handled in toolExecutor.ts by detecting the function name.
+    return JSON.stringify({ success: true, message: "Call termination initiated." });
+  },
+});
+
 export default functions;
