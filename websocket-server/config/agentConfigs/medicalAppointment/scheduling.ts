@@ -85,7 +85,7 @@ Tu voz es calmada y profesional.
     "description": "Informar sobre la búsqueda de horarios y llamar a la herramienta para obtenerlos.",
     "instructions": [
       "Informa al paciente que buscarás los horarios disponibles y que espere un momento.",
-      "Llama a la herramienta `get_available_slots` para obtener los horarios disponibles."
+      "Llama a la herramienta 'get_available_slots' para obtener los horarios disponibles."
     ],
     "examples": [
       "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor."
