@@ -113,7 +113,8 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
 
   const realtimeConfig = config.openAIRealtimeAPI;
   const model = realtimeConfig?.model || "gpt-4o-mini-realtime-preview-2024-12-17";
-  let openai: OpenAI;
+  let wsUrl: string;
+  let headers: { [key: string]: string };
 
   if (config.aiProvider === 'azure') {
     if (!config.azureOpenAI?.endpoint || !config.azureOpenAI?.apiKey || !config.azureOpenAI?.deploymentId || !config.azureOpenAI?.apiVersion) {
@@ -121,12 +122,9 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       ariClient._onOpenAIError(callId, new Error("Azure OpenAI config not configured on server."));
       return;
     }
-    openai = new OpenAI({
-      apiKey: config.azureOpenAI.apiKey,
-      baseURL: `${config.azureOpenAI.endpoint}openai/deployments/${config.azureOpenAI.deploymentId}`,
-      defaultQuery: { 'api-version': config.azureOpenAI.apiVersion },
-      defaultHeaders: { 'api-key': config.azureOpenAI.apiKey },
-    });
+    wsUrl = `${config.azureOpenAI.endpoint}openai/deployments/${config.azureOpenAI.deploymentId}/realtime?api-version=${config.azureOpenAI.apiVersion}`;
+    wsUrl = wsUrl.replace('http', 'ws');
+    headers = { 'api-key': config.azureOpenAI.apiKey };
     sessionLogger.info(`[${callId}] Connecting to Azure OpenAI Realtime WebSocket...`);
   } else {
     const apiKey = process.env.OPENAI_API_KEY;
@@ -135,11 +133,13 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
       ariClient._onOpenAIError(callId, new Error("OPENAI_API_KEY not configured on server."));
       return;
     }
-    openai = new OpenAI({ apiKey });
+    const baseUrl = process.env.OPENAI_BASE_URL || "wss://api.openai.com/v1/realtime";
+    wsUrl = `${baseUrl}?model=${model}`;
+    headers = { 'Authorization': `Bearer ${apiKey}` };
     sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket...`);
   }
 
-  const { socket: ws } = openai.realtime.connect({ model });
+  const ws = new WebSocket(wsUrl, { headers });
   const newOpenAISession: OpenAISession = { ws, ariClient, callId, config };
   activeOpenAISessions.set(callId, newOpenAISession);
 

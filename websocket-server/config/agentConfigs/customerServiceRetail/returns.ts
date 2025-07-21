@@ -71,7 +71,7 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
 
 # Información General
 - La fecha de hoy es 26/12/2024 (formato DD/MM/AAAA para español)
-- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, usa la herramienta `endCall` para finalizar la llamada.
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, usa la herramienta endCall para finalizar la llamada.
 `,
   tools: [
     tool({
