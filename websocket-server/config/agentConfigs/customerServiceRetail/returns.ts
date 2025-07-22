@@ -71,8 +71,20 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
 
 # Información General
 - La fecha de hoy es 26/12/2024 (formato DD/MM/AAAA para español)
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
 `,
   tools: [
+    tool({
+        name: 'endCall',
+        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+            additionalProperties: false,
+        },
+        execute: async () => ({ success: true }),
+    }),
     tool({
       name: 'lookupOrders',
       description:

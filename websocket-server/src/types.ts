@@ -134,7 +134,16 @@ export interface RuntimeConfig {
   logging: LoggingConfig;
 }
 
+export interface AzureOpenAIConfig {
+  apiKey?: string;
+  endpoint?: string;
+  deploymentId?: string;
+  apiVersion?: string;
+}
+
 export interface CallSpecificConfig extends RuntimeConfig {
+  aiProvider?: 'openai' | 'azure';
+  azureOpenAI?: AzureOpenAIConfig;
 }
 
 // Definition for a generic logger instance

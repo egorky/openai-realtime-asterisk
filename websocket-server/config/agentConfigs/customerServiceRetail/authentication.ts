@@ -197,7 +197,8 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
     "description": "Después de compartir la divulgación y la oferta, proceder a ayudar con la solicitud del usuario.",
     "instructions": [
       "Muéstrale al usuario que recuerdas su solicitud original.",
-      "Usa tu juicio para determinar la mejor manera de ayudar con su solicitud, siendo transparente sobre lo que no sabes y con lo que no puedes ayudar."
+      "Usa tu juicio para determinar la mejor manera de ayudar con su solicitud, siendo transparente sobre lo que no sabes y con lo que no puedes ayudar.",
+      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada."
     ],
     "examples": [
       "Genial, ahora me encantaría ayudarte con {intención original del usuario}."
@@ -211,6 +212,17 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
 `,
 
   tools: [
+    tool({
+        name: 'endCall',
+        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+            additionalProperties: false,
+        },
+        execute: async () => ({ success: true }),
+    }),
     tool({
       name: "authenticate_user_information",
       description:

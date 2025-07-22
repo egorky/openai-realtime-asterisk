@@ -196,3 +196,53 @@ export const defaultAgentSetKey = 'nombreDelEscenario';
 ```
 
 Con estos pasos, has creado, configurado y activado un nuevo escenario de agente de voz completamente funcional.
+
+## 6. Usando Herramientas (Tools)
+
+Las **herramientas** (tools) son funciones que los agentes de IA pueden invocar para interactuar con sistemas externos, realizar acciones o recuperar información que no está en sus instrucciones.
+
+### ¿Cómo funcionan?
+
+1.  **Definición**: Cada herramienta se define con un "schema" en `websocket-server/src/functionHandlers.ts`. Este schema le dice a la IA qué hace la herramienta, qué parámetros necesita y cómo se llaman.
+2.  **Invocación**: Durante la conversación, si el agente determina que necesita usar una herramienta para responder al usuario, en lugar de generar texto, genera una "llamada a herramienta" (tool call).
+3.  **Ejecución**: El sistema (`toolExecutor.ts`) intercepta esta llamada, ejecuta la lógica de la herramienta correspondiente y devuelve el resultado a la IA.
+4.  **Respuesta Final**: Con el resultado de la herramienta, la IA genera la respuesta final en lenguaje natural para el usuario.
+
+### Ejemplo: La Herramienta `endCall`
+
+Un problema común es cómo hacer que el agente de IA termine la llamada de forma proactiva. La herramienta `endCall` soluciona esto.
+
+**Propósito**: Permitir que el agente finalice la llamada de Asterisk cuando la conversación ha concluido.
+
+**Uso en las Instrucciones del Agente**:
+
+Para que un agente pueda usar esta herramienta, debes incluirla en su lista de `tools` y, lo más importante, explicarle en sus `instructions` cuándo debe usarla.
+
+**Ejemplo de instrucción en un agente:**
+
+```typescript
+// ... dentro de la definición de un RealtimeAgent
+instructions: `
+  # Flujo de Conversación
+  - Ayuda al usuario con sus preguntas.
+  - Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, di "Gracias por llamar, adiós." e invoca la herramienta 'endCall' para finalizar la llamada.
+`,
+tools: [
+  // ... otras herramientas
+  tool({
+    name: 'endCall',
+    description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+    parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+    },
+    execute: async () => ({ success: true }),
+  })
+],
+// ...
+```
+
+Al hacer esto, el agente entenderá que después de despedirse, debe invocar `endCall`, lo que hará que el `toolExecutor` ejecute la lógica para colgar la llamada de Asterisk.
+
+Para una lista detallada de todas las herramientas disponibles y su funcionamiento, consulta el documento [Herramientas Disponibles](./tools-explained.md).

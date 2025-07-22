@@ -3,6 +3,8 @@ import functions from "./functionHandlers";
 import { CallSpecificConfig, OpenAIRealtimeAPIConfig, AriClientInterface } from "./types";
 import { AriClientService } from "./ari-service"; // Apuntar a la nueva ubicación de la clase
 import { executeTool, OpenAIToolCall, ToolResultPayload } from './toolExecutor';
+import OpenAI from "openai";
+import { OpenAIClient, AzureKeyCredential } from "@azure/openai";
 
 
 interface OpenAISession {
@@ -109,30 +111,37 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
      sessionLogger.info(`SessionManager: No active OpenAI session found for ${callId}. Creating new session.`);
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
-  if (!apiKey) {
-    sessionLogger.error(`SessionManager: CRITICAL - OPENAI_API_KEY not found. Cannot start Realtime session for ${callId}.`);
-    ariClient._onOpenAIError(callId, new Error("OPENAI_API_KEY not configured on server."));
-    return;
-  }
-
   const realtimeConfig = config.openAIRealtimeAPI;
-  const baseUrl = process.env.OPENAI_BASE_URL || "wss://api.openai.com/v1/realtime";
   const model = realtimeConfig?.model || "gpt-4o-mini-realtime-preview-2024-12-17";
-  const wsQueryString = `?model=${model}`;
-  const wsUrl = baseUrl + wsQueryString;
-  const headers = { 'Authorization': `Bearer ${apiKey}`, 'OpenAI-Beta': 'realtime=v1' };
+  let wsUrl: string;
+  let headers: { [key: string]: string };
 
-  sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket: ${wsUrl.split('?')[0]}?model=...`);
-  (ariClient as AriClientService).sendEventToFrontend({ // Cast to access sendEventToFrontend
-    type: 'openai_session_starting',
-    callId: callId,
-    timestamp: new Date().toISOString(),
-    source: 'SESSION_MANAGER',
-    payload: { wsUrl: wsUrl.split('?')[0] + '?model=...' },
-    logLevel: 'INFO'
-  });
-  // sessionLogger.debug(`[${callId}] OpenAI Realtime WS Headers:`, headers);
+  if (config.aiProvider === 'azure') {
+    if (!config.azureOpenAI?.endpoint || !config.azureOpenAI?.apiKey || !config.azureOpenAI?.deploymentId || !config.azureOpenAI?.apiVersion) {
+      sessionLogger.error(`SessionManager: CRITICAL - Azure config not found. Cannot start Realtime session for ${callId}.`);
+      ariClient._onOpenAIError(callId, new Error("Azure OpenAI config not configured on server."));
+      return;
+    }
+    const endpoint = config.azureOpenAI.endpoint!.replace(/\/$/, "");
+    wsUrl = `${endpoint}/openai/realtime?api-version=${config.azureOpenAI.apiVersion}&deployment=${config.azureOpenAI.deploymentId}`;
+    wsUrl = wsUrl.replace('http', 'ws');
+    headers = { 'api-key': config.azureOpenAI.apiKey! };
+    sessionLogger.info(`[${callId}] Connecting to Azure OpenAI Realtime WebSocket with URL: ${wsUrl}`);
+  } else {
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      sessionLogger.error(`SessionManager: CRITICAL - OPENAI_API_KEY not found. Cannot start Realtime session for ${callId}.`);
+      ariClient._onOpenAIError(callId, new Error("OPENAI_API_KEY not configured on server."));
+      return;
+    }
+    const baseUrl = process.env.OPENAI_BASE_URL || "wss://api.openai.com/v1/realtime";
+    wsUrl = `${baseUrl}?model=${model}`;
+    headers = {
+      'Authorization': `Bearer ${apiKey}`,
+      'OpenAI-Beta': 'realtime=v1'
+    };
+    sessionLogger.info(`[${callId}] Connecting to OpenAI Realtime WebSocket...`);
+  }
 
   const ws = new WebSocket(wsUrl, { headers });
   const newOpenAISession: OpenAISession = { ws, ariClient, callId, config };
@@ -153,6 +162,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     if (ws.readyState === WebSocket.OPEN) {
       try {
         const eventString = JSON.stringify(sessionUpdateEvent);
+        console.log(`[${callId}] Sending to AI:`, eventString);
         ws.send(eventString);
         // Check if sessionLogger has isLevelEnabled (i.e., it's our custom logger)
         if (typeof (sessionLogger as any).isLevelEnabled === 'function' && (sessionLogger as any).isLevelEnabled('debug')) {
@@ -212,6 +222,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
         } else { // Loguear de forma más concisa si no es debug
           msgSessionLogger.info(`[${callId}] OpenAI Parsed Server Event Type: ${serverEvent.type}`);
         }
+        console.log(`[${callId}] Received from AI:`, JSON.stringify(serverEvent, null, 2));
 
         switch (serverEvent.type) {
           case 'session.created':

@@ -204,7 +204,24 @@ export function getCallSpecificConfig(logger: LoggerInstance, channel?: Ari.Chan
   oaiConf.responseModalities = finalModalities;
 
   if (oaiConf.tools === undefined) { oaiConf.tools = []; }
-  if (!process.env.OPENAI_API_KEY) { logger.error("CRITICAL: OPENAI_API_KEY is not set."); }
+
+  // Add AI provider information to the config
+  callConfig.aiProvider = getVar(logger, channel, 'AI_PROVIDER', 'openai') as 'openai' | 'azure';
+  if (callConfig.aiProvider === 'azure') {
+    callConfig.azureOpenAI = {
+      apiKey: getVar(logger, channel, 'AZURE_OPENAI_API_KEY', ''),
+      endpoint: getVar(logger, channel, 'AZURE_OPENAI_ENDPOINT', ''),
+      deploymentId: getVar(logger, channel, 'AZURE_OPENAI_DEPLOYMENT_ID', ''),
+      apiVersion: getVar(logger, channel, 'AZURE_OPENAI_API_VERSION', ''),
+    };
+  }
+
+  if (callConfig.aiProvider === 'openai' && !process.env.OPENAI_API_KEY) {
+    logger.error("CRITICAL: AI_PROVIDER is 'openai' but OPENAI_API_KEY is not set.");
+  } else if (callConfig.aiProvider === 'azure' && (!callConfig.azureOpenAI?.apiKey || !callConfig.azureOpenAI?.endpoint || !callConfig.azureOpenAI?.deploymentId)) {
+    logger.error("CRITICAL: AI_PROVIDER is 'azure' but one or more Azure environment variables are not set.");
+  }
+
   return callConfig;
 }
 
@@ -213,14 +230,19 @@ export const ASTERISK_ARI_URL = process.env.ASTERISK_ARI_URL || 'http://localhos
 export const ASTERISK_ARI_USERNAME = process.env.ASTERISK_ARI_USERNAME || 'asterisk';
 export const ASTERISK_ARI_PASSWORD = process.env.ASTERISK_ARI_PASSWORD || 'asterisk';
 export const ASTERISK_ARI_APP_NAME = process.env.ASTERISK_ARI_APP_NAME || 'openai-ari-app';
-export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || ""; // Asegúrate de que esto se maneje de forma segura.
+export const AI_PROVIDER = process.env.AI_PROVIDER || "openai";
+export const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
+export const AZURE_OPENAI_API_KEY = process.env.AZURE_OPENAI_API_KEY || "";
+export const AZURE_OPENAI_ENDPOINT = process.env.AZURE_OPENAI_ENDPOINT || "";
+export const AZURE_OPENAI_DEPLOYMENT_ID = process.env.AZURE_OPENAI_DEPLOYMENT_ID || "";
+export const AZURE_OPENAI_API_VERSION = process.env.AZURE_OPENAI_API_VERSION || "";
 export const DEFAULT_RTP_HOST_IP = process.env.RTP_HOST_IP || '127.0.0.1';
 export const MAX_VAD_BUFFER_PACKETS = 200;
 
-if (!OPENAI_API_KEY) {
-  // Idealmente, el logger ya estaría inicializado para usarlo aquí.
-  // Por ahora, un console.error si el logger no está disponible en este punto.
-  console.error("FATAL: OPENAI_API_KEY environment variable is not set.");
+if (AI_PROVIDER === "openai" && !OPENAI_API_KEY) {
+  console.error("FATAL: AI_PROVIDER is 'openai' but OPENAI_API_KEY environment variable is not set.");
+} else if (AI_PROVIDER === "azure" && (!AZURE_OPENAI_API_KEY || !AZURE_OPENAI_ENDPOINT || !AZURE_OPENAI_DEPLOYMENT_ID || !AZURE_OPENAI_API_VERSION)) {
+  console.error("FATAL: AI_PROVIDER is 'azure' but one or more Azure environment variables (API_KEY, ENDPOINT, DEPLOYMENT_ID, API_VERSION) are not set.");
 }
 
 export { baseConfig }; // Exportar baseConfig si es necesario globalmente

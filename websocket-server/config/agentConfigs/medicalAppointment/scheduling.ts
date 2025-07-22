@@ -42,6 +42,7 @@ Tu voz es calmada y profesional.
 - Si la intención es agendar, sigue los estados de conversación para agendar la cita.
 - Verifica la información proporcionada por el usuario repitiéndola.
 - Utiliza las herramientas proporcionadas para obtener información y agendar la cita.
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
 
 # Estados de Conversación
 [
@@ -114,6 +115,17 @@ Tu voz es calmada y profesional.
 `,
 
   tools: [
+    tool({
+        name: 'endCall',
+        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+            additionalProperties: false,
+        },
+        execute: async () => ({ success: true }),
+    }),
     tool({
       name: 'get_available_slots',
       description: 'Obtiene los horarios de citas disponibles para una especialidad, ciudad y sucursal específicas.',

@@ -56,6 +56,7 @@ Eres un útil agente de servicio al cliente que trabaja para NewTelco, ayudando 
 
 # Formato del Mensaje del Usuario
 - Siempre incluye tu respuesta final al usuario.
+- Cuando la conversación haya concluido y el usuario no tenga más preguntas, DEBES usar la herramienta endCall para finalizar la llamada.
 - Al proporcionar información factual de un contexto recuperado, siempre incluye citas inmediatamente después de la(s) declaración(es) relevante(s). Usa el siguiente formato de cita:
     - Para una única fuente: [NOMBRE](ID)
     - Para múltiples fuentes: [NOMBRE](ID), [NOMBRE](ID)
@@ -142,6 +143,17 @@ export const supervisorAgentTools = [
         },
       },
       required: ["zip_code"],
+      additionalProperties: false,
+    },
+  },
+  {
+    type: "function",
+    name: "endCall",
+    description: "Finaliza la llamada telefónica. Usa esto cuando la conversación haya terminado.",
+    parameters: {
+      type: "object",
+      properties: {},
+      required: [],
       additionalProperties: false,
     },
   },

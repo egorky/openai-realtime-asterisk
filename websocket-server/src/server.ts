@@ -18,10 +18,11 @@ dotenv.config();
 const PORT = parseInt(process.env.PORT || "8081", 10);
 const HOST_IP = process.env.WEBSOCKET_SERVER_HOST_IP || '0.0.0.0';
 const PUBLIC_URL = process.env.PUBLIC_URL || "";
+const AI_PROVIDER = process.env.AI_PROVIDER || "openai";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 
-if (!OPENAI_API_KEY) {
-  console.error("OPENAI_API_KEY environment variable is required");
+if (AI_PROVIDER === 'openai' && !OPENAI_API_KEY) {
+  console.error("AI_PROVIDER is 'openai' but OPENAI_API_KEY environment variable is required");
   process.exit(1);
 }
 

@@ -28,6 +28,7 @@ Tu voz es calmada y profesional.
 - Sigue los estados de conversación para reprogramar la cita.
 - Reutiliza la herramienta 'getExistingAppointments' para encontrar la cita del paciente.
 - Ofrece nuevos horarios y confirma la reprogramación.
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
 
 # Estados de Conversación
 [
@@ -70,6 +71,17 @@ Tu voz es calmada y profesional.
 `,
 
   tools: [
+    tool({
+        name: 'endCall',
+        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+        parameters: {
+            type: 'object',
+            properties: {},
+            required: [],
+            additionalProperties: false,
+        },
+        execute: async () => ({ success: true }),
+    }),
     tool({
       name: "getExistingAppointments",
       description: "Obtiene las citas programadas para un paciente.",
