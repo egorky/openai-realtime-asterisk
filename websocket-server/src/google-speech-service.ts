@@ -56,6 +56,7 @@ class GoogleSpeechService {
                     if (transcript) {
                         this.logger.debug(`[${isFinal ? 'FINAL' : 'INTERIM'}] Google Speech transcript: "${transcript}"`);
                         if (isFinal && transcript.trim()) {
+                            this.logger.info(`[Async STT] Final transcript received: "${transcript}"`);
                             logConversationToRedis(this.callId, {
                                 actor: 'caller',
                                 type: 'async_transcript_result',
