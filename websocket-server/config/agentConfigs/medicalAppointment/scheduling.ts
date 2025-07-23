@@ -51,7 +51,7 @@ Tu voz es calmada y profesional.
     "description": "Saludar al paciente y ofrecer ayuda.",
     "instructions": ["Da una cálida bienvenida y pregunta cómo puedes ayudar."],
     "examples": ["Hola, bienvenido al sistema de agendamiento de citas médicas. ¿En qué puedo ayudarte hoy?"],
-    "transitions": [{ "next_step": "2_get_identification", "condition": "El usuario quiere agendar una cita." }]
+    "transitions": [{ "next_step": "2_get_identification", "condition": "Después de que el usuario responda afirmativamente a la oferta de ayuda." }]
   },
   {
     "id": "2_get_identification",
