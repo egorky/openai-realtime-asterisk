@@ -161,6 +161,7 @@ export interface LoggerInstance {
 export interface AriClientInterface {
   logger: LoggerInstance; // Expose logger for sessionManager if needed
   _onOpenAISpeechStarted: (callId: string) => void;
+  _onOpenAISpeechStopped: (callId: string) => void;
   _onOpenAIInterimResult: (callId: string, transcript: string) => void;
   _onOpenAIFinalResult: (callId: string, transcript: string) => void;
   _onOpenAIError: (callId: string, error: any) => void;

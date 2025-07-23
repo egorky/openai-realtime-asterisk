@@ -34,6 +34,7 @@ import {
     _onChannelTalkingFinished,
     _handlePlaybackFinished, // Este es interno, pero la clase lo llama
     _onOpenAISpeechStarted,
+    _onOpenAISpeechStopped,
     _onOpenAIInterimResult,
     _onOpenAIFinalResult,
     _onOpenAIAudioChunk,
@@ -329,6 +330,7 @@ export class AriClientService implements AriClientInterface {
   // Estos son llamados por sessionManager. SessionManager tiene una referencia a AriClientService (this).
   // Por lo tanto, estos métodos en AriClientService llaman a las funciones correspondientes en ari-events.ts, pasándoles `this`.
   public _onOpenAISpeechStarted(callId: string): void { _onOpenAISpeechStarted(this, callId); }
+  public _onOpenAISpeechStopped(callId: string): void { _onOpenAISpeechStopped(this, callId); }
   public _onOpenAIInterimResult(callId: string, transcript: string): void { _onOpenAIInterimResult(this, callId, transcript); }
   public _onOpenAIFinalResult(callId: string, transcript: string): void { _onOpenAIFinalResult(this, callId, transcript); }
   public async _onOpenAIAudioChunk(callId: string, audioChunkBase64: string, isLastChunk_deprecated: boolean): Promise<void> {

@@ -377,6 +377,7 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
                break;
           case 'input_audio_buffer.speech_stopped':
                msgSessionLogger.info(`[${callId}] OpenAI detected speech stopped. Item ID: ${serverEvent.item_id}`);
+               currentAriClient._onOpenAISpeechStopped(callId);
                break;
           case 'input_audio_buffer.committed':
             msgSessionLogger.info(`[${callId}] OpenAI input_audio_buffer.committed: item_id=${serverEvent.item_id}`);

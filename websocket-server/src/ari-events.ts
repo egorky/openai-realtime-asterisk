@@ -75,6 +75,15 @@ export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId
     call.speechHasBegun = true;
 }
 
+export function _onOpenAISpeechStopped(serviceInstance: AriClientService, callId: string): void {
+    const call = serviceInstance.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.info(`[${callId}] _onOpenAISpeechStopped: OpenAI speech recognition stopped.`);
+    if (call.googleSpeechService) {
+        call.googleSpeechService.stopTranscriptionStream();
+    }
+}
+
 export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId: string, transcript: string): void {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
@@ -1462,16 +1471,8 @@ export async function _onChannelTalkingStarted(serviceInstance: AriClientService
 
 export async function _onChannelTalkingFinished(serviceInstance: AriClientService, event: ChannelTalkingFinished, channel: Channel): Promise<void> {
     const call = serviceInstance.activeCalls.get(channel.id);
-    if (!call || call.channel.id !== channel.id || call.isCleanupCalled) {
-      return;
-    }
-
-    // Stop Google Speech Service if enabled
-    if (call.googleSpeechService) {
-        call.googleSpeechService.stopTranscriptionStream();
-    }
-
-    if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled ||
+        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech finished on channel ${channel.id}. Last speech duration: ${event.duration}ms.`);
