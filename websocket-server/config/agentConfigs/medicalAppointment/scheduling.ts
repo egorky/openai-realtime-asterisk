@@ -55,10 +55,10 @@ Tu voz es calmada y profesional.
   },
   {
     "id": "2_get_identification",
-    "description": "Solicitar el número de identificación del paciente y guardarlo.",
-    "instructions": ["Pide el número de identificación o cédula de identidad.", "Llama a la herramienta 'save_parameters' para guardar la identificación."],
+    "description": "Solicitar el número de identificación del paciente.",
+    "instructions": ["Pide el número de identificación o cédula de identidad."],
     "examples": ["Para comenzar, ¿podrías proporcionarme tu número de identificación o cédula?"],
-    "transitions": [{ "next_step": "3_get_specialty", "condition": "Se ha guardado el número de identificación." }]
+    "transitions": [{ "next_step": "3_get_specialty", "condition": "Se ha proporcionado el número de identificación." }]
   },
   {
     "id": "3_get_specialty",
@@ -106,8 +106,8 @@ Tu voz es calmada y profesional.
   },
   {
     "id": "8_confirm_appointment",
-    "description": "Confirmar la cita y guardar el slot.",
-    "instructions": ["Llama a la herramienta 'save_parameters' para guardar el slot elegido.", "Confirma verbalmente que la cita ha sido agendada y pregunta si hay algo más en lo que puedas ayudar."],
+    "description": "Confirmar la cita.",
+    "instructions": ["Confirma verbalmente que la cita ha sido agendada y pregunta si hay algo más en lo que puedas ayudar."],
     "examples": ["Excelente. Tu cita ha sido agendada para el [fecha] a las [hora]. ¿Hay algo más en lo que pueda ayudarte?"],
     "transitions": [{ "next_step": "9_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
   },
@@ -132,22 +132,6 @@ Tu voz es calmada y profesional.
             additionalProperties: false,
         },
         execute: async () => ({ success: true }),
-    }),
-    tool({
-      name: 'save_parameters',
-      description: 'Guarda parámetros clave-valor en la sesión de la llamada para uso posterior.',
-      parameters: {
-        type: 'object',
-        properties: {
-          parameters: {
-            type: 'object',
-            description: 'Un objeto que contiene los pares clave-valor a guardar. Por ejemplo: {"identificacion": "1234567890"} o {"slot": "Mañana a las 10 AM"}.',
-          },
-        },
-        required: ['parameters'],
-        additionalProperties: false,
-      },
-      execute: async () => ({ success: true }),
     }),
     tool({
       name: 'get_available_slots',

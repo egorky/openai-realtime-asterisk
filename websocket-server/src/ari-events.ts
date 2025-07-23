@@ -9,6 +9,7 @@ import { logConversationToRedis, ConversationTurn, saveSessionParams, getSession
 import { transcribeAudioAsync } from './async-transcriber';
 import { getAvailableSlots, scheduleAppointment, _playTTSThenGetSlots, _extractSlotAndSchedule } from './functionHandlers';
 import { branches } from '../config/agentConfigs/medicalAppointment/scheduling';
+import { extractAndSaveParameters } from './parameter-extractor';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
 import GoogleSpeechService from './google-speech-service';
@@ -151,6 +152,11 @@ export async function _onOpenAIFinalResult(serviceInstance: AriClientService, ca
       type: 'transcript',
       content: transcript,
     }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
+
+    // Programmatically extract and save parameters from the user's transcript
+    extractAndSaveParameters(callId, transcript, call.callLogger).catch(e => {
+        call.callLogger.error(`Error extracting/saving parameters: ${e.message}`);
+    });
 
     const allBranches = [...branches.guayaquil, ...branches.quito];
     const transcriptContainsBranch = allBranches.some(branch => transcript.toLowerCase().includes(branch.toLowerCase()));

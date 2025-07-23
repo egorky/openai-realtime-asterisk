@@ -3,6 +3,7 @@ import { Transform } from 'stream';
 import { SpeechClient } from '@google-cloud/speech';
 import { CallSpecificConfig, LoggerInstance } from './types';
 import { logConversationToRedis } from './redis-client';
+import { extractAndSaveParameters } from './parameter-extractor';
 
 // Helper to convert buffer to stream
 import { Readable } from 'stream';
@@ -62,6 +63,11 @@ class GoogleSpeechService {
                                 type: 'async_transcript_result',
                                 content: transcript,
                             }).catch(e => this.logger.error(`RedisLog Error (Google Speech final): ${e.message}`));
+
+                            // Also extract and save parameters from the async transcript
+                            extractAndSaveParameters(this.callId, transcript, this.logger).catch(e => {
+                                this.logger.error(`Error extracting/saving parameters from async transcript: ${e.message}`);
+                            });
                         }
                     }
                 }
