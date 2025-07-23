@@ -320,6 +320,11 @@ export async function executeTool(
         resultData = await scheduleAppointment(parsedArgs);
         break;
 
+      case 'save_parameters':
+        // This tool just saves the parameters to Redis, which is already handled by the `saveSessionParams` call below.
+        resultData = { success: true, message: "Parameters saved." };
+        break;
+
       case 'endCall':
         callLogger.info(`[ToolExecutor] Executing endCall for ARI callId: ${ariCallId}`);
         if (ariClientServiceInstance) {

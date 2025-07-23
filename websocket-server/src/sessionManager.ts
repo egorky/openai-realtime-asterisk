@@ -349,11 +349,6 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
                 }
             }
             if (finalTranscriptText) {
-              logConversationToRedis(callId, {
-                actor: 'bot',
-                type: 'tts_prompt', // Using 'tts_prompt' as it represents the text that will be spoken
-                content: finalTranscriptText,
-              }).catch(e => msgSessionLogger.error(`[${callId}] RedisLog Error (bot response): ${e.message}`));
               currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
             } else if (serverEvent.response?.status !== 'cancelled' && serverEvent.response?.status !== 'tool_calls_completed') {
                  msgSessionLogger.warn(`[${callId}] OpenAI response.done, but no final text transcript in output. Status: ${serverEvent.response?.status}`);
@@ -394,6 +389,13 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             break;
           case 'response.audio_transcript.done':
             msgSessionLogger.info(`[${callId}] OpenAI response.audio_transcript.done: transcript="${serverEvent.transcript}"`);
+            if (serverEvent.transcript) {
+              logConversationToRedis(callId, {
+                actor: 'bot',
+                type: 'tts_prompt',
+                content: serverEvent.transcript,
+              }).catch(e => msgSessionLogger.error(`[${callId}] RedisLog Error (bot audio_transcript): ${e.message}`));
+            }
             break;
           case 'response.content_part.added':
             msgSessionLogger.debug(`[${callId}] OpenAI response.content_part.added: item_id=${serverEvent.item_id}, content_type=${serverEvent.part?.type}`);
