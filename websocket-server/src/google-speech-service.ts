@@ -32,20 +32,18 @@ class GoogleSpeechService {
 
         this.logger.info(`Starting Google Speech transcription stream for call ${this.callId}. Lang: ${languageCode}, Rate: ${sampleRate}, Encoding: ${encoding}`);
 
-        const request: google.cloud.speech.v1.IStreamingRecognizeRequest = {
-            streamingConfig: {
-                config: {
-                    encoding: encoding,
-                    sampleRateHertz: sampleRate,
-                    languageCode: languageCode,
-                    // model: 'telephony', // Consider making this configurable
-                    enableAutomaticPunctuation: true,
-                },
-                interimResults: true, // We can decide if we want to log these
+        const streamingConfig: google.cloud.speech.v1.IStreamingRecognitionConfig = {
+            config: {
+                encoding: encoding,
+                sampleRateHertz: sampleRate,
+                languageCode: languageCode,
+                // model: 'telephony', // Consider making this configurable
+                enableAutomaticPunctuation: true,
             },
+            interimResults: true, // We can decide if we want to log these
         };
 
-        this.recognizeStream = this.speechClient.streamingRecognize(request)
+        this.recognizeStream = this.speechClient.streamingRecognize(streamingConfig)
             .on('error', (err: Error) => {
                 this.logger.error(`Google Speech stream error: ${err.message}`, err);
                 this.stopTranscriptionStream();
@@ -54,14 +52,16 @@ class GoogleSpeechService {
                 if (data.results && data.results[0] && data.results[0].alternatives && data.results[0].alternatives[0]) {
                     const transcript = data.results[0].alternatives[0].transcript;
                     const isFinal = data.results[0].isFinal;
-                    this.logger.debug(`[${isFinal ? 'FINAL' : 'INTERIM'}] Google Speech transcript: "${transcript}"`);
 
-                    if (isFinal && transcript.trim()) {
-                        logConversationToRedis(this.callId, {
-                            actor: 'caller',
-                            type: 'async_transcript_result',
-                            content: transcript,
-                        }).catch(e => this.logger.error(`RedisLog Error (Google Speech final): ${e.message}`));
+                    if (transcript) {
+                        this.logger.debug(`[${isFinal ? 'FINAL' : 'INTERIM'}] Google Speech transcript: "${transcript}"`);
+                        if (isFinal && transcript.trim()) {
+                            logConversationToRedis(this.callId, {
+                                actor: 'caller',
+                                type: 'async_transcript_result',
+                                content: transcript,
+                            }).catch(e => this.logger.error(`RedisLog Error (Google Speech final): ${e.message}`));
+                        }
                     }
                 }
             })
