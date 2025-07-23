@@ -836,7 +836,6 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       sessionManager.handleCallConnection(callId, serviceInstance);
       callLogger.info(`Call connection details passed to SessionManager.`);
 
-      const appRecogConf = localCallConfig.appConfig.appRecognitionConfig;
       if (appRecogConf.maxRecognitionDurationSeconds && appRecogConf.maxRecognitionDurationSeconds > 0) {
         callResources.maxRecognitionDurationTimer = setTimeout(() => {
             const currentCall = serviceInstance.activeCalls.get(callId);
