@@ -1,4 +1,30 @@
-import { FunctionHandler } from "./types";
+import { FunctionHandler, CallSpecificConfig } from "./types";
+import { saveSessionParams } from './redis-client';
+import * as sessionManager from './sessionManager';
+import { CallResources } from './ari-call-resources';
+import { AriClientService } from "./ari-service";
+
+export async function _playTTSThenGetSlots(serviceInstance: AriClientService, callId: string, call: CallResources): Promise<void> {
+  call.callLogger.info("Orchestrating tool call for getAvailableSlots");
+
+  // Generate TTS for the waiting message
+  const waitingMessage = "Un momento, por favor, estoy consultando los horarios.";
+  const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
+  await sessionManager.requestOpenAIResponse(callId, waitingMessage, configForTTS);
+
+  // The audio will be played via the _onOpenAIAudioChunk and _onOpenAIAudioStreamEnd callbacks.
+  // We need a way to know that after this TTS is played, we should call the getAvailableSlots tool.
+  // We'll use a flag in the call resources.
+  call.pendingToolCall = "getAvailableSlots";
+}
+
+export async function _extractSlotAndSchedule(callId: string, transcript: string, call: CallResources): Promise<void> {
+  const lowerTranscript = transcript.toLowerCase();
+  // This is a very simple way to extract the slot. A more robust solution would use a regex or a more advanced NLP technique.
+  const slot = transcript; // For now, we'll just use the whole transcript as the slot.
+  await saveSessionParams(callId, { slot });
+  call.pendingToolCall = "scheduleAppointment";
+}
 
 export async function getAvailableSlots(args: { specialty: string; city: string; branch: string }) {
   const now = new Date();

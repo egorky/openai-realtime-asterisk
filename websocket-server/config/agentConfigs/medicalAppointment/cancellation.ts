@@ -55,8 +55,15 @@ Tu voz es calmada y profesional.
   {
     "id": "4_confirm_cancellation",
     "description": "Confirmar la cancelación.",
-    "instructions": ["Llama a 'cancelAppointment' y confirma la cancelación al paciente."],
-    "examples": ["Perfecto. He cancelado tu cita para [especialidad] el [fecha]. ¿Hay algo más en lo que pueda ayudarte? Adiós."],
+    "instructions": ["Llama a 'cancelAppointment' y confirma la cancelación al paciente, luego pregunta si puedes ayudar en algo más."],
+    "examples": ["Perfecto. He cancelado tu cita para [especialidad] el [fecha]. ¿Hay algo más en lo que pueda ayudarte?"],
+    "transitions": [{ "next_step": "5_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
+  },
+  {
+    "id": "5_end_call",
+    "description": "Finalizar la llamada.",
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "examples": ["Entendido. Gracias por contactarnos. ¡Adiós!"],
     "transitions": []
   }
 ]

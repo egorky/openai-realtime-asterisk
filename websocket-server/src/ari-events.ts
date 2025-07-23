@@ -7,10 +7,11 @@ import { AriClientService } from './ari-service'; // Necesario para 'this' y acc
 import * as sessionManager from './sessionManager';
 import { logConversationToRedis, ConversationTurn, saveSessionParams, getSessionParams } from './redis-client';
 import { transcribeAudioAsync } from './async-transcriber';
-import { getAvailableSlots, scheduleAppointment } from './functionHandlers';
+import { getAvailableSlots, scheduleAppointment, _playTTSThenGetSlots, _extractSlotAndSchedule } from './functionHandlers';
 import { branches } from '../config/agentConfigs/medicalAppointment/scheduling';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
+import GoogleSpeechService from './google-speech-service';
 import { _activateOpenAIStreaming, _stopAllPlaybacks, _finalizeDtmfInput } from './ari-actions';
 import { _fullCleanup } from './ari-cleanup'; // Asumiendo que ari-cleanup.ts existe
 import { sendGenericEventToFrontend } from './server'; // Para notificaciones al frontend
@@ -115,28 +116,6 @@ export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId
       call.callLogger.warn(`OpenAI: Silence detected for ${silenceTimeout}ms after interim transcript. Stopping OpenAI session for this turn.`);
       sessionManager.stopOpenAISession(callId, 'interim_result_silence_timeout');
     }, silenceTimeout);
-}
-
-async function _playTTSThenGetSlots(serviceInstance: AriClientService, callId: string, call: CallResources): Promise<void> {
-  call.callLogger.info("Orchestrating tool call for getAvailableSlots");
-
-  // Generate TTS for the waiting message
-  const waitingMessage = "Un momento, por favor, estoy consultando los horarios.";
-  const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
-  await sessionManager.requestOpenAIResponse(callId, waitingMessage, configForTTS);
-
-  // The audio will be played via the _onOpenAIAudioChunk and _onOpenAIAudioStreamEnd callbacks.
-  // We need a way to know that after this TTS is played, we should call the getAvailableSlots tool.
-  // We'll use a flag in the call resources.
-  call.pendingToolCall = "getAvailableSlots";
-}
-
-async function _extractSlotAndSchedule(callId: string, transcript: string, call: CallResources): Promise<void> {
-  const lowerTranscript = transcript.toLowerCase();
-  // This is a very simple way to extract the slot. A more robust solution would use a regex or a more advanced NLP technique.
-  const slot = transcript; // For now, we'll just use the whole transcript as the slot.
-  await saveSessionParams(callId, { slot });
-  call.pendingToolCall = "scheduleAppointment";
 }
 
 export async function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: string, transcript: string): Promise<void> {
@@ -535,16 +514,6 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
 
       if (soundPathForPlayback) {
         call.callLogger.info(`Playing accumulated TTS audio for call ${callId} from sound path: sound:${soundPathForPlayback}`);
-        let ttsSpokenText = call.finalTranscription;
-        if (!ttsSpokenText) {
-            ttsSpokenText = "[Bot audio response played]";
-        }
-        logConversationToRedis(callId, {
-            actor: 'bot',
-            type: 'tts_prompt',
-            content: ttsSpokenText
-        }).catch(e => call.callLogger.error(`RedisLog Error (bot TTS): ${e.message}`));
-
         try {
           if (call.waitingPlayback) {
             await call.waitingPlayback.stop().catch(e => call.callLogger.warn(`Error stopping previous waitingPlayback: ${e.message}`));
@@ -824,10 +793,22 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
         logLevel: 'INFO'
       });
 
+      const appRecogConf = localCallConfig.appConfig.appRecognitionConfig;
+      if (appRecogConf.asyncSttEnabled && appRecogConf.asyncSttProvider === 'google_speech_v1') {
+          callResources.googleSpeechService = new GoogleSpeechService(callId, localCallConfig, callLogger);
+          callLogger.info('Google Speech Service initialized for async STT.');
+      }
+
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = serviceInstance.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
           call.callLogger.silly?.(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
+
+          // Send audio to Google Speech Service if it's active
+          if (call.googleSpeechService) {
+              call.googleSpeechService.sendAudio(audioPayload);
+          }
+
           if (call.openAIStreamingActive && !call.dtmfModeActive) {
             if (call.callerAudioBufferForCurrentTurn.length < (MAX_VAD_BUFFER_PACKETS * 2) ) {
                call.callerAudioBufferForCurrentTurn.push(audioPayload);
@@ -1402,8 +1383,16 @@ export async function _handlePostPromptVADLogic(serviceInstance: AriClientServic
 
 export async function _onChannelTalkingStarted(serviceInstance: AriClientService, event: ChannelTalkingStarted, channel: Channel): Promise<void> {
     const call = serviceInstance.activeCalls.get(channel.id);
-    if (!call || call.channel.id !== channel.id || call.isCleanupCalled ||
-        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled) {
+      return;
+    }
+
+    // Start Google Speech Service if enabled
+    if (call.googleSpeechService) {
+        call.googleSpeechService.startTranscriptionStream();
+    }
+
+    if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech started on channel ${channel.id}.`);
@@ -1474,8 +1463,16 @@ export async function _onChannelTalkingStarted(serviceInstance: AriClientService
 
 export async function _onChannelTalkingFinished(serviceInstance: AriClientService, event: ChannelTalkingFinished, channel: Channel): Promise<void> {
     const call = serviceInstance.activeCalls.get(channel.id);
-    if (!call || call.channel.id !== channel.id || call.isCleanupCalled ||
-        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled) {
+      return;
+    }
+
+    // Stop Google Speech Service if enabled
+    if (call.googleSpeechService) {
+        call.googleSpeechService.stopTranscriptionStream();
+    }
+
+    if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech finished on channel ${channel.id}. Last speech duration: ${event.duration}ms.`);

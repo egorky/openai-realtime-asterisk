@@ -348,6 +348,14 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
                 }
             }
             if (finalTranscriptText) {
+              // Log the bot's final text response to Redis
+              import('./redis-client').then(({ logConversationToRedis }) => {
+                logConversationToRedis(callId, {
+                  actor: 'bot',
+                  type: 'tts_prompt', // Using 'tts_prompt' as it represents the text that will be spoken
+                  content: finalTranscriptText,
+                }).catch(e => msgSessionLogger.error(`[${callId}] RedisLog Error (bot response): ${e.message}`));
+              });
               currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
             } else if (serverEvent.response?.status !== 'cancelled' && serverEvent.response?.status !== 'tool_calls_completed') {
                  msgSessionLogger.warn(`[${callId}] OpenAI response.done, but no final text transcript in output. Status: ${serverEvent.response?.status}`);

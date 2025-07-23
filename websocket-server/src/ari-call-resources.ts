@@ -4,10 +4,12 @@
 import { Channel, Bridge, Playback } from 'ari-client';
 import { CallSpecificConfig, LoggerInstance } from './types'; // Asumiendo que types.ts se mantiene o se adapta
 import { RtpServer } from './rtp-server'; // Si RtpServer se mantiene como una clase separada
+import GoogleSpeechService from './google-speech-service';
 
 // Interfaz para los recursos asociados con una llamada activa.
 // Copiado de ari-client.ts
 export interface CallResources {
+  googleSpeechService?: GoogleSpeechService;
   channel: Channel;
   config: CallSpecificConfig;
   callLogger: LoggerInstance;

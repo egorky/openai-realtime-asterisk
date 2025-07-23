@@ -63,8 +63,15 @@ Tu voz es calmada y profesional.
   {
     "id": "5_confirm_reschedule",
     "description": "Confirmar la reprogramación.",
-    "instructions": ["Llama a 'rescheduleAppointment' y confirma la nueva cita al paciente."],
-    "examples": ["¡Perfecto! Tu cita ha sido reprogramada para el [nueva fecha] a las [nueva hora]. Gracias por usar nuestro servicio. ¡Adiós!"],
+    "instructions": ["Llama a 'rescheduleAppointment' y confirma la nueva cita al paciente, luego pregunta si puede ayudar en algo más."],
+    "examples": ["¡Perfecto! Tu cita ha sido reprogramada para el [nueva fecha] a las [nueva hora]. ¿Necesitas algo más?"],
+    "transitions": [{ "next_step": "6_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
+  },
+  {
+    "id": "6_end_call",
+    "description": "Finalizar la llamada.",
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "examples": ["De acuerdo. Ha sido un placer ayudarte. ¡Adiós!"],
     "transitions": []
   }
 ]
