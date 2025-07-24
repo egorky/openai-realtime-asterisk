@@ -7,10 +7,12 @@ import { AriClientService } from './ari-service'; // Necesario para 'this' y acc
 import * as sessionManager from './sessionManager';
 import { logConversationToRedis, ConversationTurn, saveSessionParams, getSessionParams } from './redis-client';
 import { transcribeAudioAsync } from './async-transcriber';
-import { getAvailableSlots, scheduleAppointment } from './functionHandlers';
+import { getAvailableSlots, scheduleAppointment, _playTTSThenGetSlots, _extractSlotAndSchedule } from './functionHandlers';
 import { branches } from '../config/agentConfigs/medicalAppointment/scheduling';
+import { extractAndSaveParameters } from './parameter-extractor';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
+import GoogleSpeechService from './google-speech-service';
 import { _activateOpenAIStreaming, _stopAllPlaybacks, _finalizeDtmfInput } from './ari-actions';
 import { _fullCleanup } from './ari-cleanup'; // Asumiendo que ari-cleanup.ts existe
 import { sendGenericEventToFrontend } from './server'; // Para notificaciones al frontend
@@ -30,7 +32,7 @@ import { createWavHeader } from './ari-utils'; // Asumiendo que ari-utils.ts exi
 export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId: string): void {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.info(`[${callId}] _onOpenAISpeechStarted: OpenAI speech recognition started (or first transcript received).`);
+    call.callLogger.warn(`[${callId}] OpenAI speech recognition started.`);
     serviceInstance.sendEventToFrontend({
         type: 'openai_speech_started',
         callId: callId,
@@ -74,10 +76,19 @@ export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId
     call.speechHasBegun = true;
 }
 
+export function _onOpenAISpeechStopped(serviceInstance: AriClientService, callId: string): void {
+    const call = serviceInstance.activeCalls.get(callId);
+    if (!call || call.isCleanupCalled) return;
+    call.callLogger.warn(`[${callId}] OpenAI speech recognition stopped.`);
+    if (call.googleSpeechService) {
+        call.googleSpeechService.stopTranscriptionStream();
+    }
+}
+
 export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId: string, transcript: string): void {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.debug(`[${callId}] _onOpenAIInterimResult: OpenAI interim transcript: "${transcript}"`);
+    call.callLogger.debug(`[${callId}] Interim transcript: "${transcript}"`);
     serviceInstance.sendEventToFrontend({
         type: 'openai_interim_transcript',
         callId: callId,
@@ -117,46 +128,34 @@ export function _onOpenAIInterimResult(serviceInstance: AriClientService, callId
     }, silenceTimeout);
 }
 
-async function _playTTSThenGetSlots(serviceInstance: AriClientService, callId: string, call: CallResources): Promise<void> {
-  call.callLogger.info("Orchestrating tool call for getAvailableSlots");
-
-  // Generate TTS for the waiting message
-  const waitingMessage = "Un momento, por favor, estoy consultando los horarios.";
-  const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
-  await sessionManager.requestOpenAIResponse(callId, waitingMessage, configForTTS);
-
-  // The audio will be played via the _onOpenAIAudioChunk and _onOpenAIAudioStreamEnd callbacks.
-  // We need a way to know that after this TTS is played, we should call the getAvailableSlots tool.
-  // We'll use a flag in the call resources.
-  call.pendingToolCall = "getAvailableSlots";
-}
-
-async function _extractSlotAndSchedule(callId: string, transcript: string, call: CallResources): Promise<void> {
-  const lowerTranscript = transcript.toLowerCase();
-  // This is a very simple way to extract the slot. A more robust solution would use a regex or a more advanced NLP technique.
-  const slot = transcript; // For now, we'll just use the whole transcript as the slot.
-  await saveSessionParams(callId, { slot });
-  call.pendingToolCall = "scheduleAppointment";
-}
-
 export async function _onOpenAIFinalResult(serviceInstance: AriClientService, callId: string, transcript: string): Promise<void> {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
 
-    call.callLogger.info(`_onOpenAIFinalResult CALLED for callId: ${callId}. Current ttsAudioChunks.length: ${call.ttsAudioChunks?.length ?? 'N/A'}`);
-    call.callLogger.info(`OpenAI final transcript received: "${transcript}"`);
+    call.callLogger.warn(`Caller: "${transcript}"`);
     serviceInstance.sendEventToFrontend({
         type: 'openai_final_transcript',
         callId: callId,
         timestamp: new Date().toISOString(),
         source: 'OPENAI_CALLBACKS',
         payload: { transcript: transcript },
-        logLevel: 'INFO'
+        logLevel: 'WARN'
     });
 
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
     call.finalTranscription = transcript;
-    call.callLogger.info(`Final transcript processed. Requesting OpenAI response for text: "${transcript}"`);
+    call.callLogger.debug(`Requesting OpenAI response for text: "${transcript}"`);
+
+    logConversationToRedis(callId, {
+      actor: 'caller',
+      type: 'transcript',
+      content: transcript,
+    }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
+
+    // Programmatically extract and save parameters from the user's transcript
+    extractAndSaveParameters(callId, transcript, call.callLogger).catch(e => {
+        call.callLogger.error(`Error extracting/saving parameters: ${e.message}`);
+    });
 
     logConversationToRedis(callId, {
       actor: 'caller',
@@ -202,15 +201,15 @@ export async function _onOpenAIAudioChunk(serviceInstance: AriClientService, cal
     const loggerToUse = call?.callLogger || serviceInstance.logger;
 
     if (!call || call.isCleanupCalled) {
-      loggerToUse.warn(`_onOpenAIAudioChunk: Call ${callId} not active or cleanup. Ignoring.`);
+      loggerToUse.debug(`_onOpenAIAudioChunk: Call ${callId} not active or cleanup. Ignoring.`);
       return;
     }
 
     const playbackMode = call.config.appConfig.appRecognitionConfig.ttsPlaybackMode || "full_chunk";
-    loggerToUse.info(`_onOpenAIAudioChunk for call ${callId}. Playback mode: ${playbackMode}. Chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}.`);
+    loggerToUse.debug(`_onOpenAIAudioChunk for call ${callId}. Playback mode: ${playbackMode}. Chunk non-empty: ${!!(audioChunkBase64 && audioChunkBase64.length > 0)}.`);
 
     if (!(audioChunkBase64 && audioChunkBase64.length > 0)) {
-      loggerToUse.warn('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
+      loggerToUse.debug('_onOpenAIAudioChunk: Received empty or null audioChunkBase64.');
       return;
     }
 
@@ -316,20 +315,20 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
     const loggerToUse = call?.callLogger || serviceInstance.logger;
 
     if (!call || call.isCleanupCalled) {
-      loggerToUse.warn(`_onOpenAIAudioStreamEnd: Call ${callId} not active or cleanup called.`);
+      loggerToUse.debug(`_onOpenAIAudioStreamEnd: Call ${callId} not active or cleanup called.`);
       return;
     }
 
     const playbackMode = call.config.appConfig.appRecognitionConfig.ttsPlaybackMode || "full_chunk";
-    loggerToUse.info(`_onOpenAIAudioStreamEnd for call ${callId}. Playback mode: ${playbackMode}.`);
+    loggerToUse.debug(`_onOpenAIAudioStreamEnd for call ${callId}. Playback mode: ${playbackMode}.`);
     let savedFilePath: string | null = null;
 
     if (playbackMode === "stream") {
-      loggerToUse.info(`[StreamPlayback] Audio stream ended. All chunks should have been processed and played individually or queued.`);
+      loggerToUse.debug(`[StreamPlayback] Audio stream ended.`);
       let fullAudioBuffer: Buffer | null = null;
       if (call.fullTtsAudioBuffer.length > 0) {
         fullAudioBuffer = Buffer.concat(call.fullTtsAudioBuffer);
-        loggerToUse.info(`[StreamPlayback] Concatenated ${call.fullTtsAudioBuffer.length} streamed chunks. Total backup audio size: ${fullAudioBuffer.length} bytes.`);
+        loggerToUse.debug(`[StreamPlayback] Concatenated ${call.fullTtsAudioBuffer.length} streamed chunks. Total backup audio size: ${fullAudioBuffer.length} bytes.`);
 
         if (fullAudioBuffer.length > 0) {
           try {
@@ -368,11 +367,11 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
             loggerToUse.error(`[StreamPlayback] Failed to save full backup audio for call ${callId}: ${saveError.message}`, saveError);
           }
         } else {
-          loggerToUse.warn(`[StreamPlayback] Full backup audio buffer was empty after concatenation for call ${callId}. Nothing to save.`);
+          loggerToUse.debug(`[StreamPlayback] Full backup audio buffer was empty after concatenation for call ${callId}. Nothing to save.`);
         }
         call.fullTtsAudioBuffer = [];
       } else {
-        loggerToUse.info(`[StreamPlayback] No audio chunks accumulated in fullTtsAudioBuffer for backup.`);
+        loggerToUse.debug(`[StreamPlayback] No audio chunks accumulated for backup.`);
       }
       serviceInstance.sendEventToFrontend({
         type: 'openai_tts_stream_ended',
@@ -535,16 +534,6 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
 
       if (soundPathForPlayback) {
         call.callLogger.info(`Playing accumulated TTS audio for call ${callId} from sound path: sound:${soundPathForPlayback}`);
-        let ttsSpokenText = call.finalTranscription;
-        if (!ttsSpokenText) {
-            ttsSpokenText = "[Bot audio response played]";
-        }
-        logConversationToRedis(callId, {
-            actor: 'bot',
-            type: 'tts_prompt',
-            content: ttsSpokenText
-        }).catch(e => call.callLogger.error(`RedisLog Error (bot TTS): ${e.message}`));
-
         try {
           if (call.waitingPlayback) {
             await call.waitingPlayback.stop().catch(e => call.callLogger.warn(`Error stopping previous waitingPlayback: ${e.message}`));
@@ -612,14 +601,14 @@ export function _onOpenAIError(serviceInstance: AriClientService, callId: string
 export function _onOpenAISessionEnded(serviceInstance: AriClientService, callId: string, reason: string): void {
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
-    call.callLogger.info(`OpenAI session ended event from sessionManager. Reason: ${reason}`);
+    call.callLogger.warn(`OpenAI session ended. Reason: ${reason}`);
     serviceInstance.sendEventToFrontend({
         type: 'openai_session_ended',
         callId: callId,
         timestamp: new Date().toISOString(),
         source: 'OPENAI_CALLBACKS',
         payload: { reason: reason },
-        logLevel: 'INFO'
+        logLevel: 'WARN'
     });
     logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `OpenAI session ended. Reason: ${reason}`})
       .catch(e => call.callLogger.error(`RedisLog Error (OpenAI session ended): ${e.message}`));
@@ -630,17 +619,17 @@ export function _onOpenAISessionEnded(serviceInstance: AriClientService, callId:
     if (call.speechEndSilenceTimer) { clearTimeout(call.speechEndSilenceTimer); call.speechEndSilenceTimer = null; }
 
     if (!call.finalTranscription && !call.openAIStreamError && !call.dtmfModeActive && reason !== 'dtmf_interrupt' && reason !== 'cleanup_DTMF_INTERDIGIT_TIMEOUT' && reason !== 'cleanup_DTMF_FINAL_TIMEOUT' && reason !== 'cleanup_DTMF_TERMINATOR_RECEIVED' && reason !== 'cleanup_DTMF_MAX_DIGITS_REACHED') {
-        call.callLogger.warn(`OpenAI session ended (reason: ${reason}) without final transcript from OpenAI, error, or DTMF completion. Checking for async STT.`);
+        call.callLogger.warn(`OpenAI session ended without final transcript (reason: ${reason}). Checking for async STT.`);
 
         const appRecogConf = call.config.appConfig.appRecognitionConfig;
         if (appRecogConf.asyncSttEnabled && call.callerAudioBufferForCurrentTurn.length > 0) {
-          call.callLogger.info(`Initiating async STT as OpenAI did not provide a transcript for the last turn.`);
+          call.callLogger.warn(`Initiating async STT as OpenAI did not provide a transcript.`);
           logConversationToRedis(callId, {
             actor: 'system',
-            type: 'system_message',
+            type: 'warn_message',
             content: `No transcript from OpenAI (reason: ${reason}). Attempting asynchronous STT.`,
             originalTurnTimestamp: call.currentTurnStartTime,
-          } as ConversationTurn).catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+          }).catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
 
           const audioBufferToTranscribe = Buffer.concat(call.callerAudioBufferForCurrentTurn);
           transcribeAudioAsync({
@@ -689,23 +678,22 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
 
     if (incomingChannel.name.startsWith('UnicastRTP/') || incomingChannel.name.startsWith('Snoop/')) {
       const utilityCallLogger = serviceInstance.logger.child({ callId: incomingChannel.id, callerId: `utility-${incomingChannel.name.split('/')[0]}` }, undefined, serviceInstance);
-      utilityCallLogger.info(`StasisStart for utility channel ${incomingChannel.name} (${incomingChannel.id}). Answering if needed and ignoring further setup.`);
+      utilityCallLogger.debug(`StasisStart for utility channel ${incomingChannel.name}. Ignoring.`);
       try {
         if (incomingChannel.state === 'RINGING' || incomingChannel.state === 'RING') {
           await incomingChannel.answer();
-          callLogger.info(`Answered utility channel ${incomingChannel.name}.`);
         }
       } catch (err: any) {
-        callLogger.warn(`Error answering utility channel ${incomingChannel.name} (may already be up or hungup): ${err.message}`);
+        // Ignore errors here, as the channel might already be up or hungup.
       }
       return;
     }
 
-    callLogger.info(`StasisStart: New call entering application '${ASTERISK_ARI_APP_NAME}'.`);
-    callLogger.info(`New call onStasisStart. Channel ID: ${incomingChannel.id}, Name: ${incomingChannel.name}, Caller: ${JSON.stringify(incomingChannel.caller)}, Dialplan: ${JSON.stringify(incomingChannel.dialplan)}`);
+    callLogger.error(`StasisStart: New call entering application '${ASTERISK_ARI_APP_NAME}'.`);
+    callLogger.info(`New call details: Channel ID: ${incomingChannel.id}, Name: ${incomingChannel.name}, Caller: ${JSON.stringify(incomingChannel.caller)}, Dialplan: ${JSON.stringify(incomingChannel.dialplan)}`);
 
     if (serviceInstance.appOwnedChannelIds.has(callId)) {
-      callLogger.info(`Channel ${callId} is app-owned. Ignoring StasisStart.`); return;
+      callLogger.warn(`Channel ${callId} is already app-owned. Ignoring StasisStart.`); return;
     }
 
     const callResources: CallResources = {
@@ -738,7 +726,7 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
     serviceInstance.activeCalls.set(callId, callResources);
     serviceInstance.currentPrimaryCallId = callId;
     serviceInstance.notifyActiveCallsChanged();
-    callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}. Set as current primary call.`);
+    callLogger.info(`Call resources initialized. Mode: ${localCallConfig.appConfig.appRecognitionConfig.recognitionActivationMode}.`);
 
     serviceInstance.sendEventToFrontend({
       type: 'call_stasis_start',
@@ -754,10 +742,10 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
     });
 
     try {
-      callLogger.info(`Attempting to answer incoming channel ${callId}.`);
+      callLogger.debug(`Attempting to answer incoming channel ${callId}.`);
       try {
         await incomingChannel.answer();
-        callLogger.info(`Successfully answered incoming channel ${callId}.`);
+        callLogger.info(`Call answered.`);
         serviceInstance.sendEventToFrontend({
           type: 'call_answered',
           callId: callId,
@@ -778,16 +766,15 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       if (!serviceInstance.client) { throw new Error("ARI client not connected."); }
 
       callResources.userBridge = await serviceInstance.client.bridges.create({ type: 'mixing', name: `user_b_${callId}` });
-      callLogger.info(`Successfully created userBridge ${callResources.userBridge.id} for call ${callId}.`);
+      callLogger.debug(`Created userBridge ${callResources.userBridge.id}`);
       await callResources.userBridge.addChannel({ channel: callId });
-      callLogger.info(`Successfully added channel ${callId} to userBridge ${callResources.userBridge.id}.`);
 
       callResources.snoopBridge = await serviceInstance.client.bridges.create({ type: 'mixing', name: `snoop_b_${callId}` });
-      callLogger.info(`Successfully created snoopBridge ${callResources.snoopBridge.id} for call ${callId}.`);
+      callLogger.debug(`Created snoopBridge ${callResources.snoopBridge.id}`);
 
       callResources.rtpServer = new RtpServer(callLogger.child({ component: 'RtpServer'}, undefined, serviceInstance));
       const rtpServerAddress = await callResources.rtpServer.start(0, DEFAULT_RTP_HOST_IP);
-      callLogger.info(`RTP Server started for call ${callId}, listening on ${rtpServerAddress.host}:${rtpServerAddress.port}.`);
+      callLogger.info(`RTP Server started at ${rtpServerAddress.host}:${rtpServerAddress.port}.`);
 
       const externalMediaFormat = 'ulaw';
       callResources.externalMediaChannel = await serviceInstance.client.channels.externalMedia({
@@ -796,18 +783,17 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
         format: externalMediaFormat,
         encapsulation: 'rtp'
       });
-      callLogger.info(`Successfully created externalMediaChannel ${callResources.externalMediaChannel.id} for call ${callId} with format ${externalMediaFormat}.`);
+      callLogger.debug(`Created externalMediaChannel ${callResources.externalMediaChannel.id}`);
       serviceInstance.appOwnedChannelIds.add(callResources.externalMediaChannel.id);
 
       const snoopDirection = 'in' as ('in' | 'out' | 'both');
       callResources.snoopChannel = await serviceInstance.client.channels.snoopChannelWithId({ channelId: callId, snoopId: `snoop_${callId}`, app: ASTERISK_ARI_APP_NAME, spy: snoopDirection });
-      callLogger.info(`Successfully created snoopChannel ${callResources.snoopChannel.id} for call ${callId} with direction '${snoopDirection}'.`);
+      callLogger.debug(`Created snoopChannel ${callResources.snoopChannel.id}`);
       serviceInstance.appOwnedChannelIds.add(callResources.snoopChannel.id);
 
       await callResources.snoopBridge.addChannel({ channel: callResources.externalMediaChannel.id });
-      callLogger.info(`Successfully added externalMediaChannel ${callResources.externalMediaChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
       await callResources.snoopBridge.addChannel({ channel: callResources.snoopChannel.id });
-      callLogger.info(`Successfully added snoopChannel ${callResources.snoopChannel.id} to snoopBridge ${callResources.snoopBridge.id}.`);
+      callLogger.info(`Call resources initialized.`);
 
       serviceInstance.sendEventToFrontend({
         type: 'call_resources_initialized',
@@ -824,15 +810,22 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
         logLevel: 'INFO'
       });
 
+      const appRecogConf = localCallConfig.appConfig.appRecognitionConfig;
+      if (appRecogConf.asyncSttEnabled && appRecogConf.asyncSttProvider === 'google_speech_v1') {
+          callResources.googleSpeechService = new GoogleSpeechService(callId, localCallConfig, callLogger);
+          callLogger.info('Google Speech Service initialized for async STT.');
+      }
+
       callResources.rtpServer.on('audioPacket', (audioPayload: Buffer) => {
         const call = serviceInstance.activeCalls.get(callId);
         if (call && !call.isCleanupCalled) {
-          call.callLogger.silly?.(`Received raw audio packet from Asterisk, length: ${audioPayload.length}.`);
+          call.callLogger.silly?.(`RTP audio packet received, length: ${audioPayload.length}.`);
+          if (call.googleSpeechService) {
+              call.googleSpeechService.sendAudio(audioPayload);
+          }
           if (call.openAIStreamingActive && !call.dtmfModeActive) {
             if (call.callerAudioBufferForCurrentTurn.length < (MAX_VAD_BUFFER_PACKETS * 2) ) {
                call.callerAudioBufferForCurrentTurn.push(audioPayload);
-            } else {
-               call.callLogger.warn(`Caller audio buffer for async STT reached limit for call ${callId}. Further audio for this turn might be truncated.`);
             }
           }
           if (call.openAIStreamingActive && !call.isVADBufferingActive && !call.pendingVADBufferFlush && !call.isFlushingVADBuffer) {
@@ -844,7 +837,6 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
             if (call.vadAudioBuffer.length < MAX_VAD_BUFFER_PACKETS) {
               call.vadAudioBuffer.push(audioPayload);
             } else {
-              call.callLogger.warn(`VAD audio buffer limit reached for call ${callId}. Oldest packet discarded.`);
               call.vadAudioBuffer.shift();
               call.vadAudioBuffer.push(audioPayload);
             }
@@ -853,16 +845,13 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
       });
 
       sessionManager.handleCallConnection(callId, serviceInstance);
-      callLogger.info(`Call connection details passed to SessionManager.`);
+      callLogger.debug(`Call connection details passed to SessionManager.`);
 
-      const appRecogConf = localCallConfig.appConfig.appRecognitionConfig;
       if (appRecogConf.maxRecognitionDurationSeconds && appRecogConf.maxRecognitionDurationSeconds > 0) {
         callResources.maxRecognitionDurationTimer = setTimeout(() => {
             const currentCall = serviceInstance.activeCalls.get(callId);
             if(currentCall && !currentCall.isCleanupCalled) {
-              currentCall.callLogger.warn(`Max recognition duration ${appRecogConf.maxRecognitionDurationSeconds}s reached.`);
-              logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: `Max recognition duration timeout (${appRecogConf.maxRecognitionDurationSeconds}s).`})
-                .catch(e => currentCall.callLogger.error(`RedisLog Error: ${e.message}`));
+              currentCall.callLogger.error(`Max recognition duration timeout (${appRecogConf.maxRecognitionDurationSeconds}s).`);
               _fullCleanup(serviceInstance, callId, true, "MAX_RECOGNITION_DURATION_TIMEOUT");
             }
         }, appRecogConf.maxRecognitionDurationSeconds * 1000);
@@ -932,7 +921,7 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
 
       const greetingAudio = appRecogConf.greetingAudioPath;
       if (greetingAudio && serviceInstance.client) {
-        callLogger.info(`Playing greeting/prompt audio: ${greetingAudio}`);
+        callLogger.warn(`Playing greeting: ${greetingAudio}`);
         logConversationToRedis(callId, { actor: 'bot', type: 'tts_prompt', content: `Playing greeting: ${greetingAudio}`})
           .catch(e => callLogger.error(`RedisLog Error (greeting): ${e.message}`));
 
@@ -943,9 +932,7 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
             if (serviceInstance.client && failedPlayback.id === mainPlaybackId) {
               const currentCall = serviceInstance.activeCalls.get(callId);
               if (currentCall?.mainPlayback?.id === mainPlaybackId) {
-                currentCall.callLogger.warn(`Main greeting playback ${failedPlayback.id} FAILED. State: ${failedPlayback.state}`);
-                logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Main greeting playback ${failedPlayback.id} FAILED.`})
-                  .catch(e => currentCall.callLogger.error(`RedisLog Error (greeting fail): ${e.message}`));
+                currentCall.callLogger.error(`Main greeting playback ${failedPlayback.id} FAILED.`);
                 _handlePlaybackFinished(serviceInstance, callId, 'main_greeting_failed');
               }
               if (currentCall?.playbackFailedHandler) {
@@ -964,26 +951,22 @@ export async function onStasisStart(serviceInstance: AriClientService, event: St
               currentCall.playbackFailedHandler = null;
             }
             if (currentCall?.mainPlayback?.id === instance.id) {
-              currentCall.callLogger.info(`Main greeting playback ${instance.id} FINISHED.`);
+              currentCall.callLogger.info(`Main greeting playback finished.`);
               _handlePlaybackFinished(serviceInstance, callId, 'main_greeting_finished');
             }
           });
           await callResources.channel.play({ media: greetingAudio }, callResources.mainPlayback);
-          callLogger.info(`Successfully started main greeting playback ${callResources.mainPlayback.id}.`);
+          callLogger.debug(`Started main greeting playback ${callResources.mainPlayback.id}.`);
         } else {
            callLogger.error(`Failed to create mainPlayback object for greeting.`);
-           logConversationToRedis(callId, { actor: 'system', type: 'error_message', content: `Failed to create mainPlayback for greeting.`})
-             .catch(e => callLogger.error(`RedisLog Error (greeting creation fail): ${e.message}`));
            _handlePlaybackFinished(serviceInstance, callId, 'main_greeting_creation_failed');
         }
       } else {
-        const logMsg = greetingAudio ? `ARI client not available for greeting playback.` : `No greeting audio specified. Proceeding to post-prompt logic directly.`;
+        const logMsg = greetingAudio ? `ARI client not available for greeting playback.` : `No greeting audio specified.`;
         callLogger.info(logMsg);
-        logConversationToRedis(callId, { actor: 'system', type: 'system_message', content: logMsg})
-          .catch(e => callLogger.error(`RedisLog Error (no greeting): ${e.message}`));
         _handlePlaybackFinished(serviceInstance, callId, 'main_greeting_skipped_or_no_client');
       }
-      callLogger.info(`StasisStart setup complete for call ${callId}.`);
+      callLogger.info(`StasisStart setup complete.`);
       serviceInstance.sendEventToFrontend({ type: "ari_call_status_update", payload: { status: "active", callId: callId, callerId: incomingChannel.caller?.number || "Unknown" }});
     } catch (err: any) {
       callLogger.error(`Error in StasisStart for ${callId}: ${(err instanceof Error ? err.message : String(err))}`);
@@ -996,20 +979,20 @@ export async function _onDtmfReceived(serviceInstance: AriClientService, event: 
     const call = serviceInstance.activeCalls.get(channel.id);
     if (!call || call.isCleanupCalled) { return; }
     if (call.channel.id !== channel.id) {
-      call.callLogger.warn(`DTMF event for channel ${channel.id} but current call channel is ${call.channel.id}. Ignoring.`);
+      call.callLogger.debug(`DTMF event for wrong channel ${channel.id}. Ignoring.`);
       return;
     }
     const wasDtmfModeActivePreviously = call.dtmfModeActive;
 
-    call.callLogger.info(`DTMF digit '${event.digit}' received on channel ${channel.id}.`);
+    call.callLogger.warn(`DTMF digit '${event.digit}' received.`);
     const dtmfConfig = call.config.appConfig.dtmfConfig;
 
     if (!dtmfConfig.enableDtmfRecognition) {
-      call.callLogger.info(`DTMF recognition is disabled by configuration. Ignoring digit '${event.digit}'.`);
+      call.callLogger.debug(`DTMF recognition is disabled. Ignoring digit.`);
       return;
     }
 
-    call.callLogger.info(`DTMF mode activated by digit '${event.digit}'. Interrupting other recognition activities.`);
+    call.callLogger.warn(`DTMF mode activated. Interrupting speech recognition.`);
     call.dtmfModeActive = true;
     call.speechRecognitionDisabledDueToDtmf = true;
 
@@ -1402,8 +1385,16 @@ export async function _handlePostPromptVADLogic(serviceInstance: AriClientServic
 
 export async function _onChannelTalkingStarted(serviceInstance: AriClientService, event: ChannelTalkingStarted, channel: Channel): Promise<void> {
     const call = serviceInstance.activeCalls.get(channel.id);
-    if (!call || call.channel.id !== channel.id || call.isCleanupCalled ||
-        call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
+    if (!call || call.channel.id !== channel.id || call.isCleanupCalled) {
+      return;
+    }
+
+    // Start Google Speech Service if enabled
+    if (call.googleSpeechService) {
+        call.googleSpeechService.startTranscriptionStream();
+    }
+
+    if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
     call.callLogger.info(`TALK_DETECT: Speech started on channel ${channel.id}.`);

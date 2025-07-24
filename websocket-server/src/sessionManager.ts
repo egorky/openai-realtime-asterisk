@@ -1,6 +1,7 @@
 import { RawData, WebSocket } from "ws";
 import functions from "./functionHandlers";
 import { CallSpecificConfig, OpenAIRealtimeAPIConfig, AriClientInterface } from "./types";
+import { logConversationToRedis } from './redis-client';
 import { AriClientService } from "./ari-service"; // Apuntar a la nueva ubicación de la clase
 import { executeTool, OpenAIToolCall, ToolResultPayload } from './toolExecutor';
 import OpenAI from "openai";
@@ -216,34 +217,24 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
     if (messageContent && messageContent.trim().length > 0) {
       try {
         const serverEvent = JSON.parse(messageContent);
-        // Loguear el evento completo como string JSON para máxima verbosidad en debug
-        if (msgSessionLogger.isLevelEnabled?.('debug')) {
-          msgSessionLogger.debug(`[${callId}] OpenAI Raw Parsed Server Event (${serverEvent.type}): ${JSON.stringify(serverEvent, null, 2)}`);
-        } else { // Loguear de forma más concisa si no es debug
-          msgSessionLogger.info(`[${callId}] OpenAI Parsed Server Event Type: ${serverEvent.type}`);
-        }
-        console.log(`[${callId}] Received from AI:`, JSON.stringify(serverEvent, null, 2));
+        msgSessionLogger.debug(`[${callId}] OpenAI Raw Event: ${messageContent}`);
 
         switch (serverEvent.type) {
           case 'session.created':
-            msgSessionLogger.info(`[${callId}] OpenAI session.created. ID: ${serverEvent.session?.id}`);
+            msgSessionLogger.info(`[${callId}] OpenAI session created. ID: ${serverEvent.session?.id}`);
             break;
           case 'session.updated':
-            msgSessionLogger.info(`[${callId}] OpenAI session.updated. Input: ${serverEvent.session?.input_audio_format}, Output: ${serverEvent.session?.output_audio_format}, Voice: ${serverEvent.session?.voice}`);
+            msgSessionLogger.info(`[${callId}] OpenAI session updated. Input: ${serverEvent.session?.input_audio_format}, Output: ${serverEvent.session?.output_audio_format}`);
             break;
 
           case 'response.delta': {
             if (serverEvent.delta && serverEvent.delta.part) {
               const part = serverEvent.delta.part;
               if (part.type === 'text' && typeof part.text === 'string') {
-                // Este es el texto de la respuesta del LLM.
-                // _onOpenAIInterimResult se encarga de acumularlo.
-                // No es necesario loguear aquí si ya se loguea en _onOpenAIInterimResult.
-                // msgSessionLogger.debug(`[${callId}] OpenAI response.delta (text): "${part.text}"`);
                 currentAriClient._onOpenAIInterimResult(callId, part.text);
               } else if (part.type === 'tool_calls' && Array.isArray(part.tool_calls) && part.tool_calls.length > 0) {
-                msgSessionLogger.info(`[${callId}] OpenAI response.delta (tool_calls) received. Count: ${part.tool_calls.length}`);
-                if (session) session.processingToolCalls = true; // Marcar que estamos procesando herramientas
+                msgSessionLogger.warn(`[${callId}] OpenAI requested tool call(s). Count: ${part.tool_calls.length}`);
+                if (session) session.processingToolCalls = true;
 
                 const toolCallsFromOpenAI: OpenAIToolCall[] = part.tool_calls.map((tc: any) => ({
                   call_id: tc.id,
@@ -319,86 +310,88 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             break;
           */
           case 'response.done':
-            msgSessionLogger.info(`[${callId}] OpenAI response.done. ID: ${serverEvent.response?.id}. Current processingToolCalls: ${session.processingToolCalls || false}`);
+            msgSessionLogger.warn(`[${callId}] OpenAI response.done. Status: ${serverEvent.response?.status}`);
             if (session) {
               const call = (session.ariClient as AriClientService).activeCalls.get(callId);
-              if (call) {
-                (call as any).lastOpenAIResponse = serverEvent.response;
-              }
+              if (call) { (call as any).lastOpenAIResponse = serverEvent.response; }
             }
             if (session.processingToolCalls) {
-              msgSessionLogger.info(`[${callId}] response.done received while/after processing tool calls. Resetting flag, awaiting final LLM response or audio.`);
+              msgSessionLogger.debug(`[${callId}] response.done after tool call. Awaiting final LLM response.`);
               session.processingToolCalls = false;
-              // No llamar a _onOpenAIFinalResult aquí, porque la respuesta final de texto/audio vendrá en eventos subsiguientes.
-              // 'response.done' aquí significa que OpenAI terminó de procesar los tool_results y *comenzará* a generar la respuesta final.
             } else {
-              // Esta es la respuesta final al usuario (o un turno sin herramientas)
               let finalTranscriptText = "";
               if (serverEvent.response?.output?.length > 0) {
-                const textOutput = serverEvent.response.output.find((item: any) => item.type === 'text_content' || (item.content && item.content.find((c:any) => c.type === 'text')));
-                if (textOutput) {
-                    if (textOutput.type === 'text_content') finalTranscriptText = textOutput.text;
-                    else if (textOutput.content) {
-                        const textPart = textOutput.content.find((c:any) => c.type === 'text');
-                        if (textPart) finalTranscriptText = textPart.text;
-                    }
-                } else {
-                    const altTextOutput = serverEvent.response.output.find((item:any) => item.transcript); // Check for older transcript field
-                    if (altTextOutput) finalTranscriptText = altTextOutput.transcript;
+                const outputItem = serverEvent.response.output[0];
+                if (outputItem.content && outputItem.content.length > 0) {
+                    const textPart = outputItem.content.find((c: any) => c.type === 'text');
+                    const audioPart = outputItem.content.find((c: any) => c.type === 'audio' && c.transcript);
+                    if (textPart) { finalTranscriptText = textPart.text; }
+                    else if (audioPart) { finalTranscriptText = audioPart.transcript; }
                 }
-            }
-            if (finalTranscriptText) {
-              currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
-            } else if (serverEvent.response?.status !== 'cancelled' && serverEvent.response?.status !== 'tool_calls_completed') {
+              }
+              if (finalTranscriptText) {
+                // This was the source of the loop. _onOpenAIFinalResult is for USER transcripts.
+                // The bot's transcript is already logged via response.audio_transcript.done.
+              } else if (serverEvent.response?.status === 'incomplete' && serverEvent.response?.status_details?.reason === 'content_filter') {
+                msgSessionLogger.error(`[${callId}] OpenAI response cut off by content filter.`);
+                requestOpenAIResponse(callId, "Continúa", session.config);
+              } else if (serverEvent.response?.status === 'cancelled') {
+                msgSessionLogger.warn(`[${callId}] OpenAI response was cancelled, likely due to barge-in. Awaiting new user turn.`);
+              } else if (serverEvent.response?.status !== 'tool_calls_completed') {
                  msgSessionLogger.warn(`[${callId}] OpenAI response.done, but no final text transcript in output. Status: ${serverEvent.response?.status}`);
-            } // Cierre del else
-            } // Cierre del if/else (session.processingToolCalls)
-            break; // Break para el case 'response.done'
+              }
+            }
+            break;
           case 'response.audio.delta':
-            if (serverEvent.delta && typeof serverEvent.delta === 'string') { // OpenAI envía audio en base64
+            if (serverEvent.delta && typeof serverEvent.delta === 'string') {
               currentAriClient._onOpenAIAudioChunk(callId, serverEvent.delta, false);
             }
             break;
           case 'response.audio.done':
-            msgSessionLogger.info(`[${callId}] OpenAI response.audio.done. Resp ID: ${serverEvent.response_id}, Item ID: ${serverEvent.item_id}.`);
+            msgSessionLogger.debug(`[${callId}] OpenAI response.audio.done. Resp ID: ${serverEvent.response_id}`);
             currentAriClient._onOpenAIAudioStreamEnd(callId);
             break;
           case 'input_audio_buffer.speech_started':
-               msgSessionLogger.info(`[${callId}] OpenAI detected speech started. Item ID: ${serverEvent.item_id}`);
+               msgSessionLogger.warn(`[${callId}] OpenAI detected speech started.`);
                currentAriClient._onOpenAISpeechStarted(callId);
                break;
           case 'input_audio_buffer.speech_stopped':
-               msgSessionLogger.info(`[${callId}] OpenAI detected speech stopped. Item ID: ${serverEvent.item_id}`);
+               msgSessionLogger.warn(`[${callId}] OpenAI detected speech stopped.`);
+               currentAriClient._onOpenAISpeechStopped(callId);
                break;
           case 'input_audio_buffer.committed':
-            msgSessionLogger.info(`[${callId}] OpenAI input_audio_buffer.committed: item_id=${serverEvent.item_id}`);
+            msgSessionLogger.debug(`[${callId}] OpenAI input_audio_buffer.committed: item_id=${serverEvent.item_id}`);
             break;
           case 'conversation.item.created':
-            msgSessionLogger.info(`[${callId}] OpenAI conversation.item.created: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
+            msgSessionLogger.debug(`[${callId}] OpenAI conversation.item.created: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
             break;
           case 'response.created':
-            msgSessionLogger.info(`[${callId}] OpenAI response.created: response_id=${serverEvent.response?.id}, status=${serverEvent.response?.status}`);
+            msgSessionLogger.debug(`[${callId}] OpenAI response.created: response_id=${serverEvent.response?.id}, status=${serverEvent.response?.status}`);
             break;
           case 'response.output_item.added':
-            msgSessionLogger.info(`[${callId}] OpenAI response.output_item.added: response_id=${serverEvent.response_id}, item_id=${serverEvent.item?.id}`);
+            msgSessionLogger.debug(`[${callId}] OpenAI response.output_item.added: response_id=${serverEvent.response_id}, item_id=${serverEvent.item?.id}`);
             break;
           case 'response.audio_transcript.delta':
             msgSessionLogger.debug(`[${callId}] OpenAI response.audio_transcript.delta: "${serverEvent.delta}"`);
             break;
           case 'response.audio_transcript.done':
-            msgSessionLogger.info(`[${callId}] OpenAI response.audio_transcript.done: transcript="${serverEvent.transcript}"`);
+            msgSessionLogger.warn(`[${callId}] OpenAI Bot: "${serverEvent.transcript}"`);
+            if (serverEvent.transcript) {
+              logConversationToRedis(callId, {
+                actor: 'bot',
+                type: 'tts_prompt',
+                content: serverEvent.transcript,
+              }).catch(e => msgSessionLogger.error(`[${callId}] RedisLog Error (bot audio_transcript): ${e.message}`));
+            }
             break;
           case 'response.content_part.added':
             msgSessionLogger.debug(`[${callId}] OpenAI response.content_part.added: item_id=${serverEvent.item_id}, content_type=${serverEvent.part?.type}`);
             break;
           case 'response.content_part.done':
             msgSessionLogger.debug(`[${callId}] OpenAI response.content_part.done: item_id=${serverEvent.item_id}, content_type=${serverEvent.part?.type}`);
-            if (serverEvent.part?.type === 'audio' && serverEvent.part?.transcript) {
-              msgSessionLogger.info(`[${callId}] OpenAI TTS transcript (from content_part.done): "${serverEvent.part.transcript}"`);
-            }
             break;
           case 'response.output_item.done':
-            msgSessionLogger.info(`[${callId}] OpenAI response.output_item.done: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
+            msgSessionLogger.debug(`[${callId}] OpenAI response.output_item.done: item_id=${serverEvent.item?.id}, role=${serverEvent.item?.role}`);
             break;
           case 'response.function_call_arguments.delta':
             if (session) {

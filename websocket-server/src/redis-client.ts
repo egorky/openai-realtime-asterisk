@@ -82,7 +82,7 @@ try {
 export interface ConversationTurn {
   timestamp: string;
   actor: "caller" | "bot" | "system" | "error" | "dtmf" | "tool_call" | "tool_response";
-  type: "transcript" | "tts_prompt" | "dtmf_input" | "error_message" | "system_message" | "tool_log" | "async_transcript_result";
+  type: "transcript" | "tts_prompt" | "dtmf_input" | "error_message" | "system_message" | "tool_log" | "async_transcript_result" | "warn_message";
   content: string;
   tool_name?: string;
   callId?: string; // Optional, as it's part of the key

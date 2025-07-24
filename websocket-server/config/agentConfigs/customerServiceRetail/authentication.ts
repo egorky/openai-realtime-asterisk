@@ -206,7 +206,17 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
     "transitions": [{
       "next_step": "transferAgents",
       "condition": "Una vez confirmada su intención, dirigir al agente correcto con la función transferAgents."
+    }, {
+      "next_step": "9_end_call",
+      "condition": "Si el usuario indica que no necesita más ayuda."
     }]
+  },
+  {
+    "id": "9_end_call",
+    "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
+    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'endCall' para terminar la llamada."],
+    "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
+    "transitions": []
   }
 ]
 `,

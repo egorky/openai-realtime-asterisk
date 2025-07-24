@@ -96,6 +96,10 @@ export async function _fullCleanup(
 
       _clearCallTimers(call); // Limpiar todos los temporizadores
 
+      if (call.googleSpeechService) {
+        call.googleSpeechService.stopTranscriptionStream();
+      }
+
       if (call.openAIStreamingActive || call.isOpenAIStreamEnding) {
         call.callLogger.info(`Stopping OpenAI session due to cleanup.`);
         try {
