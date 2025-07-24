@@ -82,7 +82,7 @@ export function _onOpenAISpeechStopped(serviceInstance: AriClientService, callId
     const call = serviceInstance.activeCalls.get(callId);
     if (!call || call.isCleanupCalled) return;
     call.callLogger.warn(`[${callId}] OpenAI speech recognition stopped.`);
-    if (call.googleSpeechService && call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
+    if (call.googleSpeechService) {
         call.googleSpeechService.stopTranscriptionStream();
     }
 }
