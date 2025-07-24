@@ -1,4 +1,5 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
+import { endCallTool } from '../../../../src/functionHandlers';
 
 export const authenticationAgent = new RealtimeAgent({
   name: 'authentication', // Nombre técnico, mantener en inglés
@@ -229,17 +230,7 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
 `,
 
   tools: [
-    tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
-    }),
+    tool(endCallTool),
     tool({
       name: "authenticate_user_information",
       description:

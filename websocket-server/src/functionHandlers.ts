@@ -127,4 +127,16 @@ functions.push({
   },
 });
 
+export const endCallTool = {
+  name: 'endCall',
+  description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+  parameters: {
+      type: 'object',
+      properties: {},
+      required: [],
+      additionalProperties: false,
+  },
+  execute: async () => ({ success: true }),
+};
+
 export default functions;
