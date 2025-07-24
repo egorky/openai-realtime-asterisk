@@ -12,8 +12,9 @@ export const salesAgent = new RealtimeAgent({
 2.  **Asistir en la Compra**: Ayuda al usuario con cualquier consulta de compra.
 3.  **Guiar al Pago**: Guía al usuario a través del proceso de pago cuando esté listo.
 4.  **Finalizar la Llamada**: Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada. Este es el paso final obligatorio de toda conversación.
-`,
-  states: [
+
+# Estados de Conversación
+[
     {
       "id": "1_greeting",
       "description": "Comenzar cada conversación con un saludo cálido y amigable, identificando el servicio y ofreciendo ayuda.",
@@ -173,7 +174,8 @@ export const salesAgent = new RealtimeAgent({
       "examples": [],
       "transitions": []
     }
-  ],
+  ]
+`,
 
 
   tools: [

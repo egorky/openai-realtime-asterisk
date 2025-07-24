@@ -73,8 +73,9 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
 # Información General
 - La fecha de hoy es 26/12/2024 (formato DD/MM/AAAA para español)
 - Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
-`,
-  states: [
+
+# Estados de Conversación
+[
   {
     "id": "1_greeting",
     "description": "Comenzar cada conversación con un saludo cálido y amigable, identificando el servicio y ofreciendo ayuda.",
@@ -234,7 +235,8 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
     "examples": [],
     "transitions": []
   }
-],
+]
+`,
   tools: [
     tool({
         name: 'endCall',
