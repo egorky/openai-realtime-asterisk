@@ -30,43 +30,7 @@ Tu voz es calmada y profesional.
 - Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
 
 # Estados de Conversación
-[
-  {
-    "id": "1_greeting",
-    "description": "Saludar al paciente y ofrecer ayuda.",
-    "instructions": ["Da una bienvenida y pregunta cómo puedes ayudar."],
-    "examples": ["Hola, bienvenido al sistema de gestión de citas. ¿Cómo puedo ayudarte?"],
-    "transitions": [{ "next_step": "2_get_identification", "condition": "El usuario quiere cancelar una cita." }]
-  },
-  {
-    "id": "2_get_identification",
-    "description": "Solicitar el número de identificación.",
-    "instructions": ["Pide el número de identificación o cédula."],
-    "examples": ["Para cancelar una cita, por favor, dime tu número de identificación."],
-    "transitions": [{ "next_step": "3_get_appointments", "condition": "Se ha proporcionado la identificación." }]
-  },
-  {
-    "id": "3_get_appointments",
-    "description": "Obtener y leer las citas existentes.",
-    "instructions": ["Llama a 'getExistingAppointments' y lee las citas al paciente."],
-    "examples": ["He encontrado las siguientes citas a tu nombre: [cita1], [cita2], [cita3]. ¿Cuál de estas deseas cancelar?"],
-    "transitions": [{ "next_step": "4_confirm_cancellation", "condition": "El paciente ha elegido una cita." }]
-  },
-  {
-    "id": "4_confirm_cancellation",
-    "description": "Confirmar la cancelación.",
-    "instructions": ["Llama a 'cancelAppointment' y confirma la cancelación al paciente, luego pregunta si puedes ayudar en algo más."],
-    "examples": ["Perfecto. He cancelado tu cita para [especialidad] el [fecha]. ¿Hay algo más en lo que pueda ayudarte?"],
-    "transitions": [{ "next_step": "5_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
-  },
-  {
-    "id": "5_end_call",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
-    "examples": ["Entendido. Gracias por contactarnos. ¡Adiós!"],
-    "transitions": []
-  }
-]
+[]
 `,
 
   tools: [

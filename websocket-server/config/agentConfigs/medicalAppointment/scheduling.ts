@@ -1,5 +1,6 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
+import { endCallTool } from '../../../../src/functionHandlers';
 
 export const branches = {
   guayaquil: ["Kennedy", "Alborada", "Sur", "Centro", "Ceibos"],
@@ -45,101 +46,11 @@ Tu voz es calmada y profesional.
 - Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada. No llames a endCall hasta que el usuario confirme que no necesita nada más.
 
 # Estados de Conversación
-[
-  {
-    "id": "1_greeting",
-    "description": "Saludar al paciente y ofrecer ayuda.",
-    "instructions": ["Da una cálida bienvenida y pregunta cómo puedes ayudar."],
-    "examples": ["Hola, bienvenido al sistema de agendamiento de citas médicas. ¿En qué puedo ayudarte hoy?"],
-    "transitions": [{ "next_step": "2_get_identification", "condition": "Después de que el usuario responda afirmativamente a la oferta de ayuda." }]
-  },
-  {
-    "id": "2_get_identification",
-    "description": "Solicitar el número de identificación del paciente.",
-    "instructions": ["Pide el número de identificación o cédula de identidad."],
-    "examples": ["Para comenzar, ¿podrías proporcionarme tu número de identificación o cédula?"],
-    "transitions": [{ "next_step": "3_get_specialty", "condition": "Se ha proporcionado el número de identificación." }]
-  },
-  {
-    "id": "3_get_specialty",
-    "description": "Solicitar la especialidad médica.",
-    "instructions": ["Pregunta qué especialidad médica necesita el paciente."],
-    "examples": ["Gracias. ¿Para qué especialidad médica deseas agendar una cita?"],
-    "transitions": [{ "next_step": "4_get_city", "condition": "Se ha proporcionado la especialidad." }]
-  },
-  {
-    "id": "4_get_city",
-    "description": "Solicitar la ciudad.",
-    "instructions": ["Pregunta en qué ciudad desea ser atendido (Guayaquil o Quito)."],
-    "examples": ["Perfecto. ¿En qué ciudad te encuentras, Guayaquil o Quito?"],
-    "transitions": [{ "next_step": "5_get_branch", "condition": "Se ha proporcionado la ciudad." }]
-  },
-  {
-    "id": "5_get_branch",
-    "description": "Solicitar la sucursal.",
-    "instructions": ["Pide que elija una sucursal dentro de la ciudad seleccionada."],
-    "examples": ["Tenemos varias sucursales en [ciudad]. ¿Cuál prefieres? [lista de sucursales]"],
-    "transitions": [{ "next_step": "6_offer_slots", "condition": "Se ha proporcionado la sucursal." }]
-  },
-  {
-    "id": "6_offer_slots",
-    "description": "Informar sobre la búsqueda de horarios y llamar a la herramienta para obtenerlos.",
-    "instructions": [
-      "Informa al paciente que buscarás los horarios disponibles y que espere un momento.",
-      "Llama a la herramienta 'get_available_slots' para obtener los horarios disponibles."
-    ],
-    "examples": [
-      "Perfecto, déjame consultar los horarios disponibles para ti. Un momento, por favor."
-    ],
-    "transitions": [{ "next_step": "7_present_slots", "condition": "Se han obtenido los horarios." }]
-  },
-  {
-    "id": "7_present_slots",
-    "description": "Presentar los horarios disponibles al paciente.",
-    "instructions": [
-      "Lee los horarios disponibles al paciente y pregúntale cuál prefiere."
-    ],
-    "examples": [
-      "Tenemos los siguientes horarios disponibles: [lista de horarios]. ¿Cuál de estos te gustaría?"
-    ],
-    "transitions": [{ "next_step": "8_confirm_appointment", "condition": "El paciente ha elegido un horario." }]
-  },
-  {
-    "id": "8_confirm_appointment",
-    "description": "Confirmar la cita.",
-    "instructions": ["Confirma verbalmente que la cita ha sido agendada y pregunta si hay algo más en lo que puedas ayudar."],
-    "examples": ["Excelente. Tu cita ha sido agendada para el [fecha] a las [hora]. ¿Hay algo más en lo que pueda ayudarte?"],
-    "transitions": [{ "next_step": "9_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
-  },
-  {
-    "id": "9_end_call",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
-    "examples": ["Gracias por usar nuestro servicio. ¡Que tengas un buen día! Adiós."],
-    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
-  },
-  {
-    "id": "10_hang_up",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
-    "examples": [],
-    "transitions": []
-  }
-]
+[]
 `,
 
   tools: [
-    tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
-    }),
+    tool(endCallTool),
     tool({
       name: 'get_available_slots',
       description: 'Obtiene los horarios de citas disponibles para una especialidad, ciudad y sucursal específicas.',
