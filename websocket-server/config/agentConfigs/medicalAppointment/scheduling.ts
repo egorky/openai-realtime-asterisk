@@ -1,5 +1,6 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
+import { endCallTool } from '../../../../src/functionHandlers';
 
 export const branches = {
   guayaquil: ["Kennedy", "Alborada", "Sur", "Centro", "Ceibos"],
