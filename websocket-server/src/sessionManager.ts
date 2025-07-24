@@ -330,7 +330,8 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
                 }
               }
               if (finalTranscriptText) {
-                currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
+                // This was the source of the loop. _onOpenAIFinalResult is for USER transcripts.
+                // The bot's transcript is already logged via response.audio_transcript.done.
               } else if (serverEvent.response?.status === 'incomplete' && serverEvent.response?.status_details?.reason === 'content_filter') {
                 msgSessionLogger.error(`[${callId}] OpenAI response cut off by content filter.`);
                 requestOpenAIResponse(callId, "Continúa", session.config);
