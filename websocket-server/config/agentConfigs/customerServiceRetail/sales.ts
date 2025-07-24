@@ -179,17 +179,7 @@ export const salesAgent = new RealtimeAgent({
 
 
   tools: [
-    tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
-    }),
+    tool(endCallTool),
     tool({
       name: 'lookupNewSales',
       description:
