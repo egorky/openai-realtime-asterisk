@@ -158,6 +158,12 @@ export async function _onOpenAIFinalResult(serviceInstance: AriClientService, ca
         call.callLogger.error(`Error extracting/saving parameters: ${e.message}`);
     });
 
+    logConversationToRedis(callId, {
+      actor: 'caller',
+      type: 'transcript',
+      content: transcript,
+    }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
+
     const allBranches = [...branches.guayaquil, ...branches.quito];
     const transcriptContainsBranch = allBranches.some(branch => transcript.toLowerCase().includes(branch.toLowerCase()));
 
