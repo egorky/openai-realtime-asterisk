@@ -116,10 +116,17 @@ Tu voz es calmada y profesional.
     "description": "Finalizar la llamada.",
     "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
     "examples": ["Gracias por usar nuestro servicio. ¡Que tengas un buen día! Adiós."],
+    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
+  },
+  {
+    "id": "10_hang_up",
+    "description": "Finalizar la llamada.",
+    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
+    "examples": [],
     "transitions": []
   }
 ]
-`,
+`
 
   tools: [
     tool({
