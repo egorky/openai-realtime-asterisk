@@ -30,21 +30,33 @@ Tu voz es calmada y profesional.
 - Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
 
 # Estados de Conversación
-[]
+[
+  {
+    "id": "1_get_appointments",
+    "description": "Obtener y leer las citas existentes.",
+    "instructions": ["Llama a 'getExistingAppointments' y lee las citas al paciente."],
+    "examples": ["He encontrado las siguientes citas a tu nombre: [cita1], [cita2], [cita3]. ¿Cuál de estas deseas cancelar?"],
+    "transitions": [{ "next_step": "4_confirm_cancellation", "condition": "El paciente ha elegido una cita." }]
+  },
+  {
+    "id": "4_confirm_cancellation",
+    "description": "Confirmar la cancelación.",
+    "instructions": ["Llama a 'cancelAppointment' y confirma la cancelación al paciente, luego pregunta si puedes ayudar en algo más."],
+    "examples": ["Perfecto. He cancelado tu cita para [especialidad] el [fecha]. ¿Hay algo más en lo que pueda ayudarte?"],
+    "transitions": [{ "next_step": "5_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
+  },
+  {
+    "id": "5_end_call",
+    "description": "Finalizar la llamada.",
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "examples": ["Entendido. Gracias por contactarnos. ¡Adiós!"],
+    "transitions": []
+  }
+]
 `,
 
   tools: [
-    tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
-    }),
+    tool(endCallTool),
     tool({
       name: "getExistingAppointments",
       description: "Obtiene las citas programadas para un paciente.",

@@ -1,6 +1,5 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
 import { RECOMMENDED_PROMPT_PREFIX } from '@openai/agents-core/extensions';
-import { endCallTool } from '../../../../src/functionHandlers';
 
 export const reschedulingAgent = new RealtimeAgent({
   name: 'rescheduling',
@@ -32,7 +31,36 @@ Tu voz es calmada y profesional.
 - Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
 
 # Estados de Conversación
-[]
+[
+  {
+    "id": "1_get_appointments",
+    "description": "Obtener y leer las citas existentes.",
+    "instructions": ["Llama a 'getExistingAppointments' y lee las citas al paciente."],
+    "examples": ["Claro, he encontrado estas citas a tu nombre: [cita1], [cita2], [cita3]. ¿Cuál de ellas te gustaría reprogramar?"],
+    "transitions": [{ "next_step": "4_offer_new_slots", "condition": "El paciente ha elegido una cita para reprogramar." }]
+  },
+  {
+    "id": "4_offer_new_slots",
+    "description": "Ofrecer nuevos horarios.",
+    "instructions": ["Llama a 'getNewAvailableSlots' y presenta las nuevas opciones al paciente."],
+    "examples": ["Entendido. Aquí tienes algunos horarios alternativos: [slot1], [slot2], [slot3]. ¿Alguno de estos te viene bien?"],
+    "transitions": [{ "next_step": "5_confirm_reschedule", "condition": "El paciente ha elegido un nuevo horario." }]
+  },
+  {
+    "id": "5_confirm_reschedule",
+    "description": "Confirmar la reprogramación.",
+    "instructions": ["Llama a 'rescheduleAppointment' y confirma la nueva cita al paciente, luego pregunta si puede ayudar en algo más."],
+    "examples": ["¡Perfecto! Tu cita ha sido reprogramada para el [nueva fecha] a las [nueva hora]. ¿Necesitas algo más?"],
+    "transitions": [{ "next_step": "6_end_call", "condition": "El usuario confirma que no necesita más ayuda o se despide." }]
+  },
+  {
+    "id": "6_end_call",
+    "description": "Finalizar la llamada.",
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "examples": ["De acuerdo. Ha sido un placer ayudarte. ¡Adiós!"],
+    "transitions": []
+  }
+]
 `,
 
   tools: [
@@ -85,7 +113,7 @@ Tu voz es calmada y profesional.
       name: "rescheduleAppointment",
       description: "Reprograma una cita médica a un nuevo horario.",
       parameters: {
-        type: "object",.
+        type: "object",
         properties: {
           appointmentId: { type: "number", description: "El ID de la cita a reprogramar." },
           newSlot: { type: "string", description: "El nuevo horario elegido." },
