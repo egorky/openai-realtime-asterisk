@@ -350,6 +350,11 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
             }
             if (finalTranscriptText) {
               currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
+            } else if (serverEvent.response?.status === 'incomplete' && serverEvent.response?.status_details?.reason === 'content_filter') {
+              msgSessionLogger.warn(`[${callId}] OpenAI response was cut off by content filter. Attempting to re-prompt.`);
+              // Re-prompt the AI to try generating the response again.
+              // A simple way is to send a generic message to continue the conversation.
+              requestOpenAIResponse(callId, "Continúa", session.config);
             } else if (serverEvent.response?.status !== 'cancelled' && serverEvent.response?.status !== 'tool_calls_completed') {
                  msgSessionLogger.warn(`[${callId}] OpenAI response.done, but no final text transcript in output. Status: ${serverEvent.response?.status}`);
             } // Cierre del else
