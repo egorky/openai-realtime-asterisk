@@ -51,26 +51,28 @@ functions.push({
       required: ["specialty", "city", "branch"],
     },
   },
-  handler: async (args: { specialty: string; city: string; branch: string }) => {
-    const now = new Date();
-    const tomorrow = new Date(now);
-    tomorrow.setDate(now.getDate() + 1);
-    const dayAfterTomorrow = new Date(now);
-    dayAfterTomorrow.setDate(now.getDate() + 2);
-
-    const formatDate = (date: Date) => {
-      return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
-    };
-
-    return JSON.stringify({
-      slots: [
-        `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
-        `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
-        `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
-      ]
-    });
-  },
+  handler: getAvailableSlots,
 });
+
+export async function getAvailableSlots(args: { specialty: string; city: string; branch: string }) {
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const dayAfterTomorrow = new Date(now);
+  dayAfterTomorrow.setDate(now.getDate() + 2);
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+
+  return JSON.stringify({
+    slots: [
+      `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
+      `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
+      `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
+    ]
+  });
+}
 
 functions.push({
   schema: {
@@ -99,12 +101,14 @@ functions.push({
       required: ["identificationNumber", "specialty", "city", "branch", "slot"],
     },
   },
-  handler: async (args: { identificationNumber: string; specialty: string; city: string; branch: string; slot: string }) => {
-    // The actual logic for calling the real API and scheduling the appointment would go here.
-    // For now, we'll just return a simulated success.
-    return JSON.stringify({ success: true });
-  },
+  handler: scheduleAppointment,
 });
+
+export async function scheduleAppointment(args: { identificationNumber: string; specialty: string; city: string; branch: string; slot: string }) {
+  // The actual logic for calling the real API and scheduling the appointment would go here.
+  // For now, we'll just return a simulated success.
+  return JSON.stringify({ success: true });
+}
 
 functions.push({
   schema: {
