@@ -1,50 +1,4 @@
-import { FunctionHandler, CallSpecificConfig } from "./types";
-import { saveSessionParams } from './redis-client';
-import * as sessionManager from './sessionManager';
-import { CallResources } from './ari-call-resources';
-import { AriClientService } from "./ari-service";
-
-export async function _playTTSThenGetSlots(serviceInstance: AriClientService, callId: string, call: CallResources): Promise<void> {
-  call.callLogger.info("Orchestrating tool call for getAvailableSlots");
-
-  // Generate TTS for the waiting message
-  const waitingMessage = "Un momento, por favor, estoy consultando los horarios.";
-  const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
-  await sessionManager.requestOpenAIResponse(callId, waitingMessage, configForTTS);
-
-  // The audio will be played via the _onOpenAIAudioChunk and _onOpenAIAudioStreamEnd callbacks.
-  // We need a way to know that after this TTS is played, we should call the getAvailableSlots tool.
-  // We'll use a flag in the call resources.
-  call.pendingToolCall = "getAvailableSlots";
-}
-
-export async function _extractSlotAndSchedule(callId: string, transcript: string, call: CallResources): Promise<void> {
-  const lowerTranscript = transcript.toLowerCase();
-  // This is a very simple way to extract the slot. A more robust solution would use a regex or a more advanced NLP technique.
-  const slot = transcript; // For now, we'll just use the whole transcript as the slot.
-  await saveSessionParams(callId, { slot });
-  call.pendingToolCall = "scheduleAppointment";
-}
-
-export async function getAvailableSlots(args: { specialty: string; city: string; branch: string }) {
-  const now = new Date();
-  const tomorrow = new Date(now);
-  tomorrow.setDate(now.getDate() + 1);
-  const dayAfterTomorrow = new Date(now);
-  dayAfterTomorrow.setDate(now.getDate() + 2);
-
-  const formatDate = (date: Date) => {
-    return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
-  };
-
-  return {
-    slots: [
-      `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
-      `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
-      `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
-    ]
-  };
-}
+import { FunctionHandler } from "./types";
 
 const functions: FunctionHandler[] = [];
 
@@ -76,10 +30,84 @@ functions.push({
   },
 });
 
+functions.push({
+  schema: {
+    name: "getAvailableSlots",
+    type: "function",
+    description: "Get available appointment slots",
+    parameters: {
+      type: "object",
+      properties: {
+        specialty: {
+          type: "string",
+        },
+        city: {
+          type: "string",
+        },
+        branch: {
+          type: "string",
+        },
+      },
+      required: ["specialty", "city", "branch"],
+    },
+  },
+  handler: getAvailableSlots,
+});
+
+export async function getAvailableSlots(args: { specialty: string; city: string; branch: string }) {
+  const now = new Date();
+  const tomorrow = new Date(now);
+  tomorrow.setDate(now.getDate() + 1);
+  const dayAfterTomorrow = new Date(now);
+  dayAfterTomorrow.setDate(now.getDate() + 2);
+
+  const formatDate = (date: Date) => {
+    return date.toLocaleDateString('es-ES', { weekday: 'long', month: 'long', day: 'numeric' });
+  };
+
+  return JSON.stringify({
+    slots: [
+      `Mañana, ${formatDate(tomorrow)}, a las 9:00 AM`,
+      `Mañana, ${formatDate(tomorrow)}, a las 11:30 AM`,
+      `El ${formatDate(dayAfterTomorrow)}, a las 2:00 PM`,
+    ]
+  });
+}
+
+functions.push({
+  schema: {
+    name: "scheduleAppointment",
+    type: "function",
+    description: "Schedule an appointment",
+    parameters: {
+      type: "object",
+      properties: {
+        identificationNumber: {
+          type: "string",
+        },
+        specialty: {
+          type: "string",
+        },
+        city: {
+          type: "string",
+        },
+        branch: {
+          type: "string",
+        },
+        slot: {
+          type: "string",
+        },
+      },
+      required: ["identificationNumber", "specialty", "city", "branch", "slot"],
+    },
+  },
+  handler: scheduleAppointment,
+});
+
 export async function scheduleAppointment(args: { identificationNumber: string; specialty: string; city: string; branch: string; slot: string }) {
-  // Aquí iría la lógica para llamar a la API real y agendar la cita.
-  // Por ahora, solo devolvemos un éxito simulado.
-  return { success: true };
+  // The actual logic for calling the real API and scheduling the appointment would go here.
+  // For now, we'll just return a simulated success.
+  return JSON.stringify({ success: true });
 }
 
 functions.push({

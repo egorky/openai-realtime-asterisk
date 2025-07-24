@@ -335,6 +335,12 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
               } else if (serverEvent.response?.status === 'incomplete' && serverEvent.response?.status_details?.reason === 'content_filter') {
                 msgSessionLogger.error(`[${callId}] OpenAI response cut off by content filter.`);
                 requestOpenAIResponse(callId, "Continúa", session.config);
+              } else if (serverEvent.response?.status === 'incomplete') {
+                msgSessionLogger.error(`[${callId}] OpenAI response incomplete. Resending last transcript.`);
+                const call = (session.ariClient as AriClientService).activeCalls.get(callId);
+                if (call && call.finalTranscription) {
+                  requestOpenAIResponse(callId, call.finalTranscription, session.config);
+                }
               } else if (serverEvent.response?.status === 'cancelled') {
                 msgSessionLogger.warn(`[${callId}] OpenAI response was cancelled, likely due to barge-in. Awaiting new user turn.`);
               } else if (serverEvent.response?.status !== 'tool_calls_completed') {

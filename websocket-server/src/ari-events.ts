@@ -7,8 +7,6 @@ import { AriClientService } from './ari-service'; // Necesario para 'this' y acc
 import * as sessionManager from './sessionManager';
 import { logConversationToRedis, ConversationTurn, saveSessionParams, getSessionParams } from './redis-client';
 import { transcribeAudioAsync } from './async-transcriber';
-import { getAvailableSlots, scheduleAppointment, _playTTSThenGetSlots, _extractSlotAndSchedule } from './functionHandlers';
-import { branches } from '../config/agentConfigs/medicalAppointment/scheduling';
 import { extractAndSaveParameters } from './parameter-extractor';
 import { getCallSpecificConfig, ASTERISK_ARI_APP_NAME, DEFAULT_RTP_HOST_IP, MAX_VAD_BUFFER_PACKETS } from './ari-config';
 import { RtpServer } from './rtp-server'; // Asumiendo que rtp-server.ts existe
@@ -41,6 +39,10 @@ export function _onOpenAISpeechStarted(serviceInstance: AriClientService, callId
         payload: {},
         logLevel: 'INFO'
     });
+
+    if (call.googleSpeechService && call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
+        call.googleSpeechService.startTranscriptionStream();
+    }
 
     // TTS Interruption Logic
     if (call.isTtsPlaying || call.ttsPlaybackQueue.length > 0) {
@@ -163,35 +165,23 @@ export async function _onOpenAIFinalResult(serviceInstance: AriClientService, ca
       content: transcript,
     }).catch(e => call.callLogger.error(`RedisLog Error (caller transcript): ${e.message}`));
 
-    const allBranches = [...branches.guayaquil, ...branches.quito];
-    const transcriptContainsBranch = allBranches.some(branch => transcript.toLowerCase().includes(branch.toLowerCase()));
-
-    if (call.finalTranscription.toLowerCase().includes("sucursal") && transcriptContainsBranch) {
-      await _playTTSThenGetSlots(serviceInstance, callId, call);
-    } else if (call.finalTranscription.toLowerCase().includes("confirmar cita")) { // A simple way to detect confirmation
-      await _extractSlotAndSchedule(callId, transcript, call);
-      const configForTTS = { ...call.config, openAIRealtimeAPI: { ...call.config.openAIRealtimeAPI, stream: false } };
-      await sessionManager.requestOpenAIResponse(callId, "Confirmando su cita...", configForTTS);
-    }
-    else {
-      try {
-        serviceInstance.sendEventToFrontend({
-          type: 'openai_requesting_response',
-          callId: callId,
-          timestamp: new Date().toISOString(),
-          source: 'SESSION_MANAGER', // sessionManager makes the call
-          payload: { triggeringTranscript: transcript },
-          logLevel: 'INFO'
-        });
-        sessionManager.requestOpenAIResponse(callId, transcript, call.config);
-      } catch (e: any) {
-        call.callLogger.error(`Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
-        logConversationToRedis(callId, {
-          actor: 'system',
-          type: 'error_message',
-          content: `Failed to request OpenAI response: ${e.message}`
-        }).catch(redisErr => call.callLogger.error(`RedisLog Error (OpenAI request fail): ${redisErr.message}`));
-      }
+    try {
+      serviceInstance.sendEventToFrontend({
+        type: 'openai_requesting_response',
+        callId: callId,
+        timestamp: new Date().toISOString(),
+        source: 'SESSION_MANAGER', // sessionManager makes the call
+        payload: { triggeringTranscript: transcript },
+        logLevel: 'INFO'
+      });
+      sessionManager.requestOpenAIResponse(callId, transcript, call.config);
+    } catch (e: any) {
+      call.callLogger.error(`Error calling sessionManager.requestOpenAIResponse: ${e.message}`, e);
+      logConversationToRedis(callId, {
+        actor: 'system',
+        type: 'error_message',
+        content: `Failed to request OpenAI response: ${e.message}`
+      }).catch(redisErr => call.callLogger.error(`RedisLog Error (OpenAI request fail): ${redisErr.message}`));
     }
     call.callLogger.info(`Waiting for OpenAI to generate response (including potential audio).`);
 }
@@ -1192,31 +1182,6 @@ export async function _handlePlaybackFinished(serviceInstance: AriClientService,
             }
         }
 
-        if (call.pendingToolCall === "getAvailableSlots") {
-          call.pendingToolCall = undefined;
-          const args = await getSessionParams(callId);
-          if (args) {
-            const slots = await getAvailableSlots(args as any);
-            const toolResult = `Los horarios disponibles son: ${slots.slots.join(', ')}.`;
-            sessionManager.requestOpenAIResponse(callId, toolResult, call.config);
-          } else {
-            call.callLogger.error("Could not retrieve session params to call getAvailableSlots");
-            // Handle error, maybe say something to the user
-          }
-          return;
-        } else if (call.pendingToolCall === "scheduleAppointment") {
-          call.pendingToolCall = undefined;
-          const args = await getSessionParams(callId);
-          if (args) {
-            await scheduleAppointment(args as any);
-            sessionManager.requestOpenAIResponse(callId, "La cita ha sido agendada.", call.config);
-          } else {
-            call.callLogger.error("Could not retrieve session params to schedule appointment");
-            // Handle error, maybe say something to the user
-          }
-          return;
-        }
-
         call.callLogger.info(`Proceeding to standard post-TTS logic to listen for user.`);
     }
 
@@ -1389,11 +1354,6 @@ export async function _onChannelTalkingStarted(serviceInstance: AriClientService
       return;
     }
 
-    // Start Google Speech Service if enabled
-    if (call.googleSpeechService) {
-        call.googleSpeechService.startTranscriptionStream();
-    }
-
     if (call.config.appConfig.appRecognitionConfig.recognitionActivationMode !== 'vad') {
       return;
     }
@@ -1418,6 +1378,10 @@ export async function _onChannelTalkingStarted(serviceInstance: AriClientService
 
     const appRecogConf = call.config.appConfig.appRecognitionConfig;
     const vadRecogActivation = appRecogConf.vadRecogActivation;
+
+    if (call.googleSpeechService) {
+        call.googleSpeechService.startTranscriptionStream();
+    }
 
     if (vadRecogActivation === 'vadMode') {
       if (!call.vadInitialSilenceDelayCompleted) {
