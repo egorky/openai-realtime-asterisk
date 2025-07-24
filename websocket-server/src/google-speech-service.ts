@@ -31,7 +31,8 @@ class GoogleSpeechService {
         const sampleRate = appRecogConf.asyncSttAudioSampleRate || 8000;
         const encoding: keyof typeof google.cloud.speech.v1.RecognitionConfig.AudioEncoding = 'MULAW';
 
-        this.logger.info(`Starting Google Speech transcription stream for call ${this.callId}. Lang: ${languageCode}, Rate: ${sampleRate}, Encoding: ${encoding}`);
+        this.logger.warn(`Starting Google Speech transcription stream.`);
+        this.logger.info(`Async STT Config: Lang: ${languageCode}, Rate: ${sampleRate}, Encoding: ${encoding}`);
 
         const streamingConfig: google.cloud.speech.v1.IStreamingRecognitionConfig = {
             config: {
@@ -55,9 +56,9 @@ class GoogleSpeechService {
                     const isFinal = data.results[0].isFinal;
 
                     if (transcript) {
-                        this.logger.debug(`[${isFinal ? 'FINAL' : 'INTERIM'}] Google Speech transcript: "${transcript}"`);
+                        this.logger.debug(`[${isFinal ? 'FINAL' : 'INTERIM'}] Async STT: "${transcript}"`);
                         if (isFinal && transcript.trim()) {
-                            this.logger.info(`[Async STT] Final transcript received: "${transcript}"`);
+                            this.logger.warn(`[Async STT] Final transcript: "${transcript}"`);
                             logConversationToRedis(this.callId, {
                                 actor: 'caller',
                                 type: 'async_transcript_result',

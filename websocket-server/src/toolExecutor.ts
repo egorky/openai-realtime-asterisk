@@ -231,8 +231,9 @@ export async function executeTool(
   const { name: toolName, arguments: toolArgsString } = toolCall.function;
   const openAIToolCallId = toolCall.call_id;
 
-  callLogger.info(`[ToolExecutor] Intentando ejecutar herramienta: ${toolName} para ARI callId: ${ariCallId}, OpenAI tool_call_id: ${openAIToolCallId}`);
-  callLogger.debug(`[ToolExecutor] Argumentos: ${toolArgsString}`);
+  callLogger.warn(`Executing tool: ${toolName}`);
+  callLogger.info(`Tool call for ARI callId: ${ariCallId}, OpenAI tool_call_id: ${openAIToolCallId}`);
+  callLogger.debug(`Tool arguments: ${toolArgsString}`);
 
   await logConversationToRedis(ariCallId, {
     actor: 'tool_call',
