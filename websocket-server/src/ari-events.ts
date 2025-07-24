@@ -629,7 +629,7 @@ export function _onOpenAISessionEnded(serviceInstance: AriClientService, callId:
             type: 'warn_message',
             content: `No transcript from OpenAI (reason: ${reason}). Attempting asynchronous STT.`,
             originalTurnTimestamp: call.currentTurnStartTime,
-          } as ConversationTurn).catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
+          }).catch(e => call.callLogger.error(`RedisLog Error: ${e.message}`));
 
           const audioBufferToTranscribe = Buffer.concat(call.callerAudioBufferForCurrentTurn);
           transcribeAudioAsync({
