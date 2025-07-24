@@ -336,18 +336,18 @@ export function startOpenAISession(callId: string, ariClient: AriClientInterface
               // Esta es la respuesta final al usuario (o un turno sin herramientas)
               let finalTranscriptText = "";
               if (serverEvent.response?.output?.length > 0) {
-                const textOutput = serverEvent.response.output.find((item: any) => item.type === 'text_content' || (item.content && item.content.find((c:any) => c.type === 'text')));
-                if (textOutput) {
-                    if (textOutput.type === 'text_content') finalTranscriptText = textOutput.text;
-                    else if (textOutput.content) {
-                        const textPart = textOutput.content.find((c:any) => c.type === 'text');
-                        if (textPart) finalTranscriptText = textPart.text;
+                const outputItem = serverEvent.response.output[0];
+                if (outputItem.content && outputItem.content.length > 0) {
+                    const textPart = outputItem.content.find((c: any) => c.type === 'text');
+                    const audioPart = outputItem.content.find((c: any) => c.type === 'audio' && c.transcript);
+
+                    if (textPart) {
+                        finalTranscriptText = textPart.text;
+                    } else if (audioPart) {
+                        finalTranscriptText = audioPart.transcript;
                     }
-                } else {
-                    const altTextOutput = serverEvent.response.output.find((item:any) => item.transcript); // Check for older transcript field
-                    if (altTextOutput) finalTranscriptText = altTextOutput.transcript;
                 }
-            }
+              }
             if (finalTranscriptText) {
               currentAriClient._onOpenAIFinalResult(callId, finalTranscriptText);
             } else if (serverEvent.response?.status === 'incomplete' && serverEvent.response?.status_details?.reason === 'content_filter') {
