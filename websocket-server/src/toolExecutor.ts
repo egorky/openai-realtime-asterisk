@@ -324,8 +324,8 @@ export async function executeTool(
       case 'endCall':
         callLogger.info(`[ToolExecutor] Executing endCall for ARI callId: ${ariCallId}`);
         if (ariClientServiceInstance) {
-          await ariClientServiceInstance.endCall(ariCallId);
           resultData = { success: true, message: "Call termination initiated." };
+          await ariClientServiceInstance.endCall(ariCallId);
         } else {
           callLogger.error(`[ToolExecutor] ariClientServiceInstance is not available to end the call.`);
           resultData = { success: false, error: "Call service not available." };
