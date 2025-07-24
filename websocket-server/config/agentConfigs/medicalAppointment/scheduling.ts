@@ -126,7 +126,7 @@ Tu voz es calmada y profesional.
     "transitions": []
   }
 ]
-`
+`,
 
   tools: [
     tool({

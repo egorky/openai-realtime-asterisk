@@ -216,6 +216,13 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
     "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
     "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'endCall' para terminar la llamada."],
     "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
+    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
+  },
+  {
+    "id": "10_hang_up",
+    "description": "Finalizar la llamada.",
+    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
+    "examples": [],
     "transitions": []
   }
 ]
