@@ -2,7 +2,7 @@ import {
   RealtimeAgent,
   tool,
 } from '@openai/agents/realtime';
-import { endCallTool } from '../../../src/functionHandlers';
+import { endCallTool } from '../../src/functionHandlers';
 
 export const haikuWriterAgent = new RealtimeAgent({
   name: 'haikuWriter', // Technical name, keep in English

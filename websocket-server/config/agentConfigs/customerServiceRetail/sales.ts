@@ -1,4 +1,5 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
+import { endCallTool } from '../../../src/functionHandlers';
 
 export const salesAgent = new RealtimeAgent({
   name: 'salesAgent', // Nombre técnico, mantener en inglés

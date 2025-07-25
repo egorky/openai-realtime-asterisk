@@ -1,4 +1,5 @@
 import { RealtimeAgent, tool, RealtimeItem } from '@openai/agents/realtime';
+import { endCallTool } from '../../../src/functionHandlers';
 
 export const returnsAgent = new RealtimeAgent({
   name: 'returns', // Nombre técnico, mantener en inglés

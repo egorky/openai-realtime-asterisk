@@ -1,5 +1,5 @@
 import { RealtimeAgent, tool } from '@openai/agents/realtime';
-import { endCallTool } from '../../../../src/functionHandlers';
+import { endCallTool } from '../../../src/functionHandlers';
 
 export const authenticationAgent = new RealtimeAgent({
   name: 'authentication',
