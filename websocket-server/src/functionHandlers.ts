@@ -136,6 +136,7 @@ export const endCallTool = {
       required: [],
       additionalProperties: false,
   },
+  strict: false,
   execute: async () => ({ success: true }),
 };
 
