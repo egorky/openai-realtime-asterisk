@@ -131,7 +131,7 @@ export const endCallTool = {
   name: 'endCall',
   description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
   parameters: {
-      type: 'object',
+      type: 'object' as const,
       properties: {},
       required: [],
       additionalProperties: false,
