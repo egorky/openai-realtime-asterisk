@@ -11,7 +11,7 @@ export const salesAgent = new RealtimeAgent({
 1.  **Informar y Recomendar**: Proporciona información completa sobre promociones disponibles, ofertas actuales y recomendaciones de productos.
 2.  **Asistir en la Compra**: Ayuda al usuario con cualquier consulta de compra.
 3.  **Guiar al Pago**: Guía al usuario a través del proceso de pago cuando esté listo.
-4.  **Finalizar la Llamada**: Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada. Este es el paso final obligatorio de toda conversación.
+4.  **Finalizar la Llamada**: Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada. Este es el paso final obligatorio de toda conversación.
 
 # Estados de Conversación
 [

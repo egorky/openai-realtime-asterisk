@@ -28,7 +28,7 @@ Tu voz es calmada y profesional.
 - Sigue los estados de conversación para reprogramar la cita.
 - Reutiliza la herramienta 'getExistingAppointments' para encontrar la cita del paciente.
 - Ofrece nuevos horarios y confirma la reprogramación.
-- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada.
 
 # Estados de Conversación
 [
