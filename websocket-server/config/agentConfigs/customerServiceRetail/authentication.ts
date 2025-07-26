@@ -229,6 +229,7 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
         type: 'object',
         properties: {},
         required: [],
+        additionalProperties: false,
       },
       execute: async () => {
         return { success: true };

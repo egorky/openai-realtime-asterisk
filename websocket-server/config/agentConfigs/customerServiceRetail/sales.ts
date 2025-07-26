@@ -179,6 +179,7 @@ export const salesAgent = new RealtimeAgent({
         type: 'object',
         properties: {},
         required: [],
+        additionalProperties: false,
       },
       execute: async () => {
         return { success: true };

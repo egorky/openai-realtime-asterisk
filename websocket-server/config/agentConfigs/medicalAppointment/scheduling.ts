@@ -129,6 +129,7 @@ Tu voz es calmada y profesional.
             type: 'object',
             properties: {},
             required: [],
+            additionalProperties: false,
         },
         execute: async () => ({ success: true }),
     }),
