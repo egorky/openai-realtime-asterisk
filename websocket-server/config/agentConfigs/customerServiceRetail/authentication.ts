@@ -230,15 +230,16 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
 
   tools: [
     tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
+      name: 'end_call',
+      description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      execute: async () => {
+        return { success: true };
+      },
     }),
     tool({
       name: "authenticate_user_information",

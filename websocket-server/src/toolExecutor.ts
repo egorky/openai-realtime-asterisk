@@ -220,6 +220,7 @@ async function findNearestStore(zipCode: string | undefined, callLogger: LoggerI
 
 import { saveSessionParams, disconnectRedis } from './redis-client';
 import { ariClientServiceInstance } from './ari-service';
+import { endCall as endCallAction } from './ari-actions';
 
 // --- Main executeTool Function ---
 export async function executeTool(
@@ -322,9 +323,10 @@ export async function executeTool(
         break;
 
       case 'endCall':
-        callLogger.info(`[ToolExecutor] Executing endCall for ARI callId: ${ariCallId}`);
+      case 'end_call':
+        callLogger.info(`[ToolExecutor] Executing end_call for ARI callId: ${ariCallId}`);
         if (ariClientServiceInstance) {
-          await ariClientServiceInstance.endCall(ariCallId);
+          await endCallAction(ariClientServiceInstance, ariCallId);
           resultData = { success: true, message: "Call termination initiated." };
         } else {
           callLogger.error(`[ToolExecutor] ariClientServiceInstance is not available to end the call.`);

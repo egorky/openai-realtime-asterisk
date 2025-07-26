@@ -79,15 +79,16 @@ Tu voz es calmada y profesional.
 
   tools: [
     tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
+      name: 'end_call',
+      description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+      },
+      execute: async () => {
+        return { success: true };
+      },
     }),
     tool({
       name: "getExistingAppointments",
