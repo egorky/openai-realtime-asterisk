@@ -62,7 +62,7 @@ Tu voz es calmada y profesional.
   {
     "id": "5_end_call",
     "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada."],
     "examples": ["Entendido. Gracias por contactarnos. ¡Adiós!"],
     "transitions": []
   }

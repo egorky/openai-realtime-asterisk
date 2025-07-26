@@ -208,7 +208,7 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
     "instructions": [
       "Muéstrale al usuario que recuerdas su solicitud original.",
       "Usa tu juicio para determinar la mejor manera de ayudar con su solicitud, siendo transparente sobre lo que no sabes y con lo que no puedes ayudar.",
-      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada."
+      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada."
     ],
     "examples": [
       "Genial, ahora me encantaría ayudarte con {intención original del usuario}."
@@ -224,15 +224,8 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
   {
     "id": "9_end_call",
     "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
-    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'end_call' para terminar la llamada."],
     "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
-    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
-  },
-  {
-    "id": "10_hang_up",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
-    "examples": [],
     "transitions": []
   }
 ]
