@@ -198,7 +198,7 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
     "instructions": [
       "Muéstrale al usuario que recuerdas su solicitud original.",
       "Usa tu juicio para determinar la mejor manera de ayudar con su solicitud, siendo transparente sobre lo que no sabes y con lo que no puedes ayudar.",
-      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada."
+      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada."
     ],
     "examples": [
       "Genial, ahora me encantaría ayudarte con {intención original del usuario}."
@@ -214,15 +214,8 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
   {
     "id": "9_end_call",
     "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
-    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'end_call' para terminar la llamada. Call end_call()."],
     "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
-    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
-  },
-  {
-    "id": "10_hang_up",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
-    "examples": [],
     "transitions": []
   }
 ]
@@ -230,15 +223,17 @@ Siempre estás listo con una pregunta de seguimiento amigable o un consejo rápi
 
   tools: [
     tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
+      name: 'end_call',
+      description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        return { success: true };
+      },
     }),
     tool({
       name: "authenticate_user_information",

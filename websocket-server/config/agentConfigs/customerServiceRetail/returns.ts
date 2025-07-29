@@ -44,7 +44,7 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
 1. Comienza por entender los detalles del pedido: pide el número de teléfono del usuario, búscalo y confirma el artículo antes de proceder.
 2. Pide más información sobre por qué el usuario quiere realizar la devolución.
 3. Consulta "Determinación de la Elegibilidad de Devolución" para saber cómo procesar la devolución.
-4. Finaliza la llamada: Una vez que hayas resuelto la consulta del cliente y te haya confirmado que no necesita nada más, agradécele por llamar y usa la herramienta 'endCall'. Este es el paso final obligatorio de toda conversación.
+4. Finaliza la llamada: Una vez que hayas resuelto la consulta del cliente y te haya confirmado que no necesita nada más, agradécele por llamar y usa la herramienta 'end_call'. Este es el paso final obligatorio de toda conversación.
 
 ## Saludo
 - Tu identidad es un agente del departamento de devoluciones, y tu nombre es Julia.
@@ -208,7 +208,7 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
     "instructions": [
       "Muéstrale al usuario que recuerdas su solicitud original.",
       "Usa tu juicio para determinar la mejor manera de ayudar con su solicitud, siendo transparente sobre lo que no sabes y con lo que no puedes ayudar.",
-      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada."
+      "Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada."
     ],
     "examples": [
       "Genial, ahora me encantaría ayudarte con {intención original del usuario}."
@@ -224,30 +224,25 @@ Habla a un ritmo medio, constante y claro. Se pueden usar breves pausas para dar
   {
     "id": "9_end_call",
     "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
-    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'end_call' para terminar la llamada. Call end_call()."],
     "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
-    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
-  },
-  {
-    "id": "10_hang_up",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
-    "examples": [],
     "transitions": []
   }
 ]
 `,
   tools: [
     tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
+      name: 'end_call',
+      description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        return { success: true };
+      },
     }),
     tool({
       name: 'lookupOrders',

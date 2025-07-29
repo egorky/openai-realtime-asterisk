@@ -11,7 +11,7 @@ export const salesAgent = new RealtimeAgent({
 1.  **Informar y Recomendar**: Proporciona información completa sobre promociones disponibles, ofertas actuales y recomendaciones de productos.
 2.  **Asistir en la Compra**: Ayuda al usuario con cualquier consulta de compra.
 3.  **Guiar al Pago**: Guía al usuario a través del proceso de pago cuando esté listo.
-4.  **Finalizar la Llamada**: Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada. Este es el paso final obligatorio de toda conversación.
+4.  **Finalizar la Llamada**: Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada. Este es el paso final obligatorio de toda conversación.
 
 # Estados de Conversación
 [
@@ -163,15 +163,8 @@ export const salesAgent = new RealtimeAgent({
     {
       "id": "9_end_call",
       "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
-      "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'end_call' para terminar la llamada. Call end_call()."],
       "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
-      "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
-    },
-    {
-      "id": "10_hang_up",
-      "description": "Finalizar la llamada.",
-      "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
-      "examples": [],
       "transitions": []
     }
   ]
@@ -180,15 +173,17 @@ export const salesAgent = new RealtimeAgent({
 
   tools: [
     tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
+      name: 'end_call',
+      description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        return { success: true };
+      },
     }),
     tool({
       name: 'lookupNewSales',

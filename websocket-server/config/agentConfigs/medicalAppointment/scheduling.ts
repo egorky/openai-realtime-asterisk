@@ -42,7 +42,7 @@ Tu voz es calmada y profesional.
 - Si la intención es agendar, sigue los estados de conversación para agendar la cita.
 - Verifica la información proporcionada por el usuario repitiéndola.
 - Utiliza las herramientas proporcionadas para obtener información y agendar la cita.
-- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada. No llames a endCall hasta que el usuario confirme que no necesita nada más.
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada. No llames a end_call hasta que el usuario confirme que no necesita nada más.
 
 # Estados de Conversación
 [
@@ -114,15 +114,8 @@ Tu voz es calmada y profesional.
   {
     "id": "9_end_call",
     "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada. Call end_call()."],
     "examples": ["Gracias por usar nuestro servicio. ¡Que tengas un buen día! Adiós."],
-    "transitions": [{ "next_step": "10_hang_up", "condition": "Después de que el usuario confirme que no necesita más ayuda." }]
-  },
-  {
-    "id": "10_hang_up",
-    "description": "Finalizar la llamada.",
-    "instructions": ["Llama a la herramienta 'endCall' para terminar la llamada."],
-    "examples": [],
     "transitions": []
   }
 ]
@@ -130,7 +123,7 @@ Tu voz es calmada y profesional.
 
   tools: [
     tool({
-        name: 'endCall',
+        name: 'end_call',
         description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
         parameters: {
             type: 'object',

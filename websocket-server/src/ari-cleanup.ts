@@ -229,13 +229,13 @@ export async function cleanupCallResources(
       try {
         resolvedLogger.info(`Attempting to hangup main channel ${call.channel.id}.`);
         if (serviceInstance.client) {
-          await serviceInstance.client.channels.hangup({ channelId: call.channel.id });
-          resolvedLogger.info(`Main channel ${call.channel.id} hung up successfully.`);
+          await call.channel.continueInDialplan();
+          resolvedLogger.info(`Main channel ${call.channel.id} will continue in dialplan.`);
         } else {
-          resolvedLogger.warn(`ARI client not available, cannot hangup main channel ${call.channel.id}`);
+          resolvedLogger.warn(`ARI client not available, cannot continue in dialplan for main channel ${call.channel.id}`);
         }
       } catch (e: any) {
-        resolvedLogger.warn(`Error hanging up main channel ${call.channel.id}: ${e.message} (might be already hung up or StasisEnd occurred).`);
+        resolvedLogger.warn(`Error continuing in dialplan for main channel ${call.channel.id}: ${e.message} (might be already hung up or StasisEnd occurred).`);
       }
     }
 

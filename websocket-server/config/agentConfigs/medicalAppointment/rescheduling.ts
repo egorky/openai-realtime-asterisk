@@ -28,7 +28,7 @@ Tu voz es calmada y profesional.
 - Sigue los estados de conversación para reprogramar la cita.
 - Reutiliza la herramienta 'getExistingAppointments' para encontrar la cita del paciente.
 - Ofrece nuevos horarios y confirma la reprogramación.
-- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta endCall para finalizar la llamada.
+- Cuando la conversación haya terminado y el usuario confirme que no necesita nada más, DEBES usar la herramienta end_call para finalizar la llamada.
 
 # Estados de Conversación
 [
@@ -70,7 +70,7 @@ Tu voz es calmada y profesional.
   {
     "id": "6_end_call",
     "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'endCall' para terminar la llamada."],
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada. Call end_call()."],
     "examples": ["De acuerdo. Ha sido un placer ayudarte. ¡Adiós!"],
     "transitions": []
   }
@@ -79,15 +79,17 @@ Tu voz es calmada y profesional.
 
   tools: [
     tool({
-        name: 'endCall',
-        description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
-        parameters: {
-            type: 'object',
-            properties: {},
-            required: [],
-            additionalProperties: false,
-        },
-        execute: async () => ({ success: true }),
+      name: 'end_call',
+      description: 'Finaliza la llamada telefónica. Úsalo cuando la conversación haya terminado.',
+      parameters: {
+        type: 'object',
+        properties: {},
+        required: [],
+        additionalProperties: false,
+      },
+      execute: async () => {
+        return { success: true };
+      },
     }),
     tool({
       name: "getExistingAppointments",
