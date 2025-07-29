@@ -379,6 +379,11 @@ export async function _onOpenAIAudioStreamEnd(serviceInstance: AriClientService,
     }
 
     // Logic for "full_chunk" mode
+    if (call.pendingToolCall?.function?.name === 'end_call') {
+      call.callLogger.info(`end_call is pending, skipping TTS queue and finalizing call.`);
+      _fullCleanup(serviceInstance, callId, true, "end_call_tool_invoked");
+      return;
+    }
     let accumulatedChunksCount = 0;
     if (!call.ttsAudioChunks) {
       call.callLogger.error(`_onOpenAIAudioStreamEnd (full_chunk): CRITICAL - ttsAudioChunks is undefined.`);
@@ -1157,6 +1162,11 @@ export async function _handlePlaybackFinished(serviceInstance: AriClientService,
     call.callLogger.info(`OpenAI TTS playback (or interruption) handled. Reason: ${reason}. Transitioning to listen for caller based on mode: ${currentActivationMode}. New turn start time: ${call.currentTurnStartTime}`);
 
     if (call.ttsPlaybackQueue.length > 0) {
+      if (call.pendingToolCall?.function?.name === 'end_call') {
+        call.callLogger.info(`end_call is pending, skipping TTS queue and finalizing call.`);
+        _fullCleanup(serviceInstance, callId, true, "end_call_tool_invoked");
+        return;
+      }
       call.callLogger.info(`TTS queue has more items (${call.ttsPlaybackQueue.length}). Processing next. isOverallTtsResponseActive remains true.`);
       // isOverallTtsResponseActive remains true
       import('./ari-actions').then(({ _processTtsPlaybackQueue }) => {
