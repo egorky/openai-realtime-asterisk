@@ -438,6 +438,8 @@ export async function endCall(serviceInstance: AriClientService, channelId: stri
       return;
     }
     call.callLogger.info(`endCall invoked. Initiating full cleanup.`);
+    call.ttsPlaybackQueue = [];
+    await _stopAllPlaybacks(serviceInstance, call);
     serviceInstance.sendEventToFrontend({
       type: 'call_ending_action_triggered',
       callId: channelId,
