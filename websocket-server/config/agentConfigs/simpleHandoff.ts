@@ -8,7 +8,7 @@ export const haikuWriterAgent = new RealtimeAgent({
   name: 'haikuWriter', // Technical name, keep in English
   voice: 'sage', // Technical voice name
   instructions:
-    'Pregunta al usuario por un tema, luego responde con un haiku sobre ese tema.', // Translated
+    'Pregunta al usuario por un tema, luego responde con un haiku sobre ese tema. Call end_call().', // Translated
   handoffs: [],
   tools: [
     tool({

@@ -70,7 +70,7 @@ Tu voz es calmada y profesional.
   {
     "id": "6_end_call",
     "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada."],
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada. Call end_call()."],
     "examples": ["De acuerdo. Ha sido un placer ayudarte. ¡Adiós!"],
     "transitions": []
   }

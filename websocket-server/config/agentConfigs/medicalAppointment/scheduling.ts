@@ -114,7 +114,7 @@ Tu voz es calmada y profesional.
   {
     "id": "9_end_call",
     "description": "Finalizar la llamada.",
-    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada."],
+    "instructions": ["Agradece al usuario y utiliza la herramienta 'end_call' para terminar la llamada. Call end_call()."],
     "examples": ["Gracias por usar nuestro servicio. ¡Que tengas un buen día! Adiós."],
     "transitions": []
   }

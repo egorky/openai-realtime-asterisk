@@ -163,7 +163,7 @@ export const salesAgent = new RealtimeAgent({
     {
       "id": "9_end_call",
       "description": "Finalizar la llamada si el usuario no necesita más ayuda.",
-    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'end_call' para terminar la llamada."],
+    "instructions": ["Agradece al usuario por su tiempo y usa la herramienta 'end_call' para terminar la llamada. Call end_call()."],
       "examples": ["Entendido. Gracias por llamar a Tablas Pico Nevado. ¡Que tengas un buen día!"],
       "transitions": []
     }
